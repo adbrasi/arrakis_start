@@ -1,0 +1,49 @@
+{
+    "name": "Qwen Image Edit 2511",
+    "description": "Qwen Image Edit 2511 models with Lightning LoRAs and GGUF support",
+    "models": [
+        {
+            "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+            "dir": "diffusion_models",
+            "filename": "qwen_image_edit_2511_fp8mixed.safetensors"
+        },
+        {
+            "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q8_0.gguf",
+            "dir": "diffusion_models",
+            "filename": "qwen-image-edit-2511-Q8_0.gguf"
+        },
+        {
+            "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            "dir": "text_encoders",
+            "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+        },
+        {
+            "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+            "dir": "vae",
+            "filename": "qwen_image_vae.safetensors"
+        },
+        {
+            "url": "https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-fp8-e4m3fn-Lightning-4steps-V1.0-fp32.safetensors",
+            "dir": "loras",
+            "filename": "Qwen-Image-fp8-e4m3fn-Lightning-4steps-V1.0-fp32.safetensors"
+        },
+        {
+            "url": "https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-Lightning-8steps-V2.0.safetensors",
+            "dir": "loras",
+            "filename": "Qwen-Image-Lightning-8steps-V2.0.safetensors"
+        },
+        {
+            "url": "https://huggingface.co/lovis93/next-scene-qwen-image-lora-2509/resolve/main/next-scene_lora-v2-3000.safetensors",
+            "dir": "loras",
+            "filename": "next-scene_lora-v2-3000.safetensors"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/multiangleQWEN.safetensors",
+            "dir": "loras",
+            "filename": "Qwen-Edit-2509-Multiple-angles.safetensors"
+        }
+    ],
+    "nodes": [
+        "https://github.com/city96/ComfyUI-GGUF"
+    ]
+}

@@ -1,0 +1,10 @@
+# Requirements for Arrakis Start
+# Install with: pip install -r requirements.txt
+
+# Core dependencies (minimal - most are system-level)
+# Python 3.8+ required
+
+# Note: These are already handled by bootstrap.sh via comfy-cli
+# Listed here for reference and local development
+
+huggingface_hub[cli,hf_transfer]>=0.20.0

@@ -1,0 +1,52 @@
+{
+    "name": "Base",
+    "description": "Core models and nodes needed for all workflows",
+    "models": [
+        {
+            "url": "https://huggingface.co/Anzhc/Anzhcs_YOLOs/resolve/main/Anzhc%20Face%20seg%201024%20v2%20y8n.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "Anzhc_Faceseg_1024_v2_y8n.pt"
+        },
+        {
+            "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
+            "dir": "sams",
+            "filename": "sam_vit_b_01ec64.pth"
+        },
+        {
+            "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8s.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "hand_yolov8s.pt"
+        },
+        {
+            "url": "https://huggingface.co/Kim2091/AnimeSharp/resolve/main/4x-AnimeSharp.pth",
+            "dir": "upscale_models",
+            "filename": "4x-AnimeSharp.pth"
+        },
+        {
+            "url": "https://huggingface.co/Kim2091/AnimeSharpV3/resolve/main/2x-AnimeSharpV3.pth",
+            "dir": "upscale_models",
+            "filename": "2x-AnimeSharpV3.pth"
+        },
+        {
+            "url": "https://huggingface.co/Kim2091/UltraSharpV2/resolve/main/4x-UltraSharpV2.pth",
+            "dir": "upscale_models",
+            "filename": "4x-UltraSharpV2.pth"
+        },
+        {
+            "url": "https://huggingface.co/Kim2091/UltraSharpV2/resolve/main/4x-UltraSharpV2_Lite.pth",
+            "dir": "upscale_models",
+            "filename": "4x-UltraSharpV2_Lite.pth"
+        }
+    ],
+    "nodes": [
+        "https://github.com/ltdrdata/ComfyUI-Manager",
+        "https://github.com/kijai/ComfyUI-KJNodes",
+        "https://github.com/ltdrdata/ComfyUI-Inspire-Pack",
+        "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+        "https://github.com/ltdrdata/ComfyUI-Impact-Subpack",
+        "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+        "https://github.com/rgthree/rgthree-comfy",
+        "https://github.com/Fannovel16/comfyui_controlnet_aux",
+        "https://github.com/WASasquatch/was-node-suite-comfyui"
+    ]
+}
