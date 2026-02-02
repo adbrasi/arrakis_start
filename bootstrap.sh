@@ -132,7 +132,7 @@ log_success "Arrakis Start ready"
 # Final message
 log_info "========================================="
 log_success "Bootstrap complete!"
-log_info "Starting web selector on port 8080..."
+log_info "Starting web selector on port 8090..."
 log_info "Access via VastAI/Runpod port forwarding"
 log_info "========================================="
 

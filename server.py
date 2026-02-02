@@ -114,7 +114,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
         logger.info(f"{self.address_string()} - {format % args}")
 
 
-def run_server(port: int = 8080, presets_callback: Callable = None):
+def run_server(port: int = 8090, presets_callback: Callable = None):
     """Start the web server"""
     global _presets_callback
     _presets_callback = presets_callback

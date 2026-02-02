@@ -30,7 +30,7 @@ PRESETS_DIR = SCRIPT_DIR / 'presets'
 VENV_DIR = COMFY_BASE / '.venv'
 
 # Ports
-WEB_PORT = int(os.environ.get('WEB_PORT', '8080'))
+WEB_PORT = int(os.environ.get('WEB_PORT', '8090'))
 COMFY_PORT = int(os.environ.get('COMFY_PORT', '8818'))
 
 

@@ -20,14 +20,14 @@ This will:
 1. ✅ Install ComfyUI core (~3 min)
 2. ✅ Configure GPU-specific PyTorch (5090/4090/etc.)
 3. ✅ Install Cloudflared tunnel
-4. ✅ Start web selector on port **8080** (listening on `0.0.0.0`)
+4. ✅ Start web selector on port **8090** (listening on `0.0.0.0`)
 
 ### Access Web Selector
 
 After bootstrap completes, access the preset selector via VastAI/Runpod port forwarding:
 
 ```
-http://<your-instance-ip>:8080
+http://<your-instance-ip>:8090
 ```
 
 Select your presets and click **Install**. ComfyUI will auto-start on port **8818** with Cloudflared tunnel.
@@ -113,7 +113,7 @@ The web UI will automatically detect and display new presets.
 | `HF_TOKEN` | HuggingFace authentication token | Yes (for HF downloads) |
 | `CIVITAI_TOKEN` | Civitai API token | Yes (for Civitai downloads) |
 | `COMFY_BASE` | Base directory for ComfyUI | No (default: `/workspace/comfy`) |
-| `WEB_PORT` | Web selector port | No (default: `8080`) |
+| `WEB_PORT` | Web selector port | No (default: `8090`) |
 | `COMFY_PORT` | ComfyUI server port | No (default: `8818`) |
 
 ---
@@ -151,7 +151,7 @@ arrakis_start/
 ## Troubleshooting
 
 ### Web selector not accessible
-- Check VastAI/Runpod port forwarding is enabled for port 8080
+- Check VastAI/Runpod port forwarding is enabled for port 8090
 - Verify firewall allows incoming connections
 
 ### Downloads failing
