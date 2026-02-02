@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Arrakis Start - ComfyUI Preset Selector</title>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="container">
         <header>
@@ -15,7 +17,10 @@
 
         <main>
             <section class="presets-section">
-                <h2>Select Presets to Install</h2>
+                <h2>Select Workflow Presets</h2>
+                <p class="info-message">
+                    ℹ️ <strong>Base preset</strong> (upscalers, detectors, essential nodes) is automatically included
+                </p>
                 <div id="presets-container" class="presets-grid">
                     <!-- Preset cards will be dynamically loaded here -->
                     <div class="loading">Loading presets...</div>
@@ -26,6 +31,9 @@
                 <button id="install-btn" class="btn-primary" disabled>
                     Install Selected Presets
                 </button>
+                <button id="skip-btn" class="btn-secondary">
+                    Skip & Start ComfyUI Only
+                </button>
                 <div id="status-message" class="status-message"></div>
             </section>
 
@@ -35,15 +43,17 @@
                     <div id="progress-fill" class="progress-fill"></div>
                 </div>
                 <p id="progress-text" class="progress-text">Preparing installation...</p>
+                <p class="progress-note">💡 Check terminal for real-time download progress</p>
             </section>
         </main>
 
         <footer>
             <p>Access ComfyUI at <code>http://localhost:8818</code> after installation</p>
-            <p class="footer-note">Cloudflared tunnel will auto-start for external access</p>
+            <p class="footer-note">Configure VastAI/Runpod port forwarding for external access</p>
         </footer>
     </div>
 
     <script src="app.js"></script>
 </body>
+
 </html>

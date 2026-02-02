@@ -38,6 +38,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
         """Handle POST requests"""
         if self.path == '/api/install':
             self._handle_install()
+        elif self.path == '/api/start-comfy':
+            self._handle_start_comfy()
         else:
             self.send_error(404)
     
@@ -86,11 +88,12 @@ class PresetHandler(SimpleHTTPRequestHandler):
             from start import install_presets, start_comfyui, start_cloudflared
             
             def install_and_start():
-                success = install_presets(preset_names)
+                # Auto-include base preset (include_base=True by default)
+                success = install_presets(preset_names, include_base=True)
                 if success:
-                    logger.info("Starting ComfyUI and Cloudflared...")
+                    logger.info("Starting ComfyUI (Cloudflared disabled)...")
                     start_comfyui()
-                    start_cloudflared()
+                    # Cloudflared is disabled by default - user configures VastAI ports
             
             thread = threading.Thread(target=install_and_start, daemon=True)
             thread.start()
@@ -107,6 +110,34 @@ class PresetHandler(SimpleHTTPRequestHandler):
         
         except Exception as e:
             logger.error(f"Installation failed: {e}")
+            self.send_error(500, str(e))
+    
+    def _handle_start_comfy(self):
+        """Handle start ComfyUI without presets request"""
+        try:
+            logger.info("Starting ComfyUI without presets (skip installation)")
+            
+            # Start ComfyUI in background thread
+            from start import start_comfyui
+            
+            def start_only():
+                start_comfyui()
+            
+            thread = threading.Thread(target=start_only, daemon=True)
+            thread.start()
+            
+            # Send immediate response
+            self.send_response(202)  # Accepted
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                'status': 'started',
+                'message': 'ComfyUI started without presets'
+            }
+            self.wfile.write(json.dumps(response).encode())
+        
+        except Exception as e:
+            logger.error(f"Failed to start ComfyUI: {e}")
             self.send_error(500, str(e))
     
     def log_message(self, format, *args):

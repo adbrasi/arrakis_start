@@ -55,9 +55,14 @@ def load_presets() -> List[Dict]:
     return presets
 
 
-def install_presets(preset_names: List[str]) -> bool:
+def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     """Install selected presets using downloader"""
     from downloader import DownloadManager
+    
+    # Auto-include base preset unless explicitly disabled
+    if include_base and 'Base' not in preset_names:
+        preset_names = ['Base'] + preset_names
+        logger.info("Auto-including 'Base' preset")
     
     logger.info(f"Installing presets: {', '.join(preset_names)}")
     
@@ -182,17 +187,21 @@ def start_comfyui():
 
 
 def start_cloudflared():
-    """Start Cloudflared tunnel"""
-    logger.info("Starting Cloudflared tunnel...")
+    """Start Cloudflared tunnel (disabled by default - user configures VastAI ports)"""
+    # Cloudflared is disabled by default
+    # Users should configure port forwarding in VastAI/Runpod instead
+    logger.info("Cloudflared auto-start is disabled (configure VastAI/Runpod port forwarding)")
+    return
     
-    cmd = [
-        'cloudflared',
-        'tunnel',
-        '--url', f'http://localhost:{COMFY_PORT}'
-    ]
-    
-    subprocess.Popen(cmd)
-    logger.info("Cloudflared tunnel started")
+    # Uncomment below to enable Cloudflared
+    # logger.info("Starting Cloudflared tunnel...")
+    # cmd = [
+    #     'cloudflared',
+    #     'tunnel',
+    #     '--url', f'http://localhost:{COMFY_PORT}'
+    # ]
+    # subprocess.Popen(cmd)
+    # logger.info("Cloudflared tunnel started")
 
 
 def main():
@@ -200,7 +209,17 @@ def main():
     parser.add_argument(
         '--presets',
         nargs='+',
-        help='Presets to install (e.g., base qwen-image)'
+        help='Presets to install (e.g., qwen-image sdxl-anime). Base is auto-included.'
+    )
+    parser.add_argument(
+        '--base-only',
+        action='store_true',
+        help='Install only the base preset'
+    )
+    parser.add_argument(
+        '--no-base',
+        action='store_true',
+        help='Do not auto-include base preset'
     )
     parser.add_argument(
         '--web-only',
@@ -210,21 +229,39 @@ def main():
     parser.add_argument(
         '--start-comfy',
         action='store_true',
-        help='Start ComfyUI and Cloudflared after installation'
+        help='Start ComfyUI after installation (Cloudflared disabled by default)'
+    )
+    parser.add_argument(
+        '--enable-cloudflared',
+        action='store_true',
+        help='Enable Cloudflared tunnel (disabled by default)'
     )
     
     args = parser.parse_args()
     
-    # Install presets if specified
-    if args.presets:
-        success = install_presets(args.presets)
+    # Install base-only if specified
+    if args.base_only:
+        success = install_presets(['Base'], include_base=False)
         if not success:
             logger.error("Installation failed")
             sys.exit(1)
         
         if args.start_comfy:
             start_comfyui()
-            start_cloudflared()
+            if args.enable_cloudflared:
+                start_cloudflared()
+    
+    # Install presets if specified
+    elif args.presets:
+        success = install_presets(args.presets, include_base=not args.no_base)
+        if not success:
+            logger.error("Installation failed")
+            sys.exit(1)
+        
+        if args.start_comfy:
+            start_comfyui()
+            if args.enable_cloudflared:
+                start_cloudflared()
     
     # Start web server
     elif args.web_only or not args.presets:
