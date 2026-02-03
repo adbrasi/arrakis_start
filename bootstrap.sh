@@ -78,6 +78,9 @@ source "$VENV_DIR/bin/activate"
 python -m pip install -q --upgrade pip wheel setuptools
 python -m pip install -q --upgrade "huggingface_hub[cli,hf_transfer]" hf-transfer comfy-cli
 
+# Install Arrakis Start v2.0 dependencies
+python -m pip install -q --upgrade websockets psutil requests
+
 # Enable hf_transfer for 100x faster HuggingFace downloads
 export HF_HUB_ENABLE_HF_TRANSFER=1
 

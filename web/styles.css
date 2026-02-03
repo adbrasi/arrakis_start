@@ -63,6 +63,160 @@ h3 {
     margin-bottom: 0.5rem;
 }
 
+/* Status Dashboard */
+.status-dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.status-card {
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.status-dot.running {
+    background: var(--success);
+    box-shadow: 0 0 10px var(--success);
+}
+
+.status-dot.starting {
+    background: #f59e0b;
+    box-shadow: 0 0 10px #f59e0b;
+}
+
+.status-dot.stopped {
+    background: var(--text-secondary);
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.status-text {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.status-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.btn-small {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+.btn-small.btn-success {
+    background: var(--success);
+    color: white;
+}
+
+.btn-small.btn-success:hover:not(:disabled) {
+    background: #059669;
+    transform: translateY(-1px);
+}
+
+.btn-small.btn-danger {
+    background: var(--error);
+    color: white;
+}
+
+.btn-small.btn-danger:hover:not(:disabled) {
+    background: #dc2626;
+    transform: translateY(-1px);
+}
+
+.btn-small.btn-warning {
+    background: #f59e0b;
+    color: white;
+}
+
+.btn-small.btn-warning:hover:not(:disabled) {
+    background: #d97706;
+    transform: translateY(-1px);
+}
+
+.btn-small:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.installed-list {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.installed-item {
+    padding: 0.5rem;
+    margin-bottom: 0.25rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    color: var(--success);
+    font-size: 0.875rem;
+}
+
+.empty-text,
+.loading-text {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-style: italic;
+    text-align: center;
+    padding: 1rem;
+}
+
+.installed-badge {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    background: var(--success);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.preset-card.installed {
+    border-color: var(--success);
+    opacity: 0.8;
+}
+
 /* Presets Grid */
 .presets-section {
     margin-bottom: 2rem;

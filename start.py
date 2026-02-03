@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Arrakis Start - ComfyUI Deployment System
-Main orchestrator for preset-based installation
+Arrakis Start - ComfyUI Deployment System v2.0
+Main orchestrator for preset-based installation with state management
 """
 
 import os
@@ -12,6 +12,10 @@ import logging
 from pathlib import Path
 from typing import List, Dict
 import argparse
+
+# Import state manager
+from state import get_state_manager
+from process_manager import get_process_manager
 
 # Configure logging
 logging.basicConfig(
@@ -56,8 +60,9 @@ def load_presets() -> List[Dict]:
 
 
 def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
-    """Install selected presets using downloader"""
+    """Install selected presets with smart skip-existing"""
     from downloader import DownloadManager
+    state = get_state_manager()
     
     # Auto-include base preset unless explicitly disabled
     if include_base and 'Base' not in preset_names:
@@ -81,9 +86,18 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         
         preset = preset_map[preset_name]
         
-        # Add models to download queue
+        # Filter out already-installed models
         if 'models' in preset:
-            downloads.extend(preset['models'])
+            for model in preset['models']:
+                filename = model.get('filename', '')
+                model_dir = model.get('dir', '')
+                dest_path = MODELS_DIR / model_dir / filename
+                
+                if dest_path.exists():
+                    logger.info(f"✓ Already exists: {filename}")
+                    state.add_model(filename, model_dir, model.get('url', ''), 0)
+                else:
+                    downloads.append(model)
         
         # Add custom nodes
         if 'nodes' in preset:
@@ -91,11 +105,23 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     
     # Download models
     if downloads:
+        logger.info(f"Downloading {len(downloads)} new models...")
         dm = DownloadManager(models_dir=MODELS_DIR)
         success = dm.download_all(downloads)
         if not success:
             logger.error("Some downloads failed")
             return False
+        
+        # Track installed models
+        for model in downloads:
+            state.add_model(
+                model.get('filename', ''),
+                model.get('dir', ''),
+                model.get('url', ''),
+                0
+            )
+    else:
+        logger.info("All models already installed, skipping downloads")
     
     # Install custom nodes
     if nodes:
@@ -104,12 +130,17 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             logger.error("Some custom nodes failed to install")
             return False
     
+    # Mark presets as installed
+    for preset_name in preset_names:
+        state.add_preset(preset_name)
+    
     logger.info("All presets installed successfully!")
     return True
 
 
 def install_custom_nodes(node_urls: List[str]) -> bool:
-    """Clone/update custom nodes"""
+    """Clone/update custom nodes with smart skip-existing"""
+    state = get_state_manager()
     cn_dir = COMFY_DIR / 'custom_nodes'
     cn_dir.mkdir(parents=True, exist_ok=True)
     
@@ -122,19 +153,16 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
         
         try:
             if (dest / '.git').exists():
-                logger.info(f"Updating: {node_name}")
-                subprocess.run(
-                    ['git', '-C', str(dest), 'pull', '--ff-only'],
-                    check=False,
-                    capture_output=True
-                )
-            else:
-                logger.info(f"Cloning: {node_name}")
-                subprocess.run(
-                    ['git', 'clone', '--depth', '1', url, str(dest)],
-                    check=True,
-                    capture_output=True
-                )
+                logger.info(f"✓ Already installed: {node_name} (skipping)")
+                state.add_node(url)
+                continue
+            
+            logger.info(f"Cloning: {node_name}")
+            subprocess.run(
+                ['git', 'clone', '--depth', '1', url, str(dest)],
+                check=True,
+                capture_output=True
+            )
             
             # Install requirements if exists
             req_file = dest / 'requirements.txt'
@@ -145,6 +173,9 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
                     check=False,
                     capture_output=True
                 )
+            
+            # Track as installed
+            state.add_node(url)
         
         except Exception as e:
             logger.error(f"Failed to install {node_name}: {e}")

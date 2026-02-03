@@ -1,13 +1,18 @@
-// Arrakis Start - Frontend Logic
+// Arrakis Start v2.0 - Frontend Logic
 
 let selectedPresets = new Set();
 let allPresets = [];
 let isInstalling = false;
+let statusInterval = null;
 
-// Load presets on page load
+// Load on page load
 document.addEventListener('DOMContentLoaded', () => {
     loadPresets();
+    loadStatus();
     setupEventListeners();
+
+    // Poll status every 5 seconds
+    statusInterval = setInterval(loadStatus, 5000);
 });
 
 function setupEventListeners() {
@@ -15,6 +20,108 @@ function setupEventListeners() {
     document.getElementById('skip-btn').addEventListener('click', skipAndStartComfyUI);
     document.getElementById('stop-btn').addEventListener('click', stopInstallation);
     document.getElementById('reset-btn').addEventListener('click', resetAndStartOver);
+
+    // ComfyUI controls
+    document.getElementById('start-comfy-btn').addEventListener('click', () => controlComfyUI('start'));
+    document.getElementById('stop-comfy-btn').addEventListener('click', () => controlComfyUI('stop'));
+    document.getElementById('restart-comfy-btn').addEventListener('click', () => controlComfyUI('restart'));
+}
+
+async function loadStatus() {
+    try {
+        const response = await fetch('/api/status');
+        if (!response.ok) return;
+
+        const status = await response.json();
+
+        // Update ComfyUI status
+        updateComfyUIStatus(status.comfyui);
+
+        // Update installed presets list
+        updateInstalledPresets(status.installed_presets);
+
+    } catch (error) {
+        console.error('Failed to load status:', error);
+    }
+}
+
+function updateComfyUIStatus(comfyui) {
+    const statusEl = document.getElementById('comfyui-status');
+    const dot = statusEl.querySelector('.status-dot');
+    const text = statusEl.querySelector('.status-text');
+    const url = document.getElementById('comfyui-url');
+
+    // Update status indicator
+    dot.className = 'status-dot';
+    if (comfyui.status === 'running' && comfyui.is_healthy) {
+        dot.classList.add('running');
+        text.textContent = `Running on port ${comfyui.port}`;
+        url.textContent = `http://localhost:${comfyui.port}`;
+        url.href = `http://localhost:${comfyui.port}`;
+    } else if (comfyui.status === 'starting') {
+        dot.classList.add('starting');
+        text.textContent = 'Starting...';
+    } else {
+        dot.classList.add('stopped');
+        text.textContent = 'Stopped';
+    }
+
+    // Update button states
+    const startBtn = document.getElementById('start-comfy-btn');
+    const stopBtn = document.getElementById('stop-comfy-btn');
+    const restartBtn = document.getElementById('restart-comfy-btn');
+
+    if (comfyui.is_running) {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        restartBtn.disabled = false;
+    } else {
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        restartBtn.disabled = true;
+    }
+}
+
+function updateInstalledPresets(presets) {
+    const listEl = document.getElementById('installed-presets-list');
+
+    if (presets.length === 0) {
+        listEl.innerHTML = '<p class="empty-text">No presets installed yet</p>';
+        return;
+    }
+
+    listEl.innerHTML = presets.map(p =>
+        `<div class="installed-item">✓ ${p}</div>`
+    ).join('');
+}
+
+async function controlComfyUI(action) {
+    const statusMessage = document.getElementById('status-message');
+
+    try {
+        const response = await fetch(`/api/comfyui/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            statusMessage.className = 'status-message success';
+            statusMessage.textContent = `✓ ${result.message}`;
+        } else {
+            statusMessage.className = 'status-message error';
+            statusMessage.textContent = `✗ ${result.message}`;
+        }
+
+        // Refresh status immediately
+        setTimeout(loadStatus, 1000);
+
+    } catch (error) {
+        console.error(`ComfyUI ${action} error:`, error);
+        statusMessage.className = 'status-message error';
+        statusMessage.textContent = `✗ Failed to ${action} ComfyUI`;
+    }
 }
 
 async function loadPresets() {
@@ -27,15 +134,15 @@ async function loadPresets() {
         allPresets = await response.json();
 
         if (allPresets.length === 0) {
-            container.innerHTML = '<p class="no-presets">No presets found. Add JSON files to the presets/ directory.</p>';
+            container.innerHTML = '<p class="no-presets">No presets found.</p>';
             return;
         }
 
-        // Filter out "Base" preset (it's auto-included)
+        // Filter out "Base" preset (auto-included)
         const visiblePresets = allPresets.filter(p => p.name !== 'Base');
 
         if (visiblePresets.length === 0) {
-            container.innerHTML = '<p class="no-presets">Only base preset available. Click "Skip & Start ComfyUI Only" to proceed.</p>';
+            container.innerHTML = '<p class="no-presets">Only base preset available.</p>';
             return;
         }
 
@@ -56,6 +163,11 @@ function createPresetCard(preset) {
     const card = document.createElement('div');
     card.className = 'preset-card';
 
+    // Add installed class if already installed
+    if (preset.installed) {
+        card.classList.add('installed');
+    }
+
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.id = `preset-${preset.name}`;
@@ -73,7 +185,11 @@ function createPresetCard(preset) {
 
     const label = document.createElement('label');
     label.htmlFor = `preset-${preset.name}`;
+
+    const installedBadge = preset.installed ? '<span class="installed-badge">✓ Installed</span>' : '';
+
     label.innerHTML = `
+        ${installedBadge}
         <h3>${preset.name}</h3>
         <p class="description">${preset.description}</p>
         <div class="stats">
@@ -182,15 +298,9 @@ async function resetAndStartOver() {
     // Reset install button
     updateInstallButton();
 
-    // Try to stop any ongoing installation
-    try {
-        await fetch('/api/stop', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
-    } catch (e) {
-        // Ignore errors
-    }
+    // Reload presets to update installed status
+    await loadPresets();
+    await loadStatus();
 }
 
 async function skipAndStartComfyUI() {
@@ -199,28 +309,31 @@ async function skipAndStartComfyUI() {
     const progressSection = document.getElementById('progress-section');
     const progressText = document.getElementById('progress-text');
 
-    // Disable buttons
     skipBtn.disabled = true;
     skipBtn.textContent = 'Starting...';
     document.getElementById('install-btn').disabled = true;
 
-    // Show progress
     progressSection.style.display = 'block';
     progressText.textContent = 'Starting ComfyUI without presets...';
 
     try {
-        const response = await fetch('/api/start-comfy', {
+        const response = await fetch('/api/comfyui/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
 
-        if (!response.ok) throw new Error('Failed to start ComfyUI');
-
         const result = await response.json();
 
-        statusMessage.className = 'status-message success';
-        statusMessage.textContent = '✓ ComfyUI started! Access at http://localhost:8818';
-        progressText.textContent = 'ComfyUI is running (no models installed)';
+        if (result.success) {
+            statusMessage.className = 'status-message success';
+            statusMessage.textContent = '✓ ComfyUI started! Access at http://localhost:8818';
+            progressText.textContent = 'ComfyUI is running (no models installed)';
+
+            // Refresh status
+            setTimeout(loadStatus, 1000);
+        } else {
+            throw new Error(result.message);
+        }
 
     } catch (error) {
         console.error('Start error:', error);
@@ -268,11 +381,20 @@ async function installSelectedPresets() {
 
         const result = await response.json();
 
-        // Simulate progress
+        // Simulate progress (TODO: replace with WebSocket)
         simulateProgress();
 
         statusMessage.className = 'status-message success';
-        statusMessage.textContent = '✓ Installation started! Check terminal for real-time download progress. ComfyUI will auto-start when ready.';
+        statusMessage.textContent = '✓ Installation started! Check terminal for real-time progress. ComfyUI will auto-start when ready.';
+
+        // Poll status more frequently during installation
+        const installCheck = setInterval(async () => {
+            await loadStatus();
+            await loadPresets();
+        }, 3000);
+
+        // Stop polling after 5 minutes
+        setTimeout(() => clearInterval(installCheck), 300000);
 
     } catch (error) {
         console.error('Installation error:', error);
@@ -297,7 +419,7 @@ function simulateProgress() {
             return;
         }
 
-        progress += Math.random() * 15;
+        progress += Math.random() * 10;
         if (progress >= 95) {
             progress = 95;
             clearInterval(interval);
@@ -313,5 +435,5 @@ function simulateProgress() {
         } else if (progress < 90) {
             progressText.textContent = 'Configuring ComfyUI...';
         }
-    }, 1000);
+    }, 2000);
 }

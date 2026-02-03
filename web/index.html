@@ -4,29 +4,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arrakis Start - ComfyUI Preset Selector</title>
+    <title>Arrakis Start v2.0 - ComfyUI Deployment</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
     <div class="container">
         <header>
-            <h1>🚀 Arrakis Start</h1>
-            <p class="subtitle">ComfyUI Deployment System</p>
+            <h1>🚀 Arrakis Start v2.0</h1>
+            <p class="subtitle">Production-Ready ComfyUI Deployment</p>
         </header>
 
         <main>
+            <!-- Status Dashboard -->
+            <section class="status-dashboard">
+                <div class="status-card">
+                    <h3>ComfyUI Status</h3>
+                    <div id="comfyui-status" class="status-indicator">
+                        <span class="status-dot stopped"></span>
+                        <span class="status-text">Checking...</span>
+                    </div>
+                    <div class="status-actions" id="comfyui-actions">
+                        <button id="start-comfy-btn" class="btn-small btn-success">▶️ Start</button>
+                        <button id="stop-comfy-btn" class="btn-small btn-danger">⏹️ Stop</button>
+                        <button id="restart-comfy-btn" class="btn-small btn-warning">🔄 Restart</button>
+                    </div>
+                </div>
+
+                <div class="status-card">
+                    <h3>Installed Presets</h3>
+                    <div id="installed-presets-list" class="installed-list">
+                        <p class="loading-text">Loading...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Preset Selector -->
             <section class="presets-section">
-                <h2>Select Workflow Presets</h2>
+                <h2>Available Presets</h2>
                 <p class="info-message">
                     ℹ️ <strong>Base preset</strong> (upscalers, detectors, essential nodes) is automatically included
                 </p>
                 <div id="presets-container" class="presets-grid">
-                    <!-- Preset cards will be dynamically loaded here -->
                     <div class="loading">Loading presets...</div>
                 </div>
             </section>
 
+            <!-- Action Buttons -->
             <section class="actions-section">
                 <div class="button-row">
                     <button id="install-btn" class="btn-primary" disabled>
@@ -47,6 +71,7 @@
                 <div id="status-message" class="status-message"></div>
             </section>
 
+            <!-- Progress Section -->
             <section class="progress-section" id="progress-section" style="display: none;">
                 <h3>Installation Progress</h3>
                 <div class="progress-bar">
@@ -58,7 +83,7 @@
         </main>
 
         <footer>
-            <p>Access ComfyUI at <code>http://localhost:8818</code> after installation</p>
+            <p>Access ComfyUI at <code id="comfyui-url">http://localhost:8818</code> after installation</p>
             <p class="footer-note">Configure VastAI/Runpod port forwarding for external access</p>
         </footer>
     </div>

@@ -1,10 +1,12 @@
-# Requirements for Arrakis Start
+# Requirements for Arrakis Start v2.0
 # Install with: pip install -r requirements.txt
 
-# Core dependencies (minimal - most are system-level)
-# Python 3.8+ required
-
-# Note: These are already handled by bootstrap.sh via comfy-cli
-# Listed here for reference and local development
-
+# Core dependencies
 huggingface_hub[cli,hf_transfer]>=0.20.0
+
+# WebSocket server for real-time updates
+websockets>=12.0
+
+# Process management
+psutil>=5.9.0
+requests>=2.31.0
