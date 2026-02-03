@@ -95,14 +95,12 @@ class ProcessManager:
                 '--'
             ] + flags
             
-            # Start process
+            # Start process WITHOUT capturing output - logs go directly to terminal
+            # This allows real-time log viewing and prevents Python buffering issues
             self.process = subprocess.Popen(
                 cmd,
-                cwd=str(COMFY_DIR),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                cwd=str(COMFY_DIR)
+                # No stdout/stderr capture - ComfyUI logs appear in real-time
             )
             
             # Update state

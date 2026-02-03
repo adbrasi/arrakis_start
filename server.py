@@ -58,10 +58,15 @@ class PresetHandler(SimpleHTTPRequestHandler):
             state = _state_manager or get_state_manager()
             installed_presets = set(state.get_installed_presets())
             
-            # Add installation status to each preset
+            # Add installation status to each preset (skip "Base" - it's auto-installed)
             clean_presets = []
             for p in presets:
                 preset_name = p.get('name', p.get('_filename', 'Unknown'))
+                
+                # Skip Base preset - it's automatically included
+                if preset_name.lower() == 'base':
+                    continue
+                
                 clean = {
                     'name': preset_name,
                     'description': p.get('description', ''),

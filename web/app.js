@@ -30,14 +30,14 @@ async function loadPresets() {
         const installedList = document.getElementById('installed-presets-list');
 
         if (!data.presets || data.presets.length === 0) {
-            container.innerHTML = '<div class="loading">No presets available</div>';
+            container.innerHTML = '<div class="loading">Nenhum preset disponível</div>';
             return;
         }
 
-        // Update installed presets list
+        // Atualizar lista de presets instalados
         const installed = data.presets.filter(p => p.installed).map(p => p.name);
         if (installed.length === 0) {
-            installedList.innerHTML = '<p class="empty-text">No presets installed yet</p>';
+            installedList.innerHTML = '<p class="empty-text">Nenhum preset instalado ainda</p>';
         } else {
             installedList.innerHTML = installed.map(name =>
                 `<div class="installed-item">✓ ${name}</div>`
@@ -52,8 +52,8 @@ async function loadPresets() {
         });
 
     } catch (error) {
-        console.error('Failed to load presets:', error);
-        showToast('Failed to load presets', 'error');
+        console.error('Falha ao carregar presets:', error);
+        showToast('Falha ao carregar presets', 'error');
     }
 }
 
@@ -79,7 +79,7 @@ function createPresetCard(preset) {
     const label = document.createElement('label');
     label.htmlFor = `preset-${preset.name}`;
 
-    const installedBadge = preset.installed ? '<div class="installed-badge">✓ Installed</div>' : '';
+    const installedBadge = preset.installed ? '<div class="installed-badge">✓ Instalado</div>' : '';
 
     label.innerHTML = `
         ${installedBadge}
@@ -111,10 +111,10 @@ function updateStartButton() {
 
     if (count > 0 && !isInstalling) {
         startBtn.disabled = false;
-        startBtn.textContent = `Start with ${count} Preset${count > 1 ? 's' : ''}`;
+        startBtn.textContent = `Iniciar com ${count} Preset${count > 1 ? 's' : ''}`;
     } else if (!isInstalling) {
         startBtn.disabled = true;
-        startBtn.textContent = 'Start with Selected Presets';
+        startBtn.textContent = 'Iniciar com Presets Selecionados';
     }
 }
 
@@ -127,9 +127,9 @@ async function startWithPresets() {
     const startBtn = document.getElementById('start-btn');
     isInstalling = true;
     startBtn.disabled = true;
-    startBtn.textContent = 'Installing...';
+    startBtn.textContent = 'Instalando...';
 
-    showToast('Installing presets and starting ComfyUI...', 'info');
+    showToast('Instalando presets e iniciando ComfyUI...', 'info');
 
     try {
         const response = await fetch('/api/install', {
@@ -141,9 +141,9 @@ async function startWithPresets() {
         });
 
         if (response.ok) {
-            showToast('Installation started! ComfyUI will start when ready.', 'success');
+            showToast('Instalação iniciada! ComfyUI será iniciado quando estiver pronto.', 'success');
 
-            // Wait a bit then reload presets to show updated installed status
+            // Aguardar um pouco e recarregar presets para mostrar status atualizado
             setTimeout(async () => {
                 await loadPresets();
                 selectedPresets.clear();
@@ -151,15 +151,15 @@ async function startWithPresets() {
                 updateStartButton();
             }, 3000);
         } else {
-            throw new Error('Installation request failed');
+            throw new Error('Falha na requisição de instalação');
         }
 
     } catch (error) {
-        console.error('Installation error:', error);
-        showToast('Installation failed. Check console for details.', 'error');
+        console.error('Erro na instalação:', error);
+        showToast('Instalação falhou. Verifique o console para detalhes.', 'error');
         isInstalling = false;
         startBtn.disabled = false;
-        startBtn.textContent = 'Start with Selected Presets';
+        startBtn.textContent = 'Iniciar com Presets Selecionados';
     }
 }
 
