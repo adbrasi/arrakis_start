@@ -47,28 +47,33 @@ class DownloadManager:
         if not self.has_aria2c:
             logger.warning("aria2c not found, falling back to wget")
         
-        # Find huggingface-cli (check venv first, then system)
+        # Find HuggingFace CLI (check venv first, then system)
+        # New CLI command is `hf`, fallback to `huggingface-cli` for compatibility
         self.hf_cli_path = self._find_hf_cli()
         self.current_process = None
         
-        # Check for hf_transfer (100x faster HF downloads)
-        self.use_hf_transfer = os.environ.get('HF_HUB_ENABLE_HF_TRANSFER', '0') == '1'
-        if self.use_hf_transfer and self.hf_cli_path:
-            logger.info("✓ hf_transfer enabled for ultra-fast HuggingFace downloads")
+        # Check for hf_xet (100x faster HF downloads, replaces deprecated hf_transfer)
+        self.use_hf_xet = os.environ.get('HF_XET_HIGH_PERFORMANCE', '0') == '1'
+        if self.use_hf_xet and self.hf_cli_path:
+            logger.info("✓ hf_xet high-performance mode enabled for ultra-fast HuggingFace downloads")
     
     def _find_hf_cli(self) -> Optional[str]:
-        """Find huggingface-cli executable"""
-        # Check venv first
-        venv_hf = VENV_BIN / 'huggingface-cli'
-        if venv_hf.exists():
-            return str(venv_hf)
+        """Find HuggingFace CLI executable (new `hf` or legacy `huggingface-cli`)"""
+        # Try new `hf` command first (recommended)
+        for cmd_name in ['hf', 'huggingface-cli']:
+            # Check venv first
+            venv_hf = VENV_BIN / cmd_name
+            if venv_hf.exists():
+                logger.info(f"Found HF CLI in venv: {cmd_name}")
+                return str(venv_hf)
+            
+            # Check system PATH
+            system_hf = shutil.which(cmd_name)
+            if system_hf:
+                logger.info(f"Found HF CLI in system: {cmd_name}")
+                return system_hf
         
-        # Check system PATH
-        system_hf = shutil.which('huggingface-cli')
-        if system_hf:
-            return system_hf
-        
-        logger.warning("huggingface-cli not found, will use aria2c for HF downloads")
+        logger.warning("HuggingFace CLI (hf/huggingface-cli) not found, will use aria2c for HF downloads")
         return None
     
     def cancel(self):
@@ -174,7 +179,7 @@ class DownloadManager:
             return self._download_wget(download_url, dest_path)
     
     def _download_hf_direct(self, url: str, dest_dir: Path, filename: str) -> bool:
-        """Download from HuggingFace using huggingface-cli with hf_transfer"""
+        """Download from HuggingFace using `hf download` with hf_xet for max speed"""
         # Parse HF URL: https://huggingface.co/repo/resolve/main/file.safetensors
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', url)
         if not match:
@@ -187,10 +192,13 @@ class DownloadManager:
         
         logger.info(f"Downloading from HuggingFace: {repo_id}/{file_path}")
         
+        # Configure environment for hf_xet maximum speed
         env = os.environ.copy()
-        if self.use_hf_transfer:
-            env['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+        env['HF_XET_HIGH_PERFORMANCE'] = '1'
+        env['HF_XET_NUM_CONCURRENT_RANGE_GETS'] = os.environ.get('HF_XET_NUM_CONCURRENT_RANGE_GETS', '32')
+        env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '60')
         
+        # Build command - works for both `hf` and `huggingface-cli`
         cmd = [
             self.hf_cli_path,
             'download',

@@ -28,7 +28,7 @@ export HUGGINGFACE_HUB_CACHE="$HF_HOME"
 export TRANSFORMERS_CACHE="$HF_HOME"
 export TMPDIR="/workspace/.tmp"
 export GIT_LFS_SKIP_SMUDGE=1
-
+python -m pip install -q --upgrade "huggingface_hub[cli,hf_transfer]>=0.26.0" comfy-cli
 # Create directories
 mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
 
@@ -76,15 +76,22 @@ fi
 source "$VENV_DIR/bin/activate"
 
 python -m pip install -q --upgrade pip wheel setuptools
-python -m pip install -q --upgrade "huggingface_hub[cli,hf_transfer]" hf-transfer comfy-cli
+
+# Install Hugging Face CLI with new hf_xet backend (replaces deprecated hf_transfer)
+# See: https://huggingface.co/docs/huggingface_hub/en/guides/cli
+python -m pip install -q --upgrade "huggingface_hub[cli]" hf_xet comfy-cli
 
 # Install Arrakis Start v2.0 dependencies
 python -m pip install -q --upgrade websockets psutil requests
 
-# Enable hf_transfer for 100x faster HuggingFace downloads
-export HF_HUB_ENABLE_HF_TRANSFER=1
+# Configure hf_xet for MAXIMUM download speed (100x+ faster than default)
+# HF_XET_HIGH_PERFORMANCE: saturates network/CPU for fastest downloads
+# HF_XET_NUM_CONCURRENT_RANGE_GETS: increases parallel chunk reads (24-32 for fast SSD)
+export HF_XET_HIGH_PERFORMANCE=1
+export HF_XET_NUM_CONCURRENT_RANGE_GETS=32
+export HF_HUB_DOWNLOAD_TIMEOUT=60
 
-log_success "Python environment ready"
+log_success "Python environment ready (hf_xet enabled for fast downloads)"
 
 # 3. Install ComfyUI
 log_info "[3/5] Installing ComfyUI..."
