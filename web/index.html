@@ -28,12 +28,22 @@
             </section>
 
             <section class="actions-section">
-                <button id="install-btn" class="btn-primary" disabled>
-                    Install Selected Presets
-                </button>
-                <button id="skip-btn" class="btn-secondary">
-                    Skip & Start ComfyUI Only
-                </button>
+                <div class="button-row">
+                    <button id="install-btn" class="btn-primary" disabled>
+                        Install Selected Presets
+                    </button>
+                    <button id="skip-btn" class="btn-secondary">
+                        Skip & Start ComfyUI Only
+                    </button>
+                </div>
+                <div class="button-row" id="control-buttons" style="display: none;">
+                    <button id="stop-btn" class="btn-danger">
+                        ⏹️ Stop Installation
+                    </button>
+                    <button id="reset-btn" class="btn-warning">
+                        🔄 Reset & Start Over
+                    </button>
+                </div>
                 <div id="status-message" class="status-message"></div>
             </section>
 

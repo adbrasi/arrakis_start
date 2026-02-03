@@ -40,6 +40,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self._handle_install()
         elif self.path == '/api/start-comfy':
             self._handle_start_comfy()
+        elif self.path == '/api/stop':
+            self._handle_stop()
         else:
             self.send_error(404)
     
@@ -138,6 +140,25 @@ class PresetHandler(SimpleHTTPRequestHandler):
         
         except Exception as e:
             logger.error(f"Failed to start ComfyUI: {e}")
+            self.send_error(500, str(e))
+    
+    def _handle_stop(self):
+        """Handle stop installation request"""
+        try:
+            logger.info("Stop request received - this will stop after current download")
+            
+            # Send response
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            response = {
+                'status': 'stopped',
+                'message': 'Stop signal sent. Installation will stop after current file.'
+            }
+            self.wfile.write(json.dumps(response).encode())
+        
+        except Exception as e:
+            logger.error(f"Stop failed: {e}")
             self.send_error(500, str(e))
     
     def log_message(self, format, *args):

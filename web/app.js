@@ -2,6 +2,7 @@
 
 let selectedPresets = new Set();
 let allPresets = [];
+let isInstalling = false;
 
 // Load presets on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -10,11 +11,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function setupEventListeners() {
-    const installBtn = document.getElementById('install-btn');
-    const skipBtn = document.getElementById('skip-btn');
-
-    installBtn.addEventListener('click', installSelectedPresets);
-    skipBtn.addEventListener('click', skipAndStartComfyUI);
+    document.getElementById('install-btn').addEventListener('click', installSelectedPresets);
+    document.getElementById('skip-btn').addEventListener('click', skipAndStartComfyUI);
+    document.getElementById('stop-btn').addEventListener('click', stopInstallation);
+    document.getElementById('reset-btn').addEventListener('click', resetAndStartOver);
 }
 
 async function loadPresets() {
@@ -87,7 +87,7 @@ function createPresetCard(preset) {
 
     // Make entire card clickable
     card.addEventListener('click', (e) => {
-        if (e.target !== checkbox) {
+        if (e.target !== checkbox && !isInstalling) {
             checkbox.checked = !checkbox.checked;
             checkbox.dispatchEvent(new Event('change'));
         }
@@ -100,12 +100,96 @@ function updateInstallButton() {
     const installBtn = document.getElementById('install-btn');
     const count = selectedPresets.size;
 
-    if (count > 0) {
+    if (count > 0 && !isInstalling) {
         installBtn.disabled = false;
         installBtn.textContent = `Install ${count} Preset${count > 1 ? 's' : ''} + Base`;
-    } else {
+    } else if (!isInstalling) {
         installBtn.disabled = true;
         installBtn.textContent = 'Install Selected Presets';
+    }
+}
+
+function showControlButtons(show) {
+    const controlButtons = document.getElementById('control-buttons');
+    const installBtn = document.getElementById('install-btn');
+    const skipBtn = document.getElementById('skip-btn');
+
+    if (show) {
+        controlButtons.style.display = 'flex';
+        installBtn.style.display = 'none';
+        skipBtn.style.display = 'none';
+    } else {
+        controlButtons.style.display = 'none';
+        installBtn.style.display = 'block';
+        skipBtn.style.display = 'block';
+    }
+}
+
+async function stopInstallation() {
+    const statusMessage = document.getElementById('status-message');
+    const stopBtn = document.getElementById('stop-btn');
+
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping...';
+
+    try {
+        const response = await fetch('/api/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (response.ok) {
+            statusMessage.className = 'status-message warning';
+            statusMessage.textContent = '⚠️ Installation stopped. Click Reset to start over.';
+            isInstalling = false;
+        }
+    } catch (error) {
+        console.error('Stop error:', error);
+        statusMessage.className = 'status-message error';
+        statusMessage.textContent = `Failed to stop: ${error.message}`;
+    }
+
+    stopBtn.disabled = false;
+    stopBtn.textContent = '⏹️ Stop Installation';
+}
+
+async function resetAndStartOver() {
+    const statusMessage = document.getElementById('status-message');
+    const progressSection = document.getElementById('progress-section');
+    const progressFill = document.getElementById('progress-fill');
+
+    // Reset UI state
+    isInstalling = false;
+    selectedPresets.clear();
+
+    // Reset all checkboxes
+    document.querySelectorAll('.preset-checkbox').forEach(cb => {
+        cb.checked = false;
+    });
+    document.querySelectorAll('.preset-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+
+    // Hide progress and control buttons
+    progressSection.style.display = 'none';
+    progressFill.style.width = '0%';
+    showControlButtons(false);
+
+    // Reset status message
+    statusMessage.className = 'status-message';
+    statusMessage.textContent = '';
+
+    // Reset install button
+    updateInstallButton();
+
+    // Try to stop any ongoing installation
+    try {
+        await fetch('/api/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (e) {
+        // Ignore errors
     }
 }
 
@@ -115,9 +199,10 @@ async function skipAndStartComfyUI() {
     const progressSection = document.getElementById('progress-section');
     const progressText = document.getElementById('progress-text');
 
-    // Disable button
+    // Disable buttons
     skipBtn.disabled = true;
     skipBtn.textContent = 'Starting...';
+    document.getElementById('install-btn').disabled = true;
 
     // Show progress
     progressSection.style.display = 'block';
@@ -126,9 +211,7 @@ async function skipAndStartComfyUI() {
     try {
         const response = await fetch('/api/start-comfy', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
+            headers: { 'Content-Type': 'application/json' }
         });
 
         if (!response.ok) throw new Error('Failed to start ComfyUI');
@@ -145,6 +228,7 @@ async function skipAndStartComfyUI() {
         statusMessage.textContent = `✗ Failed to start ComfyUI: ${error.message}`;
         skipBtn.disabled = false;
         skipBtn.textContent = 'Skip & Start ComfyUI Only';
+        document.getElementById('install-btn').disabled = selectedPresets.size === 0;
         progressSection.style.display = 'none';
     }
 }
@@ -158,10 +242,13 @@ async function installSelectedPresets() {
     const progressFill = document.getElementById('progress-fill');
     const progressText = document.getElementById('progress-text');
 
-    // Disable buttons
+    // Set installing state
+    isInstalling = true;
+
+    // Update UI
     installBtn.disabled = true;
     document.getElementById('skip-btn').disabled = true;
-    installBtn.textContent = 'Installing...';
+    showControlButtons(true);
 
     // Show progress section
     progressSection.style.display = 'block';
@@ -171,9 +258,7 @@ async function installSelectedPresets() {
     try {
         const response = await fetch('/api/install', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 presets: Array.from(selectedPresets)
             })
@@ -183,7 +268,7 @@ async function installSelectedPresets() {
 
         const result = await response.json();
 
-        // Simulate progress (since actual progress tracking would require WebSocket)
+        // Simulate progress
         simulateProgress();
 
         statusMessage.className = 'status-message success';
@@ -193,9 +278,10 @@ async function installSelectedPresets() {
         console.error('Installation error:', error);
         statusMessage.className = 'status-message error';
         statusMessage.textContent = `✗ Installation failed: ${error.message}`;
+        isInstalling = false;
+        showControlButtons(false);
         installBtn.disabled = false;
         document.getElementById('skip-btn').disabled = false;
-        installBtn.textContent = 'Retry Installation';
         progressSection.style.display = 'none';
     }
 }
@@ -206,6 +292,11 @@ function simulateProgress() {
 
     let progress = 10;
     const interval = setInterval(() => {
+        if (!isInstalling) {
+            clearInterval(interval);
+            return;
+        }
+
         progress += Math.random() * 15;
         if (progress >= 95) {
             progress = 95;

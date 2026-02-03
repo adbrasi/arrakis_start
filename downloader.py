@@ -5,15 +5,23 @@ Supports HuggingFace (with hf_transfer), Civitai, and direct URLs
 """
 
 import os
+import sys
 import subprocess
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Callable
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 import shutil
 import re
 
 logger = logging.getLogger(__name__)
+
+# Force unbuffered output for real-time progress
+os.environ['PYTHONUNBUFFERED'] = '1'
+
+# Get venv path for huggingface-cli
+COMFY_BASE = Path(os.environ.get('COMFY_BASE', '/workspace/comfy'))
+VENV_BIN = COMFY_BASE / '.venv' / 'bin'
 
 
 class DownloadManager:
@@ -22,16 +30,40 @@ class DownloadManager:
         self.civitai_token = os.environ.get('CIVITAI_TOKEN', '')
         self.hf_token = os.environ.get('HF_TOKEN', '')
         self.progress_callback = progress_callback
+        self._cancelled = False
         
         # Check for aria2c
         self.has_aria2c = shutil.which('aria2c') is not None
         if not self.has_aria2c:
             logger.warning("aria2c not found, falling back to wget")
         
+        # Find huggingface-cli (check venv first, then system)
+        self.hf_cli_path = self._find_hf_cli()
+        
         # Check for hf_transfer (100x faster HF downloads)
         self.use_hf_transfer = os.environ.get('HF_HUB_ENABLE_HF_TRANSFER', '0') == '1'
-        if self.use_hf_transfer:
+        if self.use_hf_transfer and self.hf_cli_path:
             logger.info("✓ hf_transfer enabled for ultra-fast HuggingFace downloads")
+    
+    def _find_hf_cli(self) -> Optional[str]:
+        """Find huggingface-cli executable"""
+        # Check venv first
+        venv_hf = VENV_BIN / 'huggingface-cli'
+        if venv_hf.exists():
+            return str(venv_hf)
+        
+        # Check system PATH
+        system_hf = shutil.which('huggingface-cli')
+        if system_hf:
+            return system_hf
+        
+        logger.warning("huggingface-cli not found, will use aria2c for HF downloads")
+        return None
+    
+    def cancel(self):
+        """Cancel ongoing downloads"""
+        self._cancelled = True
+        logger.info("Download cancelled by user")
     
     def _report_progress(self, message: str, current: int = 0, total: int = 0):
         """Report progress via callback"""
@@ -42,14 +74,23 @@ class DownloadManager:
                 'total': total
             })
         logger.info(message)
+        # Force flush for real-time output
+        sys.stdout.flush()
+        sys.stderr.flush()
     
     def download_all(self, downloads: List[Dict]) -> bool:
         """Download all files in the list"""
         total = len(downloads)
+        self._cancelled = False
         self._report_progress(f"Starting download of {total} files", 0, total)
         
         success_count = 0
         for i, item in enumerate(downloads, 1):
+            # Check for cancellation
+            if self._cancelled:
+                self._report_progress("Download cancelled", i, total)
+                return False
+            
             url = item.get('url', '')
             target_dir = item.get('dir', '')
             filename = item.get('filename', '')
@@ -86,13 +127,16 @@ class DownloadManager:
             return True
         
         # Use HuggingFace CLI for HF downloads (with hf_transfer support)
-        if 'huggingface.co' in url and self.hf_token:
-            return self._download_hf_direct(url, dest_dir, filename)
+        if 'huggingface.co' in url and self.hf_cli_path and self.hf_token:
+            result = self._download_hf_direct(url, dest_dir, filename)
+            if result:
+                return True
+            # Fall through to aria2c if HF CLI fails
         
         # Add authentication tokens
         download_url = self._add_auth_token(url)
         
-        # Download
+        # Download with aria2c or wget
         if self.has_aria2c:
             return self._download_aria2c(download_url, dest_dir, filename)
         else:
@@ -103,10 +147,12 @@ class DownloadManager:
         # Parse HF URL: https://huggingface.co/repo/resolve/main/file.safetensors
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', url)
         if not match:
-            logger.warning(f"Could not parse HF URL, falling back to direct download: {url}")
-            return self._download_aria2c(url, dest_dir, filename) if self.has_aria2c else self._download_wget(url, dest_dir / filename)
+            logger.warning(f"Could not parse HF URL, falling back to aria2c: {url}")
+            return False
         
         repo_id, branch, file_path = match.groups()
+        # URL decode the file path
+        file_path = unquote(file_path)
         
         logger.info(f"Downloading from HuggingFace: {repo_id}/{file_path}")
         
@@ -115,7 +161,7 @@ class DownloadManager:
             env['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
         
         cmd = [
-            'huggingface-cli',
+            self.hf_cli_path,
             'download',
             repo_id,
             file_path,
@@ -125,16 +171,30 @@ class DownloadManager:
         ]
         
         try:
-            result = subprocess.run(
+            # Run with visible output for progress
+            process = subprocess.Popen(
                 cmd,
                 env=env,
-                check=True,
-                capture_output=False,  # Show progress in terminal
-                text=True
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1  # Line buffered
             )
-            logger.info(f"✓ Downloaded from HF: {filename}")
-            return True
-        except subprocess.CalledProcessError as e:
+            
+            # Stream output in real-time
+            for line in process.stdout:
+                print(line, end='', flush=True)
+            
+            process.wait()
+            
+            if process.returncode == 0:
+                logger.info(f"✓ Downloaded from HF: {filename}")
+                return True
+            else:
+                logger.error(f"HF download failed with code {process.returncode}")
+                return False
+                
+        except Exception as e:
             logger.error(f"HF download failed: {e}")
             return False
     
@@ -146,15 +206,19 @@ class DownloadManager:
         cmd = [
             'aria2c',
             '-c',  # Continue download
-            '-x', '4',  # 4 connections per server (increased from 2)
+            '-x', '4',  # 4 connections per server
             '-s', '4',  # Split into 4 parts
             '--max-connection-per-server=4',
             '--min-split-size=1M',
             '--file-allocation=none',
-            '--console-log-level=notice',  # Show progress
-            '--summary-interval=1',  # Update every second
+            '--console-log-level=notice',
+            '--summary-interval=1',
             '--dir', str(dest_dir),
         ]
+        
+        # Add HF token header if needed
+        if 'huggingface.co' in url and self.hf_token:
+            cmd.extend(['--header', f'Authorization: Bearer {self.hf_token}'])
         
         if use_content_disposition:
             cmd.append('--content-disposition=true')
@@ -165,25 +229,44 @@ class DownloadManager:
         cmd.append(url)
         
         try:
-            # Run with visible output for progress
-            result = subprocess.run(cmd, check=True, text=True)
-            logger.info(f"✓ Downloaded: {filename}")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"aria2c failed, falling back to wget")
-            # Fallback to wget
+            # Run with real-time output
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            for line in process.stdout:
+                print(line, end='', flush=True)
+            
+            process.wait()
+            
+            if process.returncode == 0:
+                logger.info(f"✓ Downloaded: {filename}")
+                return True
+            else:
+                logger.error(f"aria2c failed, falling back to wget")
+                return self._download_wget(url, dest_dir / filename)
+                
+        except Exception as e:
+            logger.error(f"aria2c error: {e}")
             return self._download_wget(url, dest_dir / filename)
     
     def _download_wget(self, url: str, dest_path: Path) -> bool:
         """Download using wget (fallback) with content-disposition support"""
         cmd = [
             'wget',
-            '--show-progress',
+            '--progress=bar:force',
             '-c',  # Continue
-            '--content-disposition',  # Use server-provided filename for Civitai
+            '--content-disposition',
         ]
         
-        # Only use -O if not using content-disposition or not Civitai
+        # Add HF token header if needed
+        if 'huggingface.co' in url and self.hf_token:
+            cmd.extend(['--header', f'Authorization: Bearer {self.hf_token}'])
+        
         if 'civitai.com' not in url:
             cmd.extend(['-O', str(dest_path)])
         else:
@@ -192,11 +275,28 @@ class DownloadManager:
         cmd.append(url)
         
         try:
-            subprocess.run(cmd, check=True)
-            logger.info(f"✓ Downloaded: {dest_path.name}")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"wget failed: {e}")
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            for line in process.stdout:
+                print(line, end='', flush=True)
+            
+            process.wait()
+            
+            if process.returncode == 0:
+                logger.info(f"✓ Downloaded: {dest_path.name}")
+                return True
+            else:
+                logger.error(f"wget failed with code {process.returncode}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"wget error: {e}")
             return False
     
     def _add_auth_token(self, url: str) -> str:
@@ -214,7 +314,7 @@ class DownloadManager:
         parsed = urlparse(url)
         
         # Try to get from path
-        path = parsed.path
+        path = unquote(parsed.path)
         if path:
             filename = path.split('/')[-1]
             if filename and '.' in filename:
@@ -222,11 +322,8 @@ class DownloadManager:
         
         # Try to get from query params (Civitai)
         if 'civitai.com' in url:
-            # Use model ID as filename
             if '/models/' in url:
                 model_id = url.split('/models/')[1].split('?')[0]
                 return f"civitai_{model_id}.safetensors"
         
-        # Fallback
         return 'downloaded_file'
-
