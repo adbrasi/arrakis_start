@@ -1,6 +1,10 @@
 {
     "name": "SDXL Anime",
     "description": "SDXL/Illustrious checkpoints with anime LoRAs and ControlNet",
+    "comfyui_flags": [
+        "--force-fp16",
+        "--highvram"
+    ],
     "models": [
         {
             "url": "https://civitai.com/api/download/models/2320393?type=Model&format=SafeTensor&size=pruned&fp=fp16",

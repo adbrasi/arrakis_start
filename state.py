@@ -49,10 +49,26 @@ class StateManager:
         }
     
     def _save_state(self):
-        """Save state to disk"""
+        """Save state to disk atomically (write to temp, then rename)"""
+        import tempfile
         try:
-            with open(self.state_file, 'w') as f:
-                json.dump(self.state, f, indent=2)
+            # Write to temporary file first
+            temp_fd, temp_path = tempfile.mkstemp(
+                suffix='.json',
+                prefix='state_',
+                dir=self.state_file.parent
+            )
+            try:
+                with os.fdopen(temp_fd, 'w') as f:
+                    json.dump(self.state, f, indent=2)
+                # Atomic rename (works on same filesystem)
+                import shutil
+                shutil.move(temp_path, self.state_file)
+            except Exception:
+                # Clean up temp file on error
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                raise
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
     
@@ -106,6 +122,16 @@ class StateManager:
     def get_installed_nodes(self) -> List[str]:
         """Get list of installed nodes"""
         return self.state["installed_nodes"]
+    
+    # ComfyUI flags (preset-specific)
+    def set_comfyui_flags(self, flags: List[str]):
+        """Set ComfyUI flags from installed presets"""
+        self.state["comfyui_flags"] = flags
+        self._save_state()
+        
+    def get_comfyui_flags(self) -> List[str]:
+        """Get preset-specific ComfyUI flags"""
+        return self.state.get("comfyui_flags", [])
     
     # ComfyUI status
     def set_comfyui_status(self, status: str, pid: Optional[int] = None, 

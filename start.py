@@ -11,6 +11,7 @@ import subprocess
 import logging
 from pathlib import Path
 from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor
 import argparse
 
 # Import state manager
@@ -58,11 +59,28 @@ def load_presets() -> List[Dict]:
     
     return presets
 
+# Global tracker for cancellation
+_active_downloader = None
+
+def get_active_downloader():
+    return _active_downloader
+
+def cancel_active_install():
+    """Cancel the currently active installation"""
+    global _active_downloader
+    if _active_downloader:
+        logger.warning("Cancelling active installation...")
+        _active_downloader.cancel()
+        _active_downloader = None
+        return True
+    return False
+
 
 def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
-    """Install selected presets with smart skip-existing"""
+    """Install selected presets with smart skip-existing and parallelism"""
     from downloader import DownloadManager
     state = get_state_manager()
+    global _active_downloader
     
     # Auto-include base preset unless explicitly disabled
     if include_base and 'Base' not in preset_names:
@@ -75,9 +93,10 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     all_presets = load_presets()
     preset_map = {p.get('name', p['_filename']): p for p in all_presets}
     
-    # Collect all downloads
+    # Collect all downloads, nodes, and flags
     downloads = []
     nodes = []
+    collected_flags = []  # Preset-specific ComfyUI flags
     
     for preset_name in preset_names:
         if preset_name not in preset_map:
@@ -102,33 +121,46 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         # Add custom nodes
         if 'nodes' in preset:
             nodes.extend(preset['nodes'])
-    
-    # Download models
-    if downloads:
-        logger.info(f"Downloading {len(downloads)} new models...")
-        dm = DownloadManager(models_dir=MODELS_DIR)
-        success = dm.download_all(downloads)
-        if not success:
-            logger.error("Some downloads failed")
-            return False
         
-        # Track installed models
-        for model in downloads:
-            state.add_model(
-                model.get('filename', ''),
-                model.get('dir', ''),
-                model.get('url', ''),
-                0
-            )
-    else:
-        logger.info("All models already installed, skipping downloads")
+        # Collect preset-specific ComfyUI flags
+        if 'comfyui_flags' in preset:
+            collected_flags.extend(preset['comfyui_flags'])
+            logger.info(f"Preset '{preset_name}' adds flags: {preset['comfyui_flags']}")
     
-    # Install custom nodes
-    if nodes:
-        success = install_custom_nodes(nodes)
-        if not success:
-            logger.error("Some custom nodes failed to install")
-            return False
+    # Deduplicate and save collected flags
+    if collected_flags:
+        unique_flags = list(dict.fromkeys(collected_flags))  # Preserve order
+        state.set_comfyui_flags(unique_flags)
+        logger.info(f"Saved {len(unique_flags)} preset-specific ComfyUI flags")
+    
+    # Execute downloads and node installs in parallel (4 workers for better throughput)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        
+        # 1. Download models
+        if downloads:
+            logger.info(f"Downloading {len(downloads)} new models...")
+            _active_downloader = DownloadManager(models_dir=MODELS_DIR)
+            futures.append(executor.submit(_active_downloader.download_all, downloads))
+        else:
+            logger.info("All models already installed, skipping downloads")
+            
+        # 2. Install custom nodes (concurrently)
+        if nodes:
+            logger.info(f"Installing {len(nodes)} custom nodes...")
+            futures.append(executor.submit(install_custom_nodes, nodes))
+            
+        # Wait for completion
+        success = True
+        for future in futures:
+            if not future.result():
+                success = False
+    
+    _active_downloader = None
+    
+    if not success:
+        logger.error("Installation failed (some items failed)")
+        return False
     
     # Mark presets as installed
     for preset_name in preset_names:

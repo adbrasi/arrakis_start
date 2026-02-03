@@ -59,6 +59,14 @@ class PresetHandler(SimpleHTTPRequestHandler):
         else:
             self.send_error(404)
     
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests"""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
     def _handle_get_presets(self):
         """Return available presets with installation status"""
         try:
@@ -150,6 +158,14 @@ class PresetHandler(SimpleHTTPRequestHandler):
             
             def install_and_start():
                 success = install_presets(preset_names, include_base=True)
+                
+                # Send WebSocket notification
+                try:
+                    from websocket_server import send_install_complete
+                    send_install_complete(success, preset_names)
+                except Exception as e:
+                    logger.warning(f"Failed to send install_complete: {e}")
+                
                 if success:
                     logger.info("Installation complete, starting ComfyUI...")
                     start_comfyui()
@@ -259,9 +275,12 @@ class PresetHandler(SimpleHTTPRequestHandler):
     def _handle_stop_install(self):
         """Stop ongoing installation"""
         try:
-            logger.info("Stop request received - this will stop after current download")
+            logger.info("Stop request received, cancelling active installation...")
             
-            # TODO: Implement actual stop mechanism
+            from start import cancel_active_install
+            success = cancel_active_install()
+            
+            message = 'Installation stopped immediately.' if success else 'No active installation found to stop.'
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -269,7 +288,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             response = {
                 'status': 'stopped',
-                'message': 'Stop signal sent. Installation will stop after current file.'
+                'message': message
             }
             self.wfile.write(json.dumps(response).encode())
         
@@ -283,15 +302,27 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
 
 def run_server(port: int = 8090, presets_callback: Callable = None):
-    """Start the HTTP server"""
+    """Start the HTTP server and WebSocket server"""
     global _presets_callback, _state_manager, _process_manager
     _presets_callback = presets_callback
     _state_manager = get_state_manager()
     _process_manager = get_process_manager(_state_manager)
     
+    # Start WebSocket server in background thread
+    from websocket_server import start_websocket_server
+    
+    def run_ws():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(start_websocket_server(port=port+1))
+    
+    ws_thread = threading.Thread(target=run_ws, daemon=True)
+    ws_thread.start()
+    
     server = HTTPServer(('0.0.0.0', port), PresetHandler)
     
     logger.info(f"Web server running on http://0.0.0.0:{port}")
+    logger.info(f"WebSocket server running on ws://0.0.0.0:{port+1}")
     logger.info("Press Ctrl+C to stop")
     
     try:

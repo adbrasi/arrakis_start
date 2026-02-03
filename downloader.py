@@ -13,6 +13,11 @@ from typing import List, Dict, Optional, Callable
 from urllib.parse import urlparse, parse_qs, unquote
 import shutil
 import re
+try:
+    from websocket_server import send_download_progress, send_log_message
+    HAS_WEBSOCKET = True
+except ImportError:
+    HAS_WEBSOCKET = False
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +37,11 @@ class DownloadManager:
         self.progress_callback = progress_callback
         self._cancelled = False
         
+        # Bandwidth throttling (e.g., "50M" for 50MB/s, "0" for unlimited)
+        self.speed_limit = os.environ.get('DOWNLOAD_SPEED_LIMIT', '0')
+        if self.speed_limit != '0':
+            logger.info(f"Download speed limit: {self.speed_limit}")
+        
         # Check for aria2c
         self.has_aria2c = shutil.which('aria2c') is not None
         if not self.has_aria2c:
@@ -39,6 +49,7 @@ class DownloadManager:
         
         # Find huggingface-cli (check venv first, then system)
         self.hf_cli_path = self._find_hf_cli()
+        self.current_process = None
         
         # Check for hf_transfer (100x faster HF downloads)
         self.use_hf_transfer = os.environ.get('HF_HUB_ENABLE_HF_TRANSFER', '0') == '1'
@@ -61,8 +72,14 @@ class DownloadManager:
         return None
     
     def cancel(self):
-        """Cancel ongoing downloads"""
+        """Cancel ongoing downloads immediately"""
         self._cancelled = True
+        if self.current_process:
+            logger.warning("Killing active download process...")
+            try:
+                self.current_process.kill()
+            except Exception as e:
+                logger.error(f"Failed to kill process: {e}")
         logger.info("Download cancelled by user")
     
     def _report_progress(self, message: str, current: int = 0, total: int = 0):
@@ -99,12 +116,26 @@ class DownloadManager:
                 logger.warning(f"[{i}/{total}] Skipping item with no URL")
                 continue
             
+            if self._cancelled:
+                self._report_progress("Download cancelled", i, total)
+                return False
+            
             self._report_progress(f"[{i}/{total}] {filename or 'file'}", i, total)
             
-            if self._download_file(url, target_dir, filename):
-                success_count += 1
-            else:
-                logger.error(f"Failed to download: {filename or url}")
+            # Retry logic: up to 3 attempts
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                if self._cancelled:
+                    return False
+                    
+                if self._download_file(url, target_dir, filename):
+                    success_count += 1
+                    break
+                else:
+                    if attempt < max_retries:
+                        logger.warning(f"Download failed, retrying ({attempt}/{max_retries})...")
+                    else:
+                        logger.error(f"Failed to download after {max_retries} attempts: {filename or url}")
         
         self._report_progress(f"Downloaded {success_count}/{total} files successfully", total, total)
         return success_count == total
@@ -180,12 +211,24 @@ class DownloadManager:
                 text=True,
                 bufsize=1  # Line buffered
             )
+            self.current_process = process
             
             # Stream output in real-time
             for line in process.stdout:
                 print(line, end='', flush=True)
+                
+                # Parse progress for WebSocket
+                if HAS_WEBSOCKET:
+                    # hf_transfer output or tqdm
+                    # Example: 45%|████▌     | 1.23G/2.75G [00:12<00:15, 102MB/s]
+                    match = re.search(r'(\d+)%\|.*\[.*, ([\d\.]+\w+/s)\]', line)
+                    if match:
+                        percent = float(match.group(1))
+                        speed = match.group(2)
+                        send_download_progress(filename, percent, speed, "")
             
             process.wait()
+            self.current_process = None
             
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded from HF: {filename}")
@@ -195,6 +238,7 @@ class DownloadManager:
                 return False
                 
         except Exception as e:
+            self.current_process = None
             logger.error(f"HF download failed: {e}")
             return False
     
@@ -220,6 +264,10 @@ class DownloadManager:
         if 'huggingface.co' in url and self.hf_token:
             cmd.extend(['--header', f'Authorization: Bearer {self.hf_token}'])
         
+        # Add speed limit if configured (I7: bandwidth throttling)
+        if self.speed_limit != '0':
+            cmd.extend(['--max-download-limit', self.speed_limit])
+        
         if use_content_disposition:
             cmd.append('--content-disposition=true')
             cmd.append('--auto-file-renaming=false')
@@ -237,11 +285,23 @@ class DownloadManager:
                 text=True,
                 bufsize=1
             )
+            self.current_process = process
             
             for line in process.stdout:
                 print(line, end='', flush=True)
+                
+                # Parse progress for WebSocket
+                if HAS_WEBSOCKET:
+                    # aria2c output: [#2089b0 27MiB/91MiB(29%) CN:8 DL:110MiB ETA:1s]
+                    match = re.search(r'\(([\d\.]+)%\).*DL:([\d\.]+\w+)(?:.*?ETA:([\d\w]+))?', line)
+                    if match:
+                        percent = float(match.group(1))
+                        speed = match.group(2) + "/s"
+                        eta = match.group(3) or ""
+                        send_download_progress(filename, percent, speed, eta)
             
             process.wait()
+            self.current_process = None
             
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {filename}")
@@ -282,11 +342,23 @@ class DownloadManager:
                 text=True,
                 bufsize=1
             )
+            self.current_process = process
             
             for line in process.stdout:
                 print(line, end='', flush=True)
+                
+                # Parse progress for WebSocket
+                if HAS_WEBSOCKET:
+                    # wget output:  52% [============>           ] 14,833,969  21.3MB/s  eta 1s
+                    match = re.search(r'(\d+)%.*?([\d\.]+[KMG]B/s).*?eta\s+([\w\d]+)', line)
+                    if match:
+                        percent = float(match.group(1))
+                        speed = match.group(2)
+                        eta = match.group(3)
+                        send_download_progress(dest_path.name, percent, speed, eta)
             
             process.wait()
+            self.current_process = None
             
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {dest_path.name}")

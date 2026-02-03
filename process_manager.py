@@ -57,19 +57,32 @@ class ProcessManager:
             return False
     
     def start(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:
-        """Start ComfyUI with optional flags"""
+        """Start ComfyUI with optional flags + preset-specific flags"""
         if self.is_running():
             logger.warning("ComfyUI is already running")
             return False
         
         # Default flags
-        if flags is None:
-            flags = [
-                '--listen', '0.0.0.0',
-                '--port', str(port),
-                '--preview-method', 'latent2rgb',
-                '--front-end-version', 'Comfy-Org/ComfyUI_frontend@latest'
-            ]
+        default_flags = [
+            '--listen', '0.0.0.0',
+            '--port', str(port),
+            '--preview-method', 'latent2rgb',
+            '--front-end-version', 'Comfy-Org/ComfyUI_frontend@latest'
+        ]
+        
+        # Get preset-specific flags from state
+        preset_flags = self.state_manager.get_comfyui_flags()
+        if preset_flags:
+            logger.info(f"Adding preset-specific flags: {preset_flags}")
+        
+        # Merge: defaults + preset flags + explicit flags (last wins)
+        all_flags = default_flags.copy()
+        all_flags.extend(preset_flags)
+        if flags:
+            all_flags.extend(flags)
+        
+        # Deduplicate while preserving order (later values override)
+        flags = list(dict.fromkeys(all_flags))
         
         logger.info(f"Starting ComfyUI on port {port} with flags: {flags}")
         

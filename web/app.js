@@ -4,6 +4,56 @@ let selectedPresets = new Set();
 let allPresets = [];
 let isInstalling = false;
 let statusInterval = null;
+let socket = null;
+
+// ============================================
+// I5: Toast Notification System
+// ============================================
+const TOAST_ICONS = {
+    success: '✓',
+    error: '✕',
+    warning: '⚠',
+    info: 'ℹ'
+};
+
+function showToast(message, type = 'info', duration = 4000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+        <span class="toast-icon">${TOAST_ICONS[type] || 'ℹ'}</span>
+        <span class="toast-message">${message}</span>
+        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+    `;
+
+    container.appendChild(toast);
+
+    // Auto-remove after duration
+    if (duration > 0) {
+        setTimeout(() => {
+            toast.classList.add('toast-out');
+            setTimeout(() => toast.remove(), 200);
+        }, duration);
+    }
+
+    return toast;
+}
+
+// ============================================
+// I4: Button Loading States
+// ============================================
+function setButtonLoading(btn, loading) {
+    if (!btn) return;
+    if (loading) {
+        btn.classList.add('btn-loading');
+        btn.disabled = true;
+    } else {
+        btn.classList.remove('btn-loading');
+        btn.disabled = false;
+    }
+}
 
 // Load on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -13,6 +63,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Poll status every 5 seconds
     statusInterval = setInterval(loadStatus, 5000);
+
+    // Connect to WebSocket
+    connectWebSocket();
 });
 
 function setupEventListeners() {
@@ -51,8 +104,10 @@ function updateComfyUIStatus(comfyui) {
     const text = statusEl.querySelector('.status-text');
     const url = document.getElementById('comfyui-url');
 
-    // Update status indicator
+    // Reset classes
     dot.className = 'status-dot';
+
+    // Update status indicator
     if (comfyui.status === 'running' && comfyui.is_healthy) {
         dot.classList.add('running');
         text.textContent = `Running on port ${comfyui.port}`;
@@ -186,7 +241,7 @@ function createPresetCard(preset) {
     const label = document.createElement('label');
     label.htmlFor = `preset-${preset.name}`;
 
-    const installedBadge = preset.installed ? '<span class="installed-badge">✓ Installed</span>' : '';
+    const installedBadge = preset.installed ? '<div class="installed-badge">✓ Installed</div>' : '';
 
     label.innerHTML = `
         ${installedBadge}
@@ -241,6 +296,7 @@ function showControlButtons(show) {
     }
 }
 
+// Stop function using CSS classes for visibility
 async function stopInstallation() {
     const statusMessage = document.getElementById('status-message');
     const stopBtn = document.getElementById('stop-btn');
@@ -286,9 +342,12 @@ async function resetAndStartOver() {
         card.classList.remove('selected');
     });
 
-    // Hide progress and control buttons
-    progressSection.style.display = 'none';
-    progressFill.style.width = '0%';
+    // Hide progress (using active class)
+    progressSection.classList.remove('active');
+    setTimeout(() => {
+        progressFill.style.width = '0%';
+    }, 300);
+
     showControlButtons(false);
 
     // Reset status message
@@ -313,7 +372,8 @@ async function skipAndStartComfyUI() {
     skipBtn.textContent = 'Starting...';
     document.getElementById('install-btn').disabled = true;
 
-    progressSection.style.display = 'block';
+    // Show sticky progress
+    progressSection.classList.add('active');
     progressText.textContent = 'Starting ComfyUI without presets...';
 
     try {
@@ -342,7 +402,7 @@ async function skipAndStartComfyUI() {
         skipBtn.disabled = false;
         skipBtn.textContent = 'Skip & Start ComfyUI Only';
         document.getElementById('install-btn').disabled = selectedPresets.size === 0;
-        progressSection.style.display = 'none';
+        progressSection.classList.remove('active');
     }
 }
 
@@ -363,9 +423,9 @@ async function installSelectedPresets() {
     document.getElementById('skip-btn').disabled = true;
     showControlButtons(true);
 
-    // Show progress section
-    progressSection.style.display = 'block';
-    progressFill.style.width = '10%';
+    // Show sticky progress
+    progressSection.classList.add('active');
+    progressFill.style.width = '1%';
     progressText.textContent = 'Starting installation (Base + selected presets)...';
 
     try {
@@ -381,11 +441,8 @@ async function installSelectedPresets() {
 
         const result = await response.json();
 
-        // Simulate progress (TODO: replace with WebSocket)
-        simulateProgress();
-
         statusMessage.className = 'status-message success';
-        statusMessage.textContent = '✓ Installation started! Check terminal for real-time progress. ComfyUI will auto-start when ready.';
+        statusMessage.textContent = '✓ Installation started. Monitor real-time progress below.';
 
         // Poll status more frequently during installation
         const installCheck = setInterval(async () => {
@@ -393,8 +450,8 @@ async function installSelectedPresets() {
             await loadPresets();
         }, 3000);
 
-        // Stop polling after 5 minutes
-        setTimeout(() => clearInterval(installCheck), 300000);
+        // Stop polling after 10 minutes
+        setTimeout(() => clearInterval(installCheck), 600000);
 
     } catch (error) {
         console.error('Installation error:', error);
@@ -404,36 +461,88 @@ async function installSelectedPresets() {
         showControlButtons(false);
         installBtn.disabled = false;
         document.getElementById('skip-btn').disabled = false;
-        progressSection.style.display = 'none';
+        progressSection.classList.remove('active');
     }
 }
 
-function simulateProgress() {
+function connectWebSocket() {
+    if (socket && socket.readyState === WebSocket.OPEN) return;
+
+    // Connect to port 8091 (server port + 1)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.hostname}:8091`;
+
+    console.log(`Connecting to WebSocket: ${wsUrl}`);
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+        console.log('WebSocket connected');
+    };
+
+    socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleWebSocketMessage(data);
+    };
+
+    socket.onclose = () => {
+        console.log('WebSocket disconnected, retrying in 2s...');
+        setTimeout(connectWebSocket, 2000);
+    };
+
+    socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+}
+
+function handleWebSocketMessage(data) {
     const progressFill = document.getElementById('progress-fill');
     const progressText = document.getElementById('progress-text');
+    const progressSpeed = document.getElementById('progress-speed');
+    const progressEta = document.getElementById('progress-eta');
+    const statusMessage = document.getElementById('status-message');
+    const progressSection = document.getElementById('progress-section');
 
-    let progress = 10;
-    const interval = setInterval(() => {
-        if (!isInstalling) {
-            clearInterval(interval);
-            return;
-        }
+    switch (data.type) {
+        case 'download_progress':
+            if (!isInstalling) return;
+            // filename, percent, speed, eta
+            progressFill.style.width = `${data.percent}%`;
+            progressText.textContent = `Downloading ${data.filename}`;
+            progressSpeed.textContent = data.speed; // e.g. "15 MB/s"
+            if (data.eta) {
+                progressEta.textContent = `ETA: ${data.eta}`;
+            }
+            break;
 
-        progress += Math.random() * 10;
-        if (progress >= 95) {
-            progress = 95;
-            clearInterval(interval);
-            progressText.textContent = 'Finalizing installation...';
-        }
+        case 'install_status':
+            progressText.textContent = data.message;
+            break;
 
-        progressFill.style.width = `${progress}%`;
+        case 'comfyui_status':
+            // Update status dashboard immediately
+            loadStatus();
+            break;
 
-        if (progress < 30) {
-            progressText.textContent = 'Downloading models (check terminal for speeds)...';
-        } else if (progress < 60) {
-            progressText.textContent = 'Installing custom nodes...';
-        } else if (progress < 90) {
-            progressText.textContent = 'Configuring ComfyUI...';
-        }
-    }, 2000);
+        case 'install_complete':
+            isInstalling = false;
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Installation complete!';
+            progressSpeed.textContent = 'Done';
+            progressEta.textContent = '';
+
+            statusMessage.className = 'status-message success';
+            statusMessage.textContent = '✓ Installation finished! ComfyUI is starting...';
+            showControlButtons(false);
+            document.getElementById('install-btn').disabled = false;
+            document.getElementById('skip-btn').disabled = false;
+
+            // Reload presets to show new installed status
+            loadPresets();
+
+            // Hide progress after delay
+            setTimeout(() => {
+                progressSection.classList.remove('active');
+            }, 6000);
+            break;
+    }
 }
