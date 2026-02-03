@@ -64,9 +64,63 @@ document.addEventListener('DOMContentLoaded', () => {
     // Poll status every 5 seconds
     statusInterval = setInterval(loadStatus, 5000);
 
-    // Connect to WebSocket
+    // Connect to WebSocket (may fail through Cloudflare tunnels - HTTP polling is fallback)
     connectWebSocket();
 });
+
+// ============================================
+// Progress Polling (HTTP fallback for WebSocket)
+// ============================================
+let progressPollingInterval = null;
+
+function startProgressPolling() {
+    // Poll /api/progress every 500ms during installation
+    if (progressPollingInterval) return;
+
+    progressPollingInterval = setInterval(async () => {
+        try {
+            const response = await fetch('/api/progress');
+            const data = await response.json();
+
+            if (data.status === 'idle') return;
+
+            // Update UI
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
+            const progressSpeed = document.getElementById('progress-speed');
+            const progressEta = document.getElementById('progress-eta');
+
+            if (data.percent > 0) {
+                progressFill.style.width = `${data.percent}%`;
+            }
+            if (data.filename) {
+                progressText.textContent = `Downloading ${data.filename}`;
+            } else if (data.message) {
+                progressText.textContent = data.message;
+            }
+            if (data.speed) progressSpeed.textContent = data.speed;
+            if (data.eta) progressEta.textContent = `ETA: ${data.eta}`;
+
+            // Stop polling when complete
+            if (data.status === 'complete' || data.status === 'error') {
+                stopProgressPolling();
+                loadStatus();  // Refresh status
+                loadPresets(); // Refresh preset list
+            }
+        } catch (e) {
+            console.warn('Progress polling error:', e);
+        }
+    }, 500);
+    console.log('Progress polling started (HTTP fallback)');
+}
+
+function stopProgressPolling() {
+    if (progressPollingInterval) {
+        clearInterval(progressPollingInterval);
+        progressPollingInterval = null;
+        console.log('Progress polling stopped');
+    }
+}
 
 function setupEventListeners() {
     document.getElementById('install-btn').addEventListener('click', installSelectedPresets);
@@ -418,6 +472,9 @@ async function installSelectedPresets() {
     // Set installing state
     isInstalling = true;
 
+    // Start HTTP polling for progress (fallback if WebSocket fails through Cloudflare)
+    startProgressPolling();
+
     // Update UI
     installBtn.disabled = true;
     document.getElementById('skip-btn').disabled = true;
@@ -426,7 +483,7 @@ async function installSelectedPresets() {
     // Show sticky progress
     progressSection.classList.add('active');
     progressFill.style.width = '1%';
-    progressText.textContent = 'Starting installation (Base + selected presets)...';
+    progressText.textContent = 'Stopping ComfyUI and preparing installation...';
 
     try {
         const response = await fetch('/api/install', {

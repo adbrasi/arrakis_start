@@ -18,9 +18,31 @@ from process_manager import get_process_manager
 
 logger = logging.getLogger(__name__)
 
-# Global callbacks
+# Module-level state
 _presets_callback = None
 _state_manager = None
+
+# Install progress tracking (for HTTP polling fallback when WebSocket fails)
+_install_progress = {
+    'status': 'idle',  # idle, installing, complete, error
+    'message': '',
+    'percent': 0,
+    'filename': '',
+    'speed': '',
+    'eta': ''
+}
+
+def update_install_progress(status='installing', message='', percent=0, filename='', speed='', eta=''):
+    """Update install progress for HTTP polling"""
+    global _install_progress
+    _install_progress = {
+        'status': status,
+        'message': message,
+        'percent': percent,
+        'filename': filename,
+        'speed': speed,
+        'eta': eta
+    }
 _process_manager = None
 
 
@@ -38,6 +60,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self._handle_get_presets()
         elif self.path == '/api/status':
             self._handle_get_status()
+        elif self.path == '/api/progress':
+            self._handle_get_progress()
         elif self.path.startswith('/api/logs'):
             self._handle_get_logs()
         else:
@@ -127,6 +151,19 @@ class PresetHandler(SimpleHTTPRequestHandler):
             logger.error(f"Failed to get status: {e}")
             self.send_error(500, str(e))
     
+    def _handle_get_progress(self):
+        """Return current installation progress (HTTP polling fallback for WebSocket)"""
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(_install_progress).encode())
+        
+        except Exception as e:
+            logger.error(f"Failed to get progress: {e}")
+            self.send_error(500, str(e))
+    
     def _handle_get_logs(self):
         """Return installation logs"""
         try:
@@ -154,23 +191,41 @@ class PresetHandler(SimpleHTTPRequestHandler):
             logger.info(f"Installation request: {preset_names}")
             
             # Start installation in background thread
-            from start import install_presets, start_comfyui
+            from start import install_presets
+            from process_manager import get_process_manager
             
-            def install_and_start():
+            def install_and_restart():
+                pm = get_process_manager()
+                
+                # STEP 1: Stop ComfyUI if running (to avoid port conflict)
+                update_install_progress(status='installing', message='Stopping ComfyUI...', percent=5)
+                if pm.is_running():
+                    logger.info("Stopping ComfyUI before installation...")
+                    pm.stop()
+                    import time
+                    time.sleep(2)  # Wait for port to be released
+                
+                # STEP 2: Install presets (this also saves preset flags to state)
+                update_install_progress(status='installing', message='Installing presets...', percent=10)
                 success = install_presets(preset_names, include_base=True)
                 
-                # Send WebSocket notification
+                # Send WebSocket notification (may fail through Cloudflare)
                 try:
                     from websocket_server import send_install_complete
                     send_install_complete(success, preset_names)
                 except Exception as e:
                     logger.warning(f"Failed to send install_complete: {e}")
                 
+                # STEP 3: Restart ComfyUI with new preset flags
                 if success:
-                    logger.info("Installation complete, starting ComfyUI...")
-                    start_comfyui()
+                    update_install_progress(status='installing', message='Starting ComfyUI with preset flags...', percent=95)
+                    logger.info("Installation complete, starting ComfyUI with preset flags...")
+                    pm.start()  # start() will automatically merge preset flags from state
+                    update_install_progress(status='complete', message='Installation complete!', percent=100)
+                else:
+                    update_install_progress(status='error', message='Installation failed', percent=0)
             
-            thread = threading.Thread(target=install_and_start, daemon=True)
+            thread = threading.Thread(target=install_and_restart, daemon=True)
             thread.start()
             
             # Send immediate response
