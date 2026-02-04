@@ -141,7 +141,7 @@ class ProcessManager:
             return False
     
     def stop(self, timeout: int = 10) -> bool:
-        """Stop ComfyUI gracefully"""
+        """Stop ComfyUI gracefully and wait for port release"""
         if not self.is_running():
             logger.warning("ComfyUI is not running")
             self.state_manager.set_comfyui_status(status="stopped", pid=None)
@@ -149,6 +149,7 @@ class ProcessManager:
         
         status = self.state_manager.get_comfyui_status()
         pid = status.get('pid')
+        port = status.get('port', 8818)
         
         logger.info(f"Stopping ComfyUI (PID: {pid})...")
         
@@ -169,12 +170,37 @@ class ProcessManager:
                 process.wait(timeout=5)
                 logger.info("✓ ComfyUI force killed")
             
+            # CRITICAL: Wait for port to be released
+            logger.info(f"Waiting for port {port} to be released...")
+            for i in range(10):  # Wait up to 10 seconds
+                time.sleep(1)
+                if not self._is_port_in_use(port):
+                    logger.info(f"✓ Port {port} released")
+                    break
+            else:
+                logger.warning(f"Port {port} may still be in use, but continuing...")
+            
+            # Colorful stop banner
+            print("\n" + "="*60)
+            print("\033[1;31m⏹ COMFYUI DESLIGADO! ⏹\033[0m")
+            print("="*60 + "\n")
+            
             self.state_manager.set_comfyui_status(status="stopped", pid=None)
             return True
             
         except Exception as e:
             logger.error(f"Failed to stop ComfyUI: {e}")
             return False
+    
+    def _is_port_in_use(self, port: int) -> bool:
+        """Check if a port is in use"""
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('0.0.0.0', port))
+                return False  # Port is free
+            except OSError:
+                return True  # Port is in use
     
     def restart(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:
         """Restart ComfyUI with optional new flags"""

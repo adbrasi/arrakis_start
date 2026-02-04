@@ -117,7 +117,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     logger.info("Stopping ComfyUI before installation...")
                     pm.stop()
                     import time
-                    time.sleep(2)  # Wait for port to be released
+                    time.sleep(5)  # Wait longer for port to be fully released
                 
                 # STEP 2: Install presets (this also saves preset flags to state)
                 logger.info(f"Installing presets: {preset_names}")
