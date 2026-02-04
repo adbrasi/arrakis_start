@@ -28,6 +28,14 @@ class PresetHandler(SimpleHTTPRequestHandler):
         web_dir = Path(__file__).parent / 'web'
         super().__init__(*args, directory=str(web_dir), **kwargs)
     
+    def log_message(self, format, *args):
+        """Override to filter out irrelevant logs"""
+        # Silence 404 logs for health.ico, favicon.ico, etc.
+        if '404' in str(args) and ('.ico' in str(args) or 'health' in str(args)):
+            return  # Don't log these
+        # Log everything else normally
+        super().log_message(format, *args)
+    
     def do_GET(self):
         """Handle GET requests"""
         if self.path == '/api/presets':
@@ -117,10 +125,17 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 
                 # STEP 3: Restart ComfyUI with new preset flags
                 if success:
+                    print("\n" + "="*60)
+                    print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
+                    print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
+                    print("="*60 + "\n")
                     logger.info("Installation complete, starting ComfyUI with preset flags...")
                     pm.start()  # start() will automatically merge preset flags from state
                     logger.info("✓ ComfyUI started successfully")
                 else:
+                    print("\n" + "="*60)
+                    print("\033[1;31m❌ ERRO NA INSTALAÇÃO ❌\033[0m")
+                    print("="*60 + "\n")
                     logger.error("Installation failed")
             
             thread = threading.Thread(target=install_and_restart, daemon=True)
@@ -148,6 +163,13 @@ def run_server(port: int = 8090, presets_callback: Callable = None):
     _state_manager = get_state_manager()
     
     server = HTTPServer(('0.0.0.0', port), PresetHandler)
+    
+    # Colorful startup banner
+    print("\n" + "="*60)
+    print("\033[1;35m🌐 ARRAKIS START WEBUI INICIADA! 🌐\033[0m")
+    print("\033[1;36m   Entre no portal do VastAI e selecione 'Arrakis Start'!\033[0m")
+    print("="*60 + "\n")
+    
     logger.info(f"Web server running on http://0.0.0.0:{port}")
     logger.info("Press Ctrl+C to stop")
     

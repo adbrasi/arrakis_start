@@ -122,6 +122,11 @@ class ProcessManager:
                         flags=flags,
                         port=port
                     )
+                    # Colorful success banner
+                    print("\n" + "="*60)
+                    print("\033[1;32m🚀 COMFYUI LIGADO! PRONTO PARA USO! 🚀\033[0m")
+                    print("\033[1;36m   Entre no portal do VastAI e selecione ComfyUI!\033[0m")
+                    print("="*60 + "\n")
                     logger.info(f"✓ ComfyUI started successfully on port {port}")
                     return True
             

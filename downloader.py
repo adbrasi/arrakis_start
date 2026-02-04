@@ -169,14 +169,27 @@ class DownloadManager:
                 return True
             # Fall through to aria2c if HF CLI fails
         
-        # Add authentication tokens
-        download_url = self._add_auth_token(url)
+        # Add CivitAI authentication token if needed
+        download_url = self._add_civitai_token(url)
         
         # Download with aria2c or wget
         if self.has_aria2c:
             return self._download_aria2c(download_url, dest_dir, filename)
         else:
             return self._download_wget(download_url, dest_path)
+    
+    def _add_civitai_token(self, url: str) -> str:
+        """Add CivitAI API token to URL if needed"""
+        if 'civitai.com' not in url or not self.civitai_token:
+            return url
+        
+        # Check if URL already has query parameters
+        separator = '&' if '?' in url else '?'
+        
+        # Append token as per CivitAI docs: ?token=apikey or &token=apikey
+        authenticated_url = f"{url}{separator}token={self.civitai_token}"
+        logger.debug(f"Added CivitAI token to URL")
+        return authenticated_url
     
     def _download_hf_direct(self, url: str, dest_dir: Path, filename: str) -> bool:
         """Download from HuggingFace using `hf download` with hf_xet for max speed"""

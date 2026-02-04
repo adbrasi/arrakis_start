@@ -140,6 +140,8 @@ h3 {
     margin-top: 0;
     margin-bottom: 0.5rem;
     font-size: 1.125rem;
+    padding-right: 6rem;
+    /* Space for the "✓ Instalado" badge */
 }
 
 .description {
