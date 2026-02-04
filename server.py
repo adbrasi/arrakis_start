@@ -29,12 +29,9 @@ class PresetHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(web_dir), **kwargs)
     
     def log_message(self, format, *args):
-        """Override to filter out irrelevant logs"""
-        # Silence 404 logs for health.ico, favicon.ico, etc.
-        if '404' in str(args) and ('.ico' in str(args) or 'health' in str(args)):
-            return  # Don't log these
-        # Log everything else normally
-        super().log_message(format, *args)
+        """Silence ALL HTTP request logs - user doesn't want to see them"""
+        pass  # Don't log any HTTP requests
+    
     
     def do_GET(self):
         """Handle GET requests"""
