@@ -306,7 +306,6 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     
     # Download errors are non-blocking (continue install/start); node errors remain blocking.
     if not download_success:
-        logger.warning("Some downloads failed, continuing installation as requested.")
         if downloader_failures:
             logger.warning("Detailed download failures:")
             for idx, failure in enumerate(downloader_failures, 1):
@@ -315,6 +314,18 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
                     f"stage={failure.get('stage')} reason={failure.get('reason')} "
                     f"url={failure.get('url')}"
                 )
+            
+            # Configuration/credential errors are fatal (don't pretend install succeeded).
+            fatal_download_error = any(
+                str(f.get('stage', '')).lower() == 'precheck' or
+                'missing (required for civitai downloads)' in str(f.get('reason', '')).lower()
+                for f in downloader_failures
+            )
+            if fatal_download_error:
+                logger.error("Installation failed due to missing/invalid download configuration (precheck error)")
+                return False
+        
+        logger.warning("Some downloads failed, continuing installation as requested.")
     
     if not nodes_success:
         logger.error("Installation failed: one or more custom nodes failed to install")

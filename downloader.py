@@ -8,6 +8,7 @@ import os
 import sys
 import subprocess
 import logging
+import json
 from collections import deque
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Tuple
@@ -35,7 +36,7 @@ VENV_BIN = COMFY_BASE / '.venv' / 'bin'
 class DownloadManager:
     def __init__(self, models_dir: Path, progress_callback: Optional[Callable] = None):
         self.models_dir = Path(models_dir)
-        self.civitai_token = os.environ.get('CIVITAI_TOKEN', '')
+        self.civitai_token, self.civitai_token_source = self._load_civitai_token()
         self.hf_token = os.environ.get('HF_TOKEN', '')
         self.progress_callback = progress_callback
         self._cancelled = False
@@ -49,7 +50,7 @@ class DownloadManager:
         else:
             logger.info("Download speed limit: unlimited")
         logger.info(f"HF token present: {bool(self.hf_token)}")
-        logger.info(f"Civitai token present: {bool(self.civitai_token)}")
+        logger.info(f"Civitai token present: {bool(self.civitai_token)} (source: {self.civitai_token_source})")
 
         # aria2 tunables (override via environment if needed)
         self.aria2_connections = os.environ.get('ARIA2_CONNECTIONS', '16')
@@ -74,6 +75,53 @@ class DownloadManager:
         self.use_hf_xet = os.environ.get('HF_XET_HIGH_PERFORMANCE', '0') == '1'
         if self.use_hf_xet and self.hf_cli_path:
             logger.info("✓ hf_xet high-performance mode enabled for ultra-fast HuggingFace downloads")
+    
+    def _load_civitai_token(self) -> Tuple[str, str]:
+        """Load CIVITAI token from env first, then ~/.civitai/config fallback."""
+        env_token = os.environ.get('CIVITAI_TOKEN', '').strip()
+        if env_token:
+            return env_token, 'env:CIVITAI_TOKEN'
+        
+        env_alt = os.environ.get('CIVITAI_API_KEY', '').strip()
+        if env_alt:
+            return env_alt, 'env:CIVITAI_API_KEY'
+        
+        token_file = Path(os.environ.get('CIVITAI_TOKEN_FILE', str(Path.home() / '.civitai' / 'config')))
+        if not token_file.exists():
+            return '', 'missing'
+        
+        try:
+            content = token_file.read_text(encoding='utf-8').strip()
+            if not content:
+                return '', f'file:{token_file} (empty)'
+            
+            # JSON style: {"token":"..."}
+            if content.startswith('{') and content.endswith('}'):
+                data = json.loads(content)
+                for key in ('token', 'civitai_token', 'api_key'):
+                    value = str(data.get(key, '')).strip()
+                    if value:
+                        return value, f'file:{token_file} (json:{key})'
+            
+            # KEY=VALUE style
+            for raw_line in content.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                key = k.strip().lower()
+                value = v.strip().strip('"').strip("'")
+                if key in ('token', 'civitai_token', 'civitai_api_key', 'api_key') and value:
+                    return value, f'file:{token_file} (kv:{key})'
+            
+            # Raw token in file
+            first = content.splitlines()[0].strip().strip('"').strip("'")
+            if first and ' ' not in first and '=' not in first:
+                return first, f'file:{token_file} (raw)'
+        except Exception as e:
+            logger.warning(f"Failed to parse Civitai token file {token_file}: {e}")
+        
+        return '', f'file:{token_file} (unusable)'
     
     def get_failure_report(self) -> List[Dict[str, str]]:
         """Return detailed failures for installer summary."""
@@ -102,6 +150,18 @@ class DownloadManager:
             'ok': str(ok),
             'reason': reason
         })
+    
+    def _is_retryable_failure(self, stage: str, reason: str) -> bool:
+        """Return False for deterministic/precheck errors that retries cannot fix."""
+        stage = (stage or '').lower()
+        reason_lower = (reason or '').lower()
+        if stage in {'precheck'}:
+            return False
+        if 'missing (required for civitai downloads)' in reason_lower:
+            return False
+        if 'auth_http_401' in reason_lower or 'auth_http_403' in reason_lower:
+            return False
+        return True
     
     def _append_query_param(self, url: str, key: str, value: str) -> str:
         parsed = urlparse(url)
@@ -276,11 +336,23 @@ class DownloadManager:
                     success_count += 1
                     break
                 else:
+                    retryable = self._is_retryable_failure(stage, reason)
                     if attempt < max_retries:
-                        logger.warning(
-                            f"Download failed ({filename or url}) [{stage}: {reason}], "
-                            f"retrying ({attempt}/{max_retries})..."
-                        )
+                        if retryable:
+                            logger.warning(
+                                f"Download failed ({filename or url}) [{stage}: {reason}], "
+                                f"retrying ({attempt}/{max_retries})..."
+                            )
+                        else:
+                            logger.error(
+                                f"Non-retryable failure ({filename or url}) [{stage}: {reason}]"
+                            )
+                            self._record_failure(
+                                {'url': url, 'dir': target_dir, 'filename': filename},
+                                reason=reason,
+                                stage=stage
+                            )
+                            break
                     else:
                         logger.error(f"Failed to download after {max_retries} attempts: {filename or url}")
                         self._record_failure(
@@ -308,14 +380,20 @@ class DownloadManager:
         dest_dir = self.models_dir / target_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
         
-        # Determine filename
-        if not filename:
+        # Determine initial filename
+        provided_filename = filename.strip() if isinstance(filename, str) else ''
+        if provided_filename:
+            filename = provided_filename
+        elif is_civitai_source:
+            # For Civitai API URLs, avoid placeholder filename before redirect resolution.
+            filename = ''
+        else:
             filename = self._extract_filename(url)
         
-        dest_path = dest_dir / filename
+        dest_path = (dest_dir / filename) if filename else None
         
         # Skip if exists
-        if dest_path.exists():
+        if dest_path is not None and dest_path.exists():
             logger.info(f"✓ Already exists: {filename}")
             return True, 'already_exists', 'skip'
 
@@ -347,10 +425,13 @@ class DownloadManager:
             civitai_filename = self._extract_civitai_filename_from_url(resolved_url)
             if civitai_filename:
                 filename = civitai_filename
-                dest_path = dest_dir / filename
-                if dest_path.exists():
-                    logger.info(f"✓ Already exists: {filename}")
-                    return True, 'already_exists', 'skip'
+            elif not filename:
+                # Fallback deterministic name if redirect lacks content-disposition.
+                filename = self._extract_filename(url)
+            dest_path = dest_dir / filename
+            if dest_path.exists():
+                logger.info(f"✓ Already exists: {filename}")
+                return True, 'already_exists', 'skip'
             if resolved_url != url:
                 logger.info("Resolved Civitai download URL via authenticated redirect")
         else:
@@ -363,7 +444,7 @@ class DownloadManager:
                 download_url,
                 dest_dir,
                 filename,
-                prefer_content_disposition=is_civitai_source
+                prefer_content_disposition=False
             )
             self._record_attempt(url, 'aria2c', ok, reason)
             if ok:
@@ -371,7 +452,7 @@ class DownloadManager:
             fallback_ok, fallback_reason = self._download_wget(
                 download_url,
                 dest_dir / filename,
-                prefer_content_disposition=is_civitai_source
+                prefer_content_disposition=False
             )
             self._record_attempt(url, 'wget-fallback', fallback_ok, fallback_reason)
             if fallback_ok:
@@ -381,7 +462,7 @@ class DownloadManager:
             ok, reason = self._download_wget(
                 download_url,
                 dest_path,
-                prefer_content_disposition=is_civitai_source
+                prefer_content_disposition=False
             )
             self._record_attempt(url, 'wget', ok, reason)
             if ok:
@@ -535,7 +616,7 @@ class DownloadManager:
             cmd.extend(['--header', f'User-Agent: {HTTP_USER_AGENT}'])
         
         # Add Civitai headers to reduce auth/redirect issues
-        if use_content_disposition:
+        if 'civitai.com' in url:
             if self.civitai_token:
                 cmd.extend(['--header', f'Authorization: Bearer {self.civitai_token}'])
             cmd.extend(['--header', f'User-Agent: {HTTP_USER_AGENT}'])
@@ -619,7 +700,7 @@ class DownloadManager:
         if 'huggingface.co' in url:
             cmd.extend(['--user-agent', HTTP_USER_AGENT])
         
-        if use_content_disposition:
+        if 'civitai.com' in url:
             if self.civitai_token:
                 cmd.extend(['--header', f'Authorization: Bearer {self.civitai_token}'])
             cmd.extend(['--user-agent', HTTP_USER_AGENT])
