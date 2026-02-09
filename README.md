@@ -12,8 +12,9 @@ Deploy ComfyUI with preset-based model selection in minutes. No more downloading
 
 ```bash
 export HF_TOKEN="your_hf_token_here"
-export CIVITAI_TOKEN="your_civitai_token_here"
+export CIVITAI_TOKEN="43d813c07860ba5ef0f6eb32b568949c"
 curl -L https://raw.githubusercontent.com/adbrasi/arrakis_start/main/bootstrap.sh | bash
+
 ```
 
 This will:
