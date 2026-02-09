@@ -41,6 +41,16 @@
       "filename": ""
     },
     {
+      "url": "https://civitai.com/api/download/models/2553271?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": ""
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2553151?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": ""
+    },
+    {
       "url": "https://huggingface.co/adbrasi/download_models/resolve/main/NSFW-22-H-e8.safetensors",
       "dir": "loras",
       "filename": "NSFW-22-H-e8.safetensors"
@@ -72,6 +82,16 @@
     },
     {
       "url": "https://civitai.com/api/download/models/2513186?type=Model&format=SafeTensor&size=pruned&fp=fp8",
+      "dir": "diffusion_models",
+      "filename": ""
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2555640?type=Model&format=SafeTensor&size=full&fp=fp8",
+      "dir": "diffusion_models",
+      "filename": ""
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2555652?type=Model&format=SafeTensor&size=full&fp=fp8",
       "dir": "diffusion_models",
       "filename": ""
     },
