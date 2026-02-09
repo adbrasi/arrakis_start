@@ -9,7 +9,7 @@
         {
             "url": "https://civitai.com/api/download/models/2320393?type=Model&format=SafeTensor&size=pruned&fp=fp16",
             "dir": "checkpoints",
-            "filename": "perfectxl.safetensors"
+            "filename": ""
         },
         {
             "url": "https://huggingface.co/ChenkinNoob/ChenkinNoob-XL-V0.2/resolve/main/ChenkinNoob-XL-V0.2.safetensors",
@@ -19,7 +19,7 @@
         {
             "url": "https://civitai.com/api/download/models/1828803?type=Model&format=SafeTensor&size=full&fp=fp16",
             "dir": "checkpoints",
-            "filename": "Hentai_Anime_RX.safetensors"
+            "filename": ""
         },
         {
             "url": "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors",
