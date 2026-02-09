@@ -95,12 +95,25 @@ class ProcessManager:
                 'launch',
                 '--'
             ] + flags
+
+            # Ensure runtime env for Blackwell + SageAttention stability.
+            env = os.environ.copy()
+            env.setdefault('NVCC_APPEND_FLAGS', '--threads 8')
+            env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+            env.setdefault('MAX_JOBS', '32')
+            logger.info(
+                "ComfyUI env: "
+                f"NVCC_APPEND_FLAGS={env.get('NVCC_APPEND_FLAGS')} "
+                f"PYTORCH_CUDA_ALLOC_CONF={env.get('PYTORCH_CUDA_ALLOC_CONF')} "
+                f"MAX_JOBS={env.get('MAX_JOBS')}"
+            )
             
             # Start process WITHOUT capturing output - logs go directly to terminal
             # This allows real-time log viewing and prevents Python buffering issues
             self.process = subprocess.Popen(
                 cmd,
-                cwd=str(COMFY_DIR)
+                cwd=str(COMFY_DIR),
+                env=env
                 # No stdout/stderr capture - ComfyUI logs appear in real-time
             )
             

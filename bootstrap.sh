@@ -24,12 +24,18 @@ ARRAKIS_DIR="$COMFY_BASE/arrakis_start"
 
 export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
+export PIP_ROOT_USER_ACTION=ignore
 export HF_HOME="/workspace/.hf"
 export HUGGINGFACE_HUB_CACHE="$HF_HOME"
 # TRANSFORMERS_CACHE is deprecated in Transformers v5+; prefer HF_HOME only
 unset TRANSFORMERS_CACHE || true
 export TMPDIR="/workspace/.tmp"
 export GIT_LFS_SKIP_SMUDGE=1
+export MAX_JOBS="${MAX_JOBS:-32}"
+export HF_HUB_ENABLE_HF_TRANSFER=1
+export HF_TRANSFER_CONCURRENCY="${HF_TRANSFER_CONCURRENCY:-16}"
+export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:---threads 8}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 # Create directories
 mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
 
@@ -113,6 +119,8 @@ GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo
 log_info "GPU detectada: ${GPU_INFO:-Not detected}"
 "$PYTHON_BIN" -m pip install --force --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 || log_error "Falha ao instalar PyTorch"
 log_success "PyTorch configurado"
+log_info "NVCC_APPEND_FLAGS=${NVCC_APPEND_FLAGS}"
+log_info "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF}"
 
 # 5. Clone/update Arrakis Start
 log_info "[5/5] Setting up Arrakis Start..."

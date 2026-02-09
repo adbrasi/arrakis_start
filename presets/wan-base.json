@@ -9,6 +9,8 @@
       "description": "Install SageAttention wheel when CUDA is available",
       "command": [
         "install",
+        "--force-reinstall",
+        "--no-cache-dir",
         "https://huggingface.co/adbrasi/comfywheel/resolve/main/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
       ],
       "verify_import": "sageattention"
