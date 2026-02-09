@@ -233,8 +233,15 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             for model in preset['models']:
                 filename = model.get('filename', '')
                 model_dir = model.get('dir', '')
+                filename = filename.strip() if isinstance(filename, str) else ''
+
+                # When filename is empty (e.g., Civitai content-disposition), we cannot
+                # pre-check existence reliably here. Let downloader resolve and decide.
+                if not filename:
+                    downloads.append(model)
+                    continue
+
                 dest_path = MODELS_DIR / model_dir / filename
-                
                 if dest_path.exists():
                     logger.info(f"✓ Already exists: {filename}")
                     state.add_model(filename, model_dir, model.get('url', ''), 0)
