@@ -152,20 +152,28 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
             return False
 
         logger.info(f"Running {description}: {' '.join(cmd)}")
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
-            check=False,
-            capture_output=True,
-            text=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
         )
+        output_lines = []
+        assert process.stdout is not None
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                output_lines.append(line)
+                logger.info(f"[pip] {line}")
+        process.wait()
+        result_code = process.returncode
 
-        if result.returncode != 0:
+        if result_code != 0:
             logger_msg = logger.warning if allow_failure else logger.error
-            logger_msg(f"Failed {description} (exit {result.returncode})")
-            if result.stdout:
-                logger_msg(result.stdout.strip())
-            if result.stderr:
-                logger_msg(result.stderr.strip())
+            logger_msg(f"Failed {description} (exit {result_code})")
+            if output_lines:
+                logger_msg(f"Last pip lines: {' | '.join(output_lines[-10:])}")
             if not allow_failure:
                 return False
             continue
@@ -246,49 +254,66 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         if 'pip_commands' in preset:
             pip_commands.extend(preset['pip_commands'])
     
+    # 1. Run preset-specific pip commands FIRST (required for e.g. SageAttention)
+    if pip_commands:
+        logger.info(f"Running {len(pip_commands)} preset pip command(s) before downloads...")
+        if not install_pip_commands(pip_commands):
+            logger.error("Installation failed during preset pip commands")
+            return False
+
     # Deduplicate and save collected flags
     if collected_flags:
         unique_flags = list(dict.fromkeys(collected_flags))  # Preserve order
         state.set_comfyui_flags(unique_flags)
         logger.info(f"Saved {len(unique_flags)} preset-specific ComfyUI flags")
     
-    # Execute downloads and node installs in parallel (4 workers for better throughput)
+    # 2. Execute downloads and node installs in parallel
     with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = []
+        download_future = None
+        nodes_future = None
         
-        # 1. Download models
+        # 2.1 Download models
         if downloads:
             logger.info(f"Downloading {len(downloads)} new models...")
             _active_downloader = DownloadManager(models_dir=MODELS_DIR)
-            futures.append(executor.submit(_active_downloader.download_all, downloads))
+            download_future = executor.submit(_active_downloader.download_all, downloads)
         else:
             logger.info("All models already installed, skipping downloads")
             
-        # 2. Install custom nodes (concurrently)
+        # 2.2 Install custom nodes (concurrently)
         if nodes:
             logger.info(f"Installing {len(nodes)} custom nodes...")
-            futures.append(executor.submit(install_custom_nodes, nodes))
-            
-        # Wait for completion
-        success = True
-        for future in futures:
-            if not future.result():
-                success = False
+            nodes_future = executor.submit(install_custom_nodes, nodes)
+        
+        download_success = True
+        nodes_success = True
+        if download_future is not None:
+            download_success = bool(download_future.result())
+        if nodes_future is not None:
+            nodes_success = bool(nodes_future.result())
     
+    downloader_failures = []
+    if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
+        downloader_failures = _active_downloader.get_failure_report()
     _active_downloader = None
     
-    if not success:
-        logger.error("Installation failed (some items failed)")
-        return False
-
-    # 3. Run preset-specific pip commands after downloads/nodes
-    if pip_commands:
-        logger.info(f"Running {len(pip_commands)} preset pip command(s)...")
-        if not install_pip_commands(pip_commands):
-            logger.error("Installation failed during preset pip commands")
-            return False
+    # Download errors are non-blocking (continue install/start); node errors remain blocking.
+    if not download_success:
+        logger.warning("Some downloads failed, continuing installation as requested.")
+        if downloader_failures:
+            logger.warning("Detailed download failures:")
+            for idx, failure in enumerate(downloader_failures, 1):
+                logger.warning(
+                    f"[{idx}] file={failure.get('filename')} dir={failure.get('dir')} "
+                    f"stage={failure.get('stage')} reason={failure.get('reason')} "
+                    f"url={failure.get('url')}"
+                )
     
-    # Mark presets as installed
+    if not nodes_success:
+        logger.error("Installation failed: one or more custom nodes failed to install")
+        return False
+    
+    # 3. Mark presets as installed
     for preset_name in preset_names:
         state.add_preset(preset_name)
     
