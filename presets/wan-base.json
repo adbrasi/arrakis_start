@@ -1,0 +1,129 @@
+{
+  "name": "wan base",
+  "description": "WAN base preset with WanVideo, NSFW LoRAs, MMAudio, and SageAttention startup flag",
+  "comfyui_flags": [
+    "--use-sage-attention"
+  ],
+  "pip_commands": [
+    {
+      "description": "Install SageAttention wheel when CUDA is available",
+      "condition": "cuda_available",
+      "command": [
+        "install",
+        "https://huggingface.co/adbrasi/comfywheel/resolve/main/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
+      ],
+      "verify_import": "sageattention",
+      "allow_failure": true
+    }
+  ],
+  "models": [
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors",
+      "dir": "loras",
+      "filename": "SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors",
+      "dir": "loras",
+      "filename": "SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_Lightx2v/Wan_2_2_I2V_A14B_HIGH_lightx2v_4step_lora_v1030_rank_64_bf16.safetensors?download=true",
+      "dir": "loras",
+      "filename": "Wan_2_2_I2V_A14B_HIGH_lightx2v_4step_lora_v1030_rank_64_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_Lightx2v/Wan_2_2_I2V_A14B_HIGH_lightx2v_MoE_distill_lora_rank_64_bf16.safetensors?download=true",
+      "dir": "loras",
+      "filename": "Wan_2_2_I2V_A14B_HIGH_lightx2v_MoE_distill_lora_rank_64_bf16.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2376136?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": "civitai_2376136.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/NSFW-22-H-e8.safetensors",
+      "dir": "loras",
+      "filename": "NSFW-22-H-e8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/NSFW-22-L-e8.safetensors",
+      "dir": "loras",
+      "filename": "NSFW-22-L-e8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/ultimate_sex_000006500_high_noise.safetensors",
+      "dir": "loras",
+      "filename": "ultimate_sex_000006500_high_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/NSFW-API/NSFW-Wan-UMT5-XXL/resolve/main/nsfw_wan_umt5-xxl_fp8_scaled.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "nsfw_wan_umt5-xxl_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/zootkitty/nsfw_wan_umt5-xxl_bf16_fixed/resolve/main/nsfw_wan_umt5-xxl_bf16_fixed.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "nsfw_wan_umt5-xxl_bf16_fixed.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2513182?type=Model&format=SafeTensor&size=pruned&fp=fp8",
+      "dir": "checkpoints",
+      "filename": "wan_base_2513182_fp8.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2513186?type=Model&format=SafeTensor&size=pruned&fp=fp8",
+      "dir": "checkpoints",
+      "filename": "wan_base_2513186_fp8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/phazei/NSFW_MMaudio/resolve/main/mmaudio_large_44k_nsfw_gold_8.5k_final_fp16.safetensors?download=true",
+      "dir": "mmaudio",
+      "filename": "mmaudio_large_44k_nsfw_gold_8.5k_final_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/MMAudio_safetensors/resolve/main/mmaudio_synchformer_fp16.safetensors",
+      "dir": "mmaudio",
+      "filename": "mmaudio_synchformer_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/MMAudio_safetensors/resolve/main/apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors",
+      "dir": "mmaudio",
+      "filename": "apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors",
+      "dir": "vae",
+      "filename": "Wan2_1_VAE_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/open-clip-xlm-roberta-large-vit-huge-14_visual_fp16.safetensors",
+      "dir": "clip_vision",
+      "filename": "open-clip-xlm-roberta-large-vit-huge-14_visual_fp16.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/adbrasi/groqrouter",
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation",
+    "https://github.com/kijai/ComfyUI-GIMM-VFI",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit",
+    "https://github.com/shiimizu/ComfyUI_smZNodes",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/WASasquatch/was-node-suite-comfyui",
+    "https://github.com/justUmen/Bjornulf_custom_nodes",
+    "https://github.com/mingsky-ai/ComfyUI-MingNodes",
+    "https://github.com/adbrasi/upavidito",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/raindrop313/ComfyUI-WanVideoStartEndFrames",
+    "https://github.com/MushroomFleet/DJZ-Nodes",
+    "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/kijai/ComfyUI-MMAudio",
+    "https://github.com/GACLove/ComfyUI-VFI"
+  ]
+}

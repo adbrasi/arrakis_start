@@ -56,6 +56,14 @@ SDXL/Illustrious checkpoints for anime generation:
 - Curated anime LoRAs
 - Your custom nodes
 
+### 🎬 wan base
+WAN video-focused preset:
+- WanVideo/NSFW checkpoints and LoRAs
+- MMAudio models
+- WAN text encoders + VAE + clip vision
+- Auto adds `--use-sage-attention`
+- Optional preset-specific pip installs (CUDA-aware)
+
 ---
 
 ## Manual Usage
@@ -89,6 +97,15 @@ Create a new JSON file in `presets/` directory:
 {
   "name": "My Custom Preset",
   "description": "Description of what this preset includes",
+  "comfyui_flags": ["--highvram"],
+  "pip_commands": [
+    {
+      "description": "Install optional CUDA package",
+      "condition": "cuda_available",
+      "command": ["install", "my-package"],
+      "allow_failure": true
+    }
+  ],
   "models": [
     {
       "url": "https://huggingface.co/repo/model.safetensors",

@@ -9,8 +9,9 @@ import sys
 import json
 import subprocess
 import logging
+import shlex
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 
@@ -76,6 +77,119 @@ def cancel_active_install():
     return False
 
 
+def _cuda_available() -> bool:
+    """Check if CUDA is available through PyTorch."""
+    try:
+        import torch  # type: ignore
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _normalize_pip_command(command: Any) -> List[str]:
+    """Normalize preset pip command into a safe argv list."""
+    if isinstance(command, str):
+        tokens = shlex.split(command)
+    elif isinstance(command, list):
+        tokens = [str(x) for x in command if str(x).strip()]
+    else:
+        raise ValueError("pip command must be a string or list")
+
+    if not tokens:
+        raise ValueError("pip command is empty")
+
+    first = tokens[0]
+    python_aliases = {sys.executable, Path(sys.executable).name, 'python', 'python3'}
+
+    if first in ('pip', 'pip3'):
+        return [sys.executable, '-m', 'pip'] + tokens[1:]
+
+    if first in python_aliases and len(tokens) >= 3 and tokens[1] == '-m' and tokens[2] == 'pip':
+        return [sys.executable, '-m', 'pip'] + tokens[3:]
+
+    return [sys.executable, '-m', 'pip'] + tokens
+
+
+def install_pip_commands(pip_commands: List[Any]) -> bool:
+    """Install preset-defined pip dependencies."""
+    if not pip_commands:
+        return True
+
+    cuda_available = _cuda_available()
+    logger.info(f"CUDA available for pip conditions: {cuda_available}")
+
+    for index, item in enumerate(pip_commands, start=1):
+        if isinstance(item, str):
+            command = item
+            condition = None
+            allow_failure = False
+            verify_import = None
+            description = f"pip command #{index}"
+        elif isinstance(item, dict):
+            command = item.get('command') or item.get('cmd')
+            condition = item.get('condition')
+            if item.get('when_cuda_available') is True:
+                condition = 'cuda_available'
+            allow_failure = bool(item.get('allow_failure', False))
+            verify_import = item.get('verify_import')
+            description = item.get('description', f"pip command #{index}")
+        else:
+            logger.error(f"Invalid pip command format at position {index}: {type(item)}")
+            return False
+
+        if not command:
+            logger.error(f"Missing command in pip command #{index}")
+            return False
+
+        if condition == 'cuda_available' and not cuda_available:
+            logger.warning(f"Skipping {description}: CUDA unavailable")
+            continue
+
+        try:
+            cmd = _normalize_pip_command(command)
+        except Exception as e:
+            logger.error(f"Failed to normalize {description}: {e}")
+            return False
+
+        logger.info(f"Running {description}: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode != 0:
+            logger_msg = logger.warning if allow_failure else logger.error
+            logger_msg(f"Failed {description} (exit {result.returncode})")
+            if result.stdout:
+                logger_msg(result.stdout.strip())
+            if result.stderr:
+                logger_msg(result.stderr.strip())
+            if not allow_failure:
+                return False
+            continue
+
+        if verify_import:
+            verify = subprocess.run(
+                [sys.executable, '-c', f'import {verify_import}'],
+                check=False,
+                capture_output=True,
+                text=True
+            )
+            if verify.returncode != 0:
+                logger_msg = logger.warning if allow_failure else logger.error
+                logger_msg(f"Package installed but import failed for '{verify_import}' in {description}")
+                if verify.stderr:
+                    logger_msg(verify.stderr.strip())
+                if not allow_failure:
+                    return False
+
+        logger.info(f"✓ Completed: {description}")
+
+    return True
+
+
 def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     """Install selected presets with smart skip-existing and parallelism"""
     from downloader import DownloadManager
@@ -93,10 +207,11 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     all_presets = load_presets()
     preset_map = {p.get('name', p['_filename']): p for p in all_presets}
     
-    # Collect all downloads, nodes, and flags
+    # Collect all downloads, nodes, flags, and preset pip commands
     downloads = []
     nodes = []
     collected_flags = []  # Preset-specific ComfyUI flags
+    pip_commands = []
     
     for preset_name in preset_names:
         if preset_name not in preset_map:
@@ -126,6 +241,10 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         if 'comfyui_flags' in preset:
             collected_flags.extend(preset['comfyui_flags'])
             logger.info(f"Preset '{preset_name}' adds flags: {preset['comfyui_flags']}")
+        
+        # Collect preset-specific pip commands
+        if 'pip_commands' in preset:
+            pip_commands.extend(preset['pip_commands'])
     
     # Deduplicate and save collected flags
     if collected_flags:
@@ -161,6 +280,13 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     if not success:
         logger.error("Installation failed (some items failed)")
         return False
+
+    # 3. Run preset-specific pip commands after downloads/nodes
+    if pip_commands:
+        logger.info(f"Running {len(pip_commands)} preset pip command(s)...")
+        if not install_pip_commands(pip_commands):
+            logger.error("Installation failed during preset pip commands")
+            return False
     
     # Mark presets as installed
     for preset_name in preset_names:
