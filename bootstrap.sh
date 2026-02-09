@@ -23,13 +23,13 @@ VENV_DIR="$COMFY_BASE/.venv"
 ARRAKIS_DIR="$COMFY_BASE/arrakis_start"
 
 export DEBIAN_FRONTEND=noninteractive
+export GIT_TERMINAL_PROMPT=0
 export HF_HOME="/workspace/.hf"
 export HUGGINGFACE_HUB_CACHE="$HF_HOME"
 # TRANSFORMERS_CACHE is deprecated in Transformers v5+; prefer HF_HOME only
 unset TRANSFORMERS_CACHE || true
 export TMPDIR="/workspace/.tmp"
 export GIT_LFS_SKIP_SMUDGE=1
-python -m pip install -q --upgrade "huggingface_hub[cli]>=0.34.0,<1.0" comfy-cli
 # Create directories
 mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
 
@@ -75,15 +75,16 @@ else
 fi
 
 source "$VENV_DIR/bin/activate"
+PYTHON_BIN="$(command -v python)"
 
-python -m pip install -q --upgrade pip wheel setuptools
+"$PYTHON_BIN" -m pip install -q --upgrade pip wheel setuptools
 
 # Install Hugging Face CLI with new hf_xet backend (replaces deprecated hf_transfer)
 # See: https://huggingface.co/docs/huggingface_hub/en/guides/cli
-python -m pip install -q --upgrade "huggingface_hub[cli]>=0.34.0,<1.0" hf_xet comfy-cli
+"$PYTHON_BIN" -m pip install -q --upgrade "huggingface_hub[cli]>=0.34.0,<1.0" hf_xet comfy-cli
 
 # Install Arrakis Start v2.0 dependencies
-python -m pip install -q --upgrade websockets psutil requests
+"$PYTHON_BIN" -m pip install -q --upgrade websockets psutil requests
 
 # Configure hf_xet for MAXIMUM download speed (100x+ faster than default)
 # HF_XET_HIGH_PERFORMANCE: saturates network/CPU for fastest downloads
@@ -105,47 +106,38 @@ else
 fi
 
 # 4. GPU-specific PyTorch configuration
-log_info "[4/5] Configuring PyTorch for GPU..."
+log_info "[4/7] Instalando PyTorch CUDA 12.8..."
 
 GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "")
 
-if [[ "$GPU_INFO" == *"5090"* ]] || [[ "$GPU_INFO" == *"5080"* ]]; then
-    log_warn "RTX 5090/5080 detected - preferring PyTorch with CUDA 13.0 (fallback to 12.8)"
-    if python -m pip install -q --pre --force-reinstall \
-        torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/nightly/cu130; then
-        log_success "PyTorch nightly cu130 installed"
-    else
-        log_warn "cu130 install failed, falling back to stable cu128"
-        python -m pip install -q --force-reinstall \
-            torch torchvision torchaudio \
-            --index-url https://download.pytorch.org/whl/cu128
-    fi
-elif [[ "$GPU_INFO" == *"4090"* ]] || [[ "$GPU_INFO" == *"4080"* ]]; then
-    log_info "RTX 4090/4080 detected - using default PyTorch"
-else
-    log_info "GPU: ${GPU_INFO:-Not detected}"
-fi
-
-log_success "PyTorch configured"
+log_info "GPU detectada: ${GPU_INFO:-Not detected}"
+"$PYTHON_BIN" -m pip install --force --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 || log_error "Falha ao instalar PyTorch"
+log_success "PyTorch configurado"
 
 # 5. Clone/update Arrakis Start
 log_info "[5/5] Setting up Arrakis Start..."
 
 if [ -d "$ARRAKIS_DIR/.git" ]; then
     log_info "Updating Arrakis Start..."
-    git -C "$ARRAKIS_DIR" pull --ff-only 2>/dev/null || true
+    if timeout 45 git -C "$ARRAKIS_DIR" pull --ff-only; then
+        log_success "Arrakis Start atualizado"
+    else
+        log_warn "Update pulado (timeout, rede ou bloqueio de git). Continuando com versão local."
+    fi
 else
     log_info "Cloning Arrakis Start..."
-    git clone --depth 1 https://github.com/adbrasi/arrakis_start.git "$ARRAKIS_DIR" 2>/dev/null || {
+    if timeout 45 git clone --depth 1 https://github.com/adbrasi/arrakis_start.git "$ARRAKIS_DIR"; then
+        log_success "Arrakis Start clonado"
+    else
         # Fallback: if repo doesn't exist yet, copy from current directory
         if [ -f "$(dirname "$0")/start.py" ]; then
             cp -r "$(dirname "$0")" "$ARRAKIS_DIR"
+            log_warn "Usando fallback local para Arrakis Start"
         else
             log_error "Could not find Arrakis Start files"
             exit 1
         fi
-    }
+    fi
 fi
 
 log_success "Arrakis Start ready"
