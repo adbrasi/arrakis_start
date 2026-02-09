@@ -128,6 +128,32 @@ class DownloadManager:
             return url
         return self._append_query_param(url, 'token', self.civitai_token)
     
+    def _extract_filename_from_content_disposition(self, content_disposition: str) -> str:
+        """Extract filename from Content-Disposition header/query value."""
+        if not content_disposition:
+            return ''
+        # RFC 5987: filename*=UTF-8''...
+        m = re.search(r"filename\\*=(?:UTF-8''|)([^;]+)", content_disposition, flags=re.IGNORECASE)
+        if m:
+            return unquote(m.group(1).strip().strip('"'))
+        # Legacy: filename="..."
+        m = re.search(r'filename="([^"]+)"', content_disposition, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        # Legacy: filename=...
+        m = re.search(r'filename=([^;]+)', content_disposition, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip().strip('"')
+        return ''
+    
+    def _extract_civitai_filename_from_url(self, url: str) -> str:
+        """Extract actual filename from civitai redirect URL query parameters."""
+        parsed = urlparse(url)
+        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        cd = params.get('response-content-disposition') or params.get('content-disposition') or ''
+        filename = self._extract_filename_from_content_disposition(cd)
+        return filename.strip()
+    
     def _resolve_civitai_download_url(self, url: str) -> Tuple[Optional[str], str]:
         """
         Resolve Civitai API URL into direct CDN URL using authenticated no-redirect request.
@@ -276,6 +302,7 @@ class DownloadManager:
     def _download_file(self, url: str, target_dir: str, filename: str = '') -> Tuple[bool, str, str]:
         """Download a single file"""
         url = self._sanitize_source_url(url)
+        is_civitai_source = 'civitai.com' in url
 
         # Create target directory
         dest_dir = self.models_dir / target_dir
@@ -293,7 +320,7 @@ class DownloadManager:
             return True, 'already_exists', 'skip'
 
         # Validate Civitai token early for clearer errors
-        if 'civitai.com' in url and not self.civitai_token:
+        if is_civitai_source and not self.civitai_token:
             reason = "CIVITAI_TOKEN is missing (required for Civitai downloads)"
             logger.error(reason)
             return False, reason, 'precheck'
@@ -311,12 +338,19 @@ class DownloadManager:
                 return True, 'ok', 'hf-hub-python'
         
         # Resolve Civitai URL with authenticated redirect handling
-        if 'civitai.com' in url:
+        if is_civitai_source:
             resolved_url, resolve_reason = self._resolve_civitai_download_url(url)
             if not resolved_url:
                 logger.error(f"Civitai URL resolution failed: {resolve_reason}")
                 return False, resolve_reason, 'civitai-resolve'
             download_url = resolved_url
+            civitai_filename = self._extract_civitai_filename_from_url(resolved_url)
+            if civitai_filename:
+                filename = civitai_filename
+                dest_path = dest_dir / filename
+                if dest_path.exists():
+                    logger.info(f"✓ Already exists: {filename}")
+                    return True, 'already_exists', 'skip'
             if resolved_url != url:
                 logger.info("Resolved Civitai download URL via authenticated redirect")
         else:
@@ -325,17 +359,30 @@ class DownloadManager:
         
         # Download with aria2c or wget
         if self.has_aria2c:
-            ok, reason = self._download_aria2c(download_url, dest_dir, filename)
+            ok, reason = self._download_aria2c(
+                download_url,
+                dest_dir,
+                filename,
+                prefer_content_disposition=is_civitai_source
+            )
             self._record_attempt(url, 'aria2c', ok, reason)
             if ok:
                 return True, 'ok', 'aria2c'
-            fallback_ok, fallback_reason = self._download_wget(download_url, dest_dir / filename)
+            fallback_ok, fallback_reason = self._download_wget(
+                download_url,
+                dest_dir / filename,
+                prefer_content_disposition=is_civitai_source
+            )
             self._record_attempt(url, 'wget-fallback', fallback_ok, fallback_reason)
             if fallback_ok:
                 return True, 'ok', 'wget-fallback'
             return False, fallback_reason or reason, 'aria2c->wget'
         else:
-            ok, reason = self._download_wget(download_url, dest_path)
+            ok, reason = self._download_wget(
+                download_url,
+                dest_path,
+                prefer_content_disposition=is_civitai_source
+            )
             self._record_attempt(url, 'wget', ok, reason)
             if ok:
                 return True, 'ok', 'wget'
@@ -457,10 +504,16 @@ class DownloadManager:
         except Exception as e:
             return False, f"hf_hub_python_exception: {e}"
     
-    def _download_aria2c(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
+    def _download_aria2c(
+        self,
+        url: str,
+        dest_dir: Path,
+        filename: str,
+        prefer_content_disposition: bool = False
+    ) -> Tuple[bool, str]:
         """Download using aria2c (parallel, resumable) with visible progress"""
-        # For Civitai, use --content-disposition to get correct filename
-        use_content_disposition = 'civitai.com' in url
+        # For Civitai-origin downloads, always honor content-disposition.
+        use_content_disposition = prefer_content_disposition or ('civitai.com' in url)
         
         cmd = [
             'aria2c',
@@ -482,7 +535,7 @@ class DownloadManager:
             cmd.extend(['--header', f'User-Agent: {HTTP_USER_AGENT}'])
         
         # Add Civitai headers to reduce auth/redirect issues
-        if 'civitai.com' in url:
+        if use_content_disposition:
             if self.civitai_token:
                 cmd.extend(['--header', f'Authorization: Bearer {self.civitai_token}'])
             cmd.extend(['--header', f'User-Agent: {HTTP_USER_AGENT}'])
@@ -545,8 +598,14 @@ class DownloadManager:
             logger.error(f"aria2c error: {e}")
             return False, str(e)
     
-    def _download_wget(self, url: str, dest_path: Path) -> Tuple[bool, str]:
+    def _download_wget(
+        self,
+        url: str,
+        dest_path: Path,
+        prefer_content_disposition: bool = False
+    ) -> Tuple[bool, str]:
         """Download using wget (fallback) with content-disposition support"""
+        use_content_disposition = prefer_content_disposition or ('civitai.com' in url)
         cmd = [
             'wget',
             '--progress=bar:force',
@@ -560,13 +619,13 @@ class DownloadManager:
         if 'huggingface.co' in url:
             cmd.extend(['--user-agent', HTTP_USER_AGENT])
         
-        if 'civitai.com' in url:
+        if use_content_disposition:
             if self.civitai_token:
                 cmd.extend(['--header', f'Authorization: Bearer {self.civitai_token}'])
             cmd.extend(['--user-agent', HTTP_USER_AGENT])
             cmd.extend(['--header', 'Referer: https://civitai.com/'])
         
-        if 'civitai.com' not in url:
+        if not use_content_disposition:
             cmd.extend(['-O', str(dest_path)])
         else:
             cmd.extend(['-P', str(dest_path.parent)])
