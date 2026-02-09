@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 COMFY_BASE = Path(os.environ.get('COMFY_BASE', '/workspace/comfy'))
 COMFY_DIR = COMFY_BASE / 'ComfyUI'
 VENV_DIR = COMFY_BASE / '.venv'
+COMFY_STARTUP_TIMEOUT = int(os.environ.get('COMFY_STARTUP_TIMEOUT', '120'))
 
 
 class ProcessManager:
@@ -111,10 +112,15 @@ class ProcessManager:
                 port=port
             )
             
-            # Wait for startup (check health)
-            logger.info("Waiting for ComfyUI to start...")
-            for i in range(30):  # 30 second timeout
+            # Wait for startup (check health and early process crash)
+            logger.info(f"Waiting for ComfyUI to start (timeout: {COMFY_STARTUP_TIMEOUT}s)...")
+            for i in range(COMFY_STARTUP_TIMEOUT):
                 time.sleep(1)
+                exit_code = self.process.poll()
+                if exit_code is not None:
+                    logger.error(f"ComfyUI process exited before startup (exit code: {exit_code})")
+                    self.state_manager.set_comfyui_status(status="error")
+                    return False
                 if self.health_check(port):
                     self.state_manager.set_comfyui_status(
                         status="running",
@@ -131,7 +137,7 @@ class ProcessManager:
                     return True
             
             # Timeout
-            logger.error("ComfyUI failed to start within 30 seconds")
+            logger.error(f"ComfyUI failed to start within {COMFY_STARTUP_TIMEOUT} seconds")
             self.state_manager.set_comfyui_status(status="error")
             return False
             

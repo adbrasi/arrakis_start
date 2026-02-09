@@ -127,8 +127,11 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
                     print("="*60 + "\n")
                     logger.info("Installation complete, starting ComfyUI with preset flags...")
-                    pm.start()  # start() will automatically merge preset flags from state
-                    logger.info("✓ ComfyUI started successfully")
+                    started = pm.start()  # start() will automatically merge preset flags from state
+                    if started:
+                        logger.info("✓ ComfyUI started successfully")
+                    else:
+                        logger.error("ComfyUI failed to start after installation")
                 else:
                     print("\n" + "="*60)
                     print("\033[1;31m❌ ERRO NA INSTALAÇÃO ❌\033[0m")

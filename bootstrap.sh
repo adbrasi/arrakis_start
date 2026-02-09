@@ -25,10 +25,11 @@ ARRAKIS_DIR="$COMFY_BASE/arrakis_start"
 export DEBIAN_FRONTEND=noninteractive
 export HF_HOME="/workspace/.hf"
 export HUGGINGFACE_HUB_CACHE="$HF_HOME"
-export TRANSFORMERS_CACHE="$HF_HOME"
+# TRANSFORMERS_CACHE is deprecated in Transformers v5+; prefer HF_HOME only
+unset TRANSFORMERS_CACHE || true
 export TMPDIR="/workspace/.tmp"
 export GIT_LFS_SKIP_SMUDGE=1
-python -m pip install -q --upgrade "huggingface_hub[cli,hf_transfer]>=0.26.0" comfy-cli
+python -m pip install -q --upgrade "huggingface_hub[cli]>=0.34.0,<1.0" comfy-cli
 # Create directories
 mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
 
@@ -79,7 +80,7 @@ python -m pip install -q --upgrade pip wheel setuptools
 
 # Install Hugging Face CLI with new hf_xet backend (replaces deprecated hf_transfer)
 # See: https://huggingface.co/docs/huggingface_hub/en/guides/cli
-python -m pip install -q --upgrade "huggingface_hub[cli]" hf_xet comfy-cli
+python -m pip install -q --upgrade "huggingface_hub[cli]>=0.34.0,<1.0" hf_xet comfy-cli
 
 # Install Arrakis Start v2.0 dependencies
 python -m pip install -q --upgrade websockets psutil requests
@@ -109,10 +110,17 @@ log_info "[4/5] Configuring PyTorch for GPU..."
 GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "")
 
 if [[ "$GPU_INFO" == *"5090"* ]] || [[ "$GPU_INFO" == *"5080"* ]]; then
-    log_warn "RTX 5090/5080 detected - installing PyTorch with CUDA 12.8"
-    python -m pip install -q --force-reinstall \
+    log_warn "RTX 5090/5080 detected - preferring PyTorch with CUDA 13.0 (fallback to 12.8)"
+    if python -m pip install -q --pre --force-reinstall \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu128
+        --index-url https://download.pytorch.org/whl/nightly/cu130; then
+        log_success "PyTorch nightly cu130 installed"
+    else
+        log_warn "cu130 install failed, falling back to stable cu128"
+        python -m pip install -q --force-reinstall \
+            torch torchvision torchaudio \
+            --index-url https://download.pytorch.org/whl/cu128
+    fi
 elif [[ "$GPU_INFO" == *"4090"* ]] || [[ "$GPU_INFO" == *"4080"* ]]; then
     log_info "RTX 4090/4080 detected - using default PyTorch"
 else
