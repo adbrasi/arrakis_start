@@ -504,8 +504,7 @@ class DownloadManager:
             repo_id,
             file_path,
             '--revision', branch,
-            '--local-dir', str(dest_dir),
-            '--local-dir-use-symlinks', 'False'
+            '--local-dir', str(dest_dir)
         ]
         if self.hf_token:
             cmd.extend(['--token', self.hf_token])
@@ -572,7 +571,6 @@ class DownloadManager:
                 filename=file_path,
                 revision=branch,
                 local_dir=str(dest_dir),
-                local_dir_use_symlinks=False,
                 token=self.hf_token or None
             )
             downloaded = Path(downloaded_path)

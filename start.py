@@ -10,8 +10,9 @@ import json
 import subprocess
 import logging
 import shlex
+import time
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 
@@ -38,6 +39,12 @@ VENV_DIR = COMFY_BASE / '.venv'
 # Ports
 WEB_PORT = int(os.environ.get('WEB_PORT', '8090'))
 COMFY_PORT = int(os.environ.get('COMFY_PORT', '8818'))
+DEFAULT_TORCH_INDEX_URL = os.environ.get('TORCH_INDEX_URL', 'https://download.pytorch.org/whl/cu128')
+SAGEATTENTION_INSTALLER_URL = os.environ.get(
+    'SAGEATTENTION_INSTALLER_URL',
+    'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
+)
+SAGEATTENTION_LAUNCH_FLAG = '--use-sage-attention'
 
 
 def load_presets() -> List[Dict]:
@@ -110,6 +117,100 @@ def _normalize_pip_command(command: Any) -> List[str]:
     return [sys.executable, '-m', 'pip'] + tokens
 
 
+def _run_streaming_command(
+    cmd: List[str],
+    description: str,
+    log_prefix: str = 'cmd',
+    env: Optional[Dict[str, str]] = None
+) -> Tuple[int, List[str]]:
+    """Run command with streamed logs and collect output lines for diagnostics."""
+    logger.info(f"Running {description}: {' '.join(cmd)}")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env=env
+    )
+    output_lines: List[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        line = line.rstrip()
+        if line:
+            output_lines.append(line)
+            logger.info(f"[{log_prefix}] {line}")
+    process.wait()
+    return process.returncode, output_lines
+
+
+def _verify_python_import(package_name: str) -> bool:
+    """Verify package import in current Python environment."""
+    verify = subprocess.run(
+        [sys.executable, '-c', f'import {package_name}'],
+        check=False,
+        capture_output=True,
+        text=True
+    )
+    if verify.returncode != 0:
+        logger.error(f"Import check failed for '{package_name}'")
+        if verify.stderr:
+            logger.error(verify.stderr.strip())
+        return False
+    return True
+
+
+def configure_runtime_stack(use_sage_attention: bool) -> bool:
+    """Configure runtime stack based on selected presets."""
+    if use_sage_attention:
+        logger.info(
+            "Preset requests SageAttention: skipping default torch installation "
+            "and running unified SageAttention installer"
+        )
+        cmd = [
+            'bash',
+            '-lc',
+            f"curl -fsSL {shlex.quote(SAGEATTENTION_INSTALLER_URL)} | bash -s -- auto"
+        ]
+        result_code, output_lines = _run_streaming_command(
+            cmd,
+            "SageAttention unified installer",
+            log_prefix='sage'
+        )
+        if result_code != 0:
+            logger.error(f"SageAttention installer failed (exit {result_code})")
+            if output_lines:
+                logger.error(f"Last installer lines: {' | '.join(output_lines[-10:])}")
+            return False
+
+        for package_name in ('torch', 'triton', 'sageattention'):
+            if not _verify_python_import(package_name):
+                return False
+
+        logger.info("✓ SageAttention runtime stack configured")
+        return True
+
+    logger.info("Using standard runtime stack: installing PyTorch CUDA 12.8")
+    cmd = [
+        sys.executable, '-m', 'pip', 'install',
+        '--force', '--upgrade',
+        'torch', 'torchvision', 'torchaudio',
+        '--index-url', DEFAULT_TORCH_INDEX_URL
+    ]
+    result_code, output_lines = _run_streaming_command(cmd, "PyTorch CUDA 12.8 install", log_prefix='pip')
+    if result_code != 0:
+        logger.error(f"Failed default PyTorch installation (exit {result_code})")
+        if output_lines:
+            logger.error(f"Last pip lines: {' | '.join(output_lines[-10:])}")
+        return False
+
+    if not _verify_python_import('torch'):
+        return False
+
+    logger.info("✓ Standard PyTorch runtime configured")
+    return True
+
+
 def install_pip_commands(pip_commands: List[Any]) -> bool:
     """Install preset-defined pip dependencies."""
     if not pip_commands:
@@ -151,23 +252,7 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
             logger.error(f"Failed to normalize {description}: {e}")
             return False
 
-        logger.info(f"Running {description}: {' '.join(cmd)}")
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-        output_lines = []
-        assert process.stdout is not None
-        for line in process.stdout:
-            line = line.rstrip()
-            if line:
-                output_lines.append(line)
-                logger.info(f"[pip] {line}")
-        process.wait()
-        result_code = process.returncode
+        result_code, output_lines = _run_streaming_command(cmd, description, log_prefix='pip')
 
         if result_code != 0:
             logger_msg = logger.warning if allow_failure else logger.error
@@ -179,17 +264,9 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
             continue
 
         if verify_import:
-            verify = subprocess.run(
-                [sys.executable, '-c', f'import {verify_import}'],
-                check=False,
-                capture_output=True,
-                text=True
-            )
-            if verify.returncode != 0:
+            if not _verify_python_import(verify_import):
                 logger_msg = logger.warning if allow_failure else logger.error
                 logger_msg(f"Package installed but import failed for '{verify_import}' in {description}")
-                if verify.stderr:
-                    logger_msg(verify.stderr.strip())
                 if not allow_failure:
                     return False
 
@@ -220,6 +297,7 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     nodes = []
     collected_flags = []  # Preset-specific ComfyUI flags
     pip_commands = []
+    use_sage_attention = False
     
     for preset_name in preset_names:
         if preset_name not in preset_map:
@@ -256,30 +334,42 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         if 'comfyui_flags' in preset:
             collected_flags.extend(preset['comfyui_flags'])
             logger.info(f"Preset '{preset_name}' adds flags: {preset['comfyui_flags']}")
+
+        # Runtime stack selector
+        if bool(preset.get('use_sage_attention', False)):
+            use_sage_attention = True
+            logger.info(f"Preset '{preset_name}' enables SageAttention runtime stack")
         
         # Collect preset-specific pip commands
         if 'pip_commands' in preset:
             pip_commands.extend(preset['pip_commands'])
-    
-    # 1. Run preset-specific pip commands FIRST (required for e.g. SageAttention)
+
+    # 1. Configure runtime stack before preset-specific pip commands.
+    if not configure_runtime_stack(use_sage_attention=use_sage_attention):
+        logger.error("Installation failed during runtime stack configuration")
+        return False
+
+    if use_sage_attention:
+        collected_flags.append(SAGEATTENTION_LAUNCH_FLAG)
+
+    # 2. Run preset-specific pip commands
     if pip_commands:
         logger.info(f"Running {len(pip_commands)} preset pip command(s) before downloads...")
         if not install_pip_commands(pip_commands):
             logger.error("Installation failed during preset pip commands")
             return False
 
-    # Deduplicate and save collected flags
-    if collected_flags:
-        unique_flags = list(dict.fromkeys(collected_flags))  # Preserve order
-        state.set_comfyui_flags(unique_flags)
-        logger.info(f"Saved {len(unique_flags)} preset-specific ComfyUI flags")
+    # Deduplicate and save collected flags (can be empty to clear stale state)
+    unique_flags = list(dict.fromkeys(collected_flags))
+    state.set_comfyui_flags(unique_flags)
+    logger.info(f"Saved {len(unique_flags)} preset-specific ComfyUI flags")
     
-    # 2. Execute downloads and node installs in parallel
+    # 3. Execute downloads and node installs in parallel
     with ThreadPoolExecutor(max_workers=4) as executor:
         download_future = None
         nodes_future = None
         
-        # 2.1 Download models
+        # 3.1 Download models
         if downloads:
             logger.info(f"Downloading {len(downloads)} new models...")
             _active_downloader = DownloadManager(models_dir=MODELS_DIR)
@@ -287,7 +377,7 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         else:
             logger.info("All models already installed, skipping downloads")
             
-        # 2.2 Install custom nodes (concurrently)
+        # 3.2 Install custom nodes (concurrently)
         if nodes:
             logger.info(f"Installing {len(nodes)} custom nodes...")
             nodes_future = executor.submit(install_custom_nodes, nodes)
@@ -331,7 +421,7 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         logger.error("Installation failed: one or more custom nodes failed to install")
         return False
     
-    # 3. Mark presets as installed
+    # 4. Mark presets as installed
     for preset_name in preset_names:
         state.add_preset(preset_name)
     
@@ -340,13 +430,13 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
 
 
 def install_custom_nodes(node_urls: List[str]) -> bool:
-    """Clone/update custom nodes with smart skip-existing"""
+    """Clone/update custom nodes with better diagnostics and retry."""
     state = get_state_manager()
     cn_dir = COMFY_DIR / 'custom_nodes'
     cn_dir.mkdir(parents=True, exist_ok=True)
     
-    # Deduplicate
-    node_urls = list(set(node_urls))
+    # Deduplicate while preserving order
+    node_urls = list(dict.fromkeys(node_urls))
     
     for url in node_urls:
         node_name = url.rstrip('/').split('/')[-1]
@@ -357,23 +447,60 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
                 logger.info(f"✓ Already installed: {node_name} (skipping)")
                 state.add_node(url)
                 continue
+
+            if dest.exists():
+                backup = cn_dir / f"{node_name}.backup-{int(time.time())}"
+                logger.warning(
+                    f"Node directory exists without git metadata: {dest}. "
+                    f"Renaming to {backup.name} and retrying clone."
+                )
+                dest.rename(backup)
             
             logger.info(f"Cloning: {node_name}")
-            subprocess.run(
-                ['git', 'clone', '--depth', '1', url, str(dest)],
-                check=True,
-                capture_output=True
-            )
+            clone_ok = False
+            for attempt in range(1, 3):
+                clone = subprocess.run(
+                    ['git', 'clone', '--depth', '1', url, str(dest)],
+                    check=False,
+                    capture_output=True,
+                    text=True
+                )
+                if clone.returncode == 0:
+                    clone_ok = True
+                    break
+
+                logger.warning(
+                    f"Clone failed for {node_name} (attempt {attempt}/2, exit {clone.returncode})"
+                )
+                if clone.stderr:
+                    logger.warning(f"[{node_name} stderr] {clone.stderr.strip()}")
+                if clone.stdout:
+                    logger.warning(f"[{node_name} stdout] {clone.stdout.strip()}")
+                if attempt == 1:
+                    time.sleep(2)
+
+            if not clone_ok:
+                logger.error(f"Failed to clone node {node_name} after retries: {url}")
+                return False
             
             # Install requirements if exists
             req_file = dest / 'requirements.txt'
             if req_file.exists():
                 logger.info(f"Installing requirements for {node_name}")
-                subprocess.run(
+                req = subprocess.run(
                     [sys.executable, '-m', 'pip', 'install', '-q', '-r', str(req_file)],
                     check=False,
-                    capture_output=True
+                    capture_output=True,
+                    text=True
                 )
+                if req.returncode != 0:
+                    logger.warning(
+                        f"Requirements install failed for {node_name} (exit {req.returncode}), continuing"
+                    )
+                    if req.stderr:
+                        logger.warning(f"[{node_name} req stderr] {req.stderr.strip()}")
+                    if req.stdout:
+                        logger.warning(f"[{node_name} req stdout] {req.stdout.strip()}")
             
             # Track as installed
             state.add_node(url)
