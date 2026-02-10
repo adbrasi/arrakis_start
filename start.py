@@ -44,7 +44,6 @@ SAGEATTENTION_INSTALLER_URL = os.environ.get(
     'SAGEATTENTION_INSTALLER_URL',
     'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
 )
-SAGEATTENTION_LAUNCH_FLAG = '--use-sage-attention'
 
 
 def load_presets() -> List[Dict]:
@@ -348,9 +347,6 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     if not configure_runtime_stack(use_sage_attention=use_sage_attention):
         logger.error("Installation failed during runtime stack configuration")
         return False
-
-    if use_sage_attention:
-        collected_flags.append(SAGEATTENTION_LAUNCH_FLAG)
 
     # 2. Run preset-specific pip commands
     if pip_commands:
