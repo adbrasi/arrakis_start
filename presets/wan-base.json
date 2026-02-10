@@ -1,21 +1,7 @@
 {
   "name": "wan base",
-  "description": "WAN base preset with WanVideo, NSFW LoRAs, MMAudio, and SageAttention startup flag",
-  "comfyui_flags": [
-    "--use-sage-attention"
-  ],
-  "pip_commands": [
-    {
-      "description": "Install SageAttention wheel when CUDA is available",
-      "command": [
-        "install",
-        "--force-reinstall",
-        "--no-cache-dir",
-        "https://huggingface.co/adbrasi/comfywheel/resolve/main/sageattention-2.2.0-cp312-cp312-linux_x86_64.whl"
-      ],
-      "verify_import": "sageattention"
-    }
-  ],
+  "description": "WAN base preset with WanVideo, NSFW LoRAs, MMAudio, and optional SageAttention stack",
+  "use_sage_attention": true,
   "models": [
     {
       "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors",

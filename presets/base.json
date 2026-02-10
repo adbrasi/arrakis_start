@@ -1,6 +1,7 @@
 {
     "name": "Base",
     "description": "Core models and nodes needed for all workflows",
+    "use_sage_attention": false,
     "models": [
         {
             "url": "https://huggingface.co/Anzhc/Anzhcs_YOLOs/resolve/main/Anzhc%20Face%20seg%201024%20v2%20y8n.pt",

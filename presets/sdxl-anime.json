@@ -1,6 +1,7 @@
 {
     "name": "SDXL Anime",
     "description": "SDXL/Illustrious checkpoints with anime LoRAs and ControlNet",
+    "use_sage_attention": false,
     "comfyui_flags": [
         "--force-fp16",
         "--highvram"

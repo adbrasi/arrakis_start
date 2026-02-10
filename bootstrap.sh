@@ -44,7 +44,7 @@ log_info " Arrakis Start - ComfyUI Deployment"
 log_info "========================================="
 
 # 1. Install system dependencies
-log_info "[1/5] Installing system dependencies..."
+log_info "[1/4] Installing system dependencies..."
 
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
@@ -71,7 +71,7 @@ rm -rf /var/lib/apt/lists/*
 log_success "System dependencies installed"
 
 # 2. Setup Python environment
-log_info "[2/5] Setting up Python environment..."
+log_info "[2/4] Setting up Python environment..."
 
 if [ ! -d "$VENV_DIR/bin" ]; then
     python3 -m venv "$VENV_DIR"
@@ -102,7 +102,7 @@ export HF_HUB_DOWNLOAD_TIMEOUT=60
 log_success "Python environment ready (hf_xet enabled for fast downloads)"
 
 # 3. Install ComfyUI
-log_info "[3/5] Installing ComfyUI..."
+log_info "[3/4] Installing ComfyUI..."
 
 if [ -f "$COMFY_DIR/main.py" ]; then
     log_warn "ComfyUI already exists, skipping installation"
@@ -111,19 +111,8 @@ else
     log_success "ComfyUI installed"
 fi
 
-# 4. GPU-specific PyTorch configuration
-log_info "[4/7] Instalando PyTorch CUDA 12.8..."
-
-GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "")
-
-log_info "GPU detectada: ${GPU_INFO:-Not detected}"
-"$PYTHON_BIN" -m pip install --force --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 || log_error "Falha ao instalar PyTorch"
-log_success "PyTorch configurado"
-log_info "NVCC_APPEND_FLAGS=${NVCC_APPEND_FLAGS}"
-log_info "PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF}"
-
-# 5. Clone/update Arrakis Start
-log_info "[5/5] Setting up Arrakis Start..."
+# 4. Clone/update Arrakis Start
+log_info "[4/4] Setting up Arrakis Start..."
 
 if [ -d "$ARRAKIS_DIR/.git" ]; then
     log_info "Updating Arrakis Start..."
@@ -149,6 +138,7 @@ else
 fi
 
 log_success "Arrakis Start ready"
+log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
 
 # Final message
 log_info "========================================="

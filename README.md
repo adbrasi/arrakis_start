@@ -19,7 +19,7 @@ curl -L https://raw.githubusercontent.com/adbrasi/arrakis_start/main/bootstrap.s
 
 This will:
 1. ✅ Install ComfyUI core (~3 min)
-2. ✅ Configure GPU-specific PyTorch (5090/4090/etc.)
+2. ✅ Prepare Python/ComfyUI base
 3. ✅ Install Cloudflared tunnel
 4. ✅ Start web selector on port **8090** (listening on `0.0.0.0`)
 
@@ -62,7 +62,8 @@ WAN video-focused preset:
 - WanVideo/NSFW checkpoints and LoRAs
 - MMAudio models
 - WAN text encoders + VAE + clip vision
-- Auto adds `--use-sage-attention`
+- Uses `"use_sage_attention": true` to run unified SageAttention installer
+- Auto adds `--use-sage-attention` only when `use_sage_attention=true`
 - Optional preset-specific pip installs (CUDA-aware)
 
 ---
@@ -98,6 +99,7 @@ Create a new JSON file in `presets/` directory:
 {
   "name": "My Custom Preset",
   "description": "Description of what this preset includes",
+  "use_sage_attention": false,
   "comfyui_flags": ["--highvram"],
   "pip_commands": [
     {
@@ -160,7 +162,7 @@ arrakis_start/
 
 - ✅ **Parallel downloads** via aria2c (2 connections per file)
 - ✅ **Smart caching** - skips existing files
-- ✅ **GPU-specific PyTorch** - auto-detects 5090/4090/etc.
+- ✅ **Preset-driven runtime stack** - standard torch or SageAttention installer
 - ✅ **Modular installation** - download only what you need
 - ✅ **Resume support** - continues interrupted downloads
 
@@ -180,4 +182,3 @@ arrakis_start/
 ### ComfyUI not starting
 - Check logs in terminal
 - Verify PyTorch is installed correctly: `python -c "import torch; print(torch.cuda.is_available())"`
-
