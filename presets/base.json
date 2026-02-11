@@ -42,6 +42,21 @@
             "url": "https://huggingface.co/Kim2091/UltraSharpV2/resolve/main/4x-UltraSharpV2_Lite.pth",
             "dir": "upscale_models",
             "filename": "4x-UltraSharpV2_Lite.pth"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/Eyeful_v2-Individual.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "Eyeful_v2-Paired.pt"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/ntd11_anime_nsfw_segm_v5-variant1.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "ntd11_anime_nsfw_segm_v5-variant1.pt"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/testedownload/resolve/main/99coins_anime_girl_face_m_seg.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "99coins_anime_girl_face_m_seg.pt"
         }
     ],
     "nodes": [
