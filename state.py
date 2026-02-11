@@ -134,11 +134,14 @@ class StateManager:
         return self.state.get("comfyui_flags", [])
     
     # ComfyUI status
-    def set_comfyui_status(self, status: str, pid: Optional[int] = None, 
-                          flags: Optional[List[str]] = None, port: int = 8818):
+    def set_comfyui_status(self, status: str, pid: Optional[int] = None,
+                          flags: Optional[List[str]] = None, port: int = 8818,
+                          clear_pid: bool = False):
         """Update ComfyUI status"""
         self.state["comfyui_status"] = status
-        if pid is not None:
+        if clear_pid:
+            self.state["comfyui_pid"] = None
+        elif pid is not None:
             self.state["comfyui_pid"] = pid
         if flags is not None:
             self.state["comfyui_flags"] = flags

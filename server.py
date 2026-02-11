@@ -109,12 +109,14 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 state = _state_manager or get_state_manager()
                 pm = ProcessManager(state)
                 
-                # STEP 1: Stop ComfyUI if running (to avoid port conflict)
-                if pm.is_running():
-                    logger.info("Stopping ComfyUI before installation...")
-                    pm.stop()
-                    import time
-                    time.sleep(5)  # Wait longer for port to be fully released
+                # STEP 1: Always ensure ComfyUI is stopped (including stale PID state)
+                logger.info("Ensuring ComfyUI is stopped before installation...")
+                if not pm.ensure_stopped(timeout=20):
+                    print("\n" + "="*60)
+                    print("\033[1;31m❌ ERRO AO PARAR COMFYUI ❌\033[0m")
+                    print("="*60 + "\n")
+                    logger.error("Failed to stop existing ComfyUI process/port before installation")
+                    return
                 
                 # STEP 2: Install presets (this also saves preset flags to state)
                 logger.info(f"Installing presets: {preset_names}")
