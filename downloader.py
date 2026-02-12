@@ -28,9 +28,11 @@ HTTP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ArrakisStart/2.0"
 # Force unbuffered output for real-time progress
 os.environ['PYTHONUNBUFFERED'] = '1'
 
-# Get venv path for huggingface-cli
+# Get venv paths for huggingface-cli
 COMFY_BASE = Path(os.environ.get('COMFY_BASE', '/workspace/comfy'))
-VENV_BIN = COMFY_BASE / '.venv' / 'bin'
+COMFY_VENV_BIN = COMFY_BASE / '.venv' / 'bin'
+ARRAKIS_DIR = Path(__file__).parent
+ARRAKIS_VENV_BIN = Path(os.environ.get('ARRAKIS_VENV_BIN', str(ARRAKIS_DIR / '.venv' / 'bin')))
 
 
 class DownloadManager:
@@ -257,11 +259,12 @@ class DownloadManager:
         """Find HuggingFace CLI executable (new `hf` or legacy `huggingface-cli`)"""
         # Try new `hf` command first (recommended)
         for cmd_name in ['hf', 'huggingface-cli']:
-            # Check venv first
-            venv_hf = VENV_BIN / cmd_name
-            if venv_hf.exists():
-                logger.info(f"Found HF CLI in venv: {cmd_name}")
-                return str(venv_hf)
+            # Prefer Arrakis venv (orchestrator), fallback to ComfyUI venv.
+            for venv_bin in (ARRAKIS_VENV_BIN, COMFY_VENV_BIN):
+                venv_hf = venv_bin / cmd_name
+                if venv_hf.exists():
+                    logger.info(f"Found HF CLI in venv: {cmd_name} ({venv_bin})")
+                    return str(venv_hf)
             
             # Check system PATH
             system_hf = shutil.which(cmd_name)

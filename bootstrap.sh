@@ -19,8 +19,12 @@ log_error() { echo -e "${RED}[✗]${NC} $1"; }
 # Configuration
 COMFY_BASE="${COMFY_BASE:-/workspace/comfy}"
 COMFY_DIR="$COMFY_BASE/ComfyUI"
-VENV_DIR="$COMFY_BASE/.venv"
 ARRAKIS_DIR="$COMFY_BASE/arrakis_start"
+COMFY_VENV_DIR="$COMFY_BASE/.venv"
+ARRAKIS_VENV_DIR="$ARRAKIS_DIR/.venv"
+COMFY_PYTHON="$COMFY_VENV_DIR/bin/python"
+COMFY_CLI="$COMFY_VENV_DIR/bin/comfy"
+ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
 
 export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
@@ -70,27 +74,17 @@ rm -rf /var/lib/apt/lists/*
 
 log_success "System dependencies installed"
 
-# 2. Setup Python environment
-log_info "[2/4] Setting up Python environment..."
+# 2. Setup ComfyUI Python environment
+log_info "[2/5] Setting up ComfyUI Python environment..."
 
-if [ ! -d "$VENV_DIR/bin" ]; then
-    python3 -m venv "$VENV_DIR"
-    log_success "Virtual environment created"
+if [ ! -d "$COMFY_VENV_DIR/bin" ]; then
+    python3 -m venv "$COMFY_VENV_DIR"
+    log_success "ComfyUI virtual environment created"
 else
-    log_info "Virtual environment already exists"
+    log_info "ComfyUI virtual environment already exists"
 fi
 
-source "$VENV_DIR/bin/activate"
-PYTHON_BIN="$(command -v python)"
-
-"$PYTHON_BIN" -m pip install -q --upgrade pip wheel setuptools
-
-# Install Hugging Face CLI with new hf_xet backend (replaces deprecated hf_transfer)
-# See: https://huggingface.co/docs/huggingface_hub/en/guides/cli
-"$PYTHON_BIN" -m pip install -q --upgrade "huggingface_hub[cli]>=0.34.0,<1.0" hf_xet comfy-cli
-
-# Install Arrakis Start v2.0 dependencies
-"$PYTHON_BIN" -m pip install -q --upgrade websockets psutil requests
+"$COMFY_PYTHON" -m pip install -q --upgrade pip wheel setuptools comfy-cli
 
 # Configure hf_xet for MAXIMUM download speed (100x+ faster than default)
 # HF_XET_HIGH_PERFORMANCE: saturates network/CPU for fastest downloads
@@ -99,20 +93,20 @@ export HF_XET_HIGH_PERFORMANCE=1
 export HF_XET_NUM_CONCURRENT_RANGE_GETS=32
 export HF_HUB_DOWNLOAD_TIMEOUT=60
 
-log_success "Python environment ready (hf_xet enabled for fast downloads)"
+log_success "ComfyUI Python environment ready"
 
 # 3. Install ComfyUI
-log_info "[3/4] Installing ComfyUI..."
+log_info "[3/5] Installing ComfyUI..."
 
 if [ -f "$COMFY_DIR/main.py" ]; then
     log_warn "ComfyUI already exists, skipping installation"
 else
-    comfy --skip-prompt --workspace "$COMFY_DIR" install --fast-deps --nvidia
+    "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --fast-deps --nvidia
     log_success "ComfyUI installed"
 fi
 
 # 4. Clone/update Arrakis Start
-log_info "[4/4] Setting up Arrakis Start..."
+log_info "[4/5] Setting up Arrakis Start..."
 
 if [ -d "$ARRAKIS_DIR/.git" ]; then
     log_info "Updating Arrakis Start..."
@@ -138,6 +132,23 @@ else
 fi
 
 log_success "Arrakis Start ready"
+
+# 5. Setup Arrakis orchestrator Python environment
+log_info "[5/5] Setting up Arrakis orchestrator environment..."
+
+if [ ! -d "$ARRAKIS_VENV_DIR/bin" ]; then
+    python3 -m venv "$ARRAKIS_VENV_DIR"
+    log_success "Arrakis virtual environment created"
+else
+    log_info "Arrakis virtual environment already exists"
+fi
+
+"$ARRAKIS_PYTHON" -m pip install -q --upgrade pip wheel setuptools
+# HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps)
+"$ARRAKIS_PYTHON" -m pip install -q --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
+"$ARRAKIS_PYTHON" -m pip install -q --upgrade -r "$ARRAKIS_DIR/requirements.txt"
+log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
+
 log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
 
 # Final message
@@ -149,4 +160,6 @@ log_info "========================================="
 
 # Start Arrakis Start
 cd "$ARRAKIS_DIR"
-exec python start.py --web-only
+export COMFY_PYTHON="$COMFY_PYTHON"
+export COMFY_CLI="$COMFY_CLI"
+exec "$ARRAKIS_PYTHON" start.py --web-only

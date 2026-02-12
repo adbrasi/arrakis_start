@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 COMFY_BASE = Path(os.environ.get('COMFY_BASE', '/workspace/comfy'))
 COMFY_DIR = COMFY_BASE / 'ComfyUI'
 VENV_DIR = COMFY_BASE / '.venv'
+COMFY_CLI = os.environ.get('COMFY_CLI', str(VENV_DIR / 'bin' / 'comfy'))
 COMFY_STARTUP_TIMEOUT = int(os.environ.get('COMFY_STARTUP_TIMEOUT', '120'))
 
 
@@ -166,7 +167,7 @@ class ProcessManager:
         try:
             # Build command
             cmd = [
-                'comfy',
+                COMFY_CLI,
                 '--workspace', str(COMFY_DIR),
                 'launch',
                 '--'

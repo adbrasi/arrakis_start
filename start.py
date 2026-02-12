@@ -35,6 +35,8 @@ COMFY_DIR = COMFY_BASE / 'ComfyUI'
 MODELS_DIR = COMFY_DIR / 'models'
 PRESETS_DIR = SCRIPT_DIR / 'presets'
 VENV_DIR = COMFY_BASE / '.venv'
+COMFY_PYTHON = Path(os.environ.get('COMFY_PYTHON', str(VENV_DIR / 'bin' / 'python')))
+COMFY_CLI = os.environ.get('COMFY_CLI', str(VENV_DIR / 'bin' / 'comfy'))
 
 # Ports
 WEB_PORT = int(os.environ.get('WEB_PORT', '8090'))
@@ -44,6 +46,16 @@ SAGEATTENTION_INSTALLER_URL = os.environ.get(
     'SAGEATTENTION_INSTALLER_URL',
     'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
 )
+
+
+def _comfy_python() -> str:
+    """Return ComfyUI runtime python executable."""
+    if COMFY_PYTHON.exists():
+        return str(COMFY_PYTHON)
+    logger.warning(
+        f"ComfyUI python not found at {COMFY_PYTHON}; falling back to current interpreter"
+    )
+    return sys.executable
 
 
 def load_presets() -> List[Dict]:
@@ -84,16 +96,23 @@ def cancel_active_install():
 
 
 def _cuda_available() -> bool:
-    """Check if CUDA is available through PyTorch."""
+    """Check CUDA availability using ComfyUI runtime python."""
+    py = _comfy_python()
     try:
-        import torch  # type: ignore
-        return bool(torch.cuda.is_available())
+        probe = subprocess.run(
+            [py, '-c', 'import torch; print(int(torch.cuda.is_available()))'],
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        return probe.returncode == 0 and probe.stdout.strip() == '1'
     except Exception:
         return False
 
 
 def _normalize_pip_command(command: Any) -> List[str]:
     """Normalize preset pip command into a safe argv list."""
+    target_python = _comfy_python()
     if isinstance(command, str):
         tokens = shlex.split(command)
     elif isinstance(command, list):
@@ -105,15 +124,22 @@ def _normalize_pip_command(command: Any) -> List[str]:
         raise ValueError("pip command is empty")
 
     first = tokens[0]
-    python_aliases = {sys.executable, Path(sys.executable).name, 'python', 'python3'}
+    python_aliases = {
+        sys.executable,
+        Path(sys.executable).name,
+        target_python,
+        Path(target_python).name,
+        'python',
+        'python3'
+    }
 
     if first in ('pip', 'pip3'):
-        return [sys.executable, '-m', 'pip'] + tokens[1:]
+        return [target_python, '-m', 'pip'] + tokens[1:]
 
     if first in python_aliases and len(tokens) >= 3 and tokens[1] == '-m' and tokens[2] == 'pip':
-        return [sys.executable, '-m', 'pip'] + tokens[3:]
+        return [target_python, '-m', 'pip'] + tokens[3:]
 
-    return [sys.executable, '-m', 'pip'] + tokens
+    return [target_python, '-m', 'pip'] + tokens
 
 
 def _run_streaming_command(
@@ -143,10 +169,11 @@ def _run_streaming_command(
     return process.returncode, output_lines
 
 
-def _verify_python_import(package_name: str) -> bool:
-    """Verify package import in current Python environment."""
+def _verify_python_import(package_name: str, python_bin: Optional[str] = None) -> bool:
+    """Verify package import in selected Python environment."""
+    target_python = python_bin or _comfy_python()
     verify = subprocess.run(
-        [sys.executable, '-c', f'import {package_name}'],
+        [target_python, '-c', f'import {package_name}'],
         check=False,
         capture_output=True,
         text=True
@@ -169,6 +196,7 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
             logger.info("SageAttention runtime already active, skipping reconfiguration")
             return True
 
+        comfy_activate = VENV_DIR / 'bin' / 'activate'
         logger.info(
             "Preset requests SageAttention: keeping normal ComfyUI install and "
             "running unified SageAttention installer"
@@ -176,7 +204,10 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
         cmd = [
             'bash',
             '-lc',
-            f"curl -fsSL {shlex.quote(SAGEATTENTION_INSTALLER_URL)} | bash -s -- auto"
+            (
+                f"source {shlex.quote(str(comfy_activate))} && "
+                f"curl -fsSL {shlex.quote(SAGEATTENTION_INSTALLER_URL)} | bash -s -- auto"
+            )
         ]
         result_code, output_lines = _run_streaming_command(
             cmd,
@@ -189,8 +220,9 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
                 logger.error(f"Last installer lines: {' | '.join(output_lines[-10:])}")
             return False
 
+        comfy_python = _comfy_python()
         for package_name in ('torch', 'triton', 'sageattention'):
-            if not _verify_python_import(package_name):
+            if not _verify_python_import(package_name, python_bin=comfy_python):
                 return False
 
         state.set_runtime_stack('sageattention')
@@ -483,7 +515,7 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
             if req_file.exists():
                 logger.info(f"Installing requirements for {node_name}")
                 req = subprocess.run(
-                    [sys.executable, '-m', 'pip', 'install', '-q', '-r', str(req_file)],
+                    [_comfy_python(), '-m', 'pip', 'install', '-q', '-r', str(req_file)],
                     check=False,
                     capture_output=True,
                     text=True
@@ -525,7 +557,7 @@ def start_comfyui():
     activate_script = VENV_DIR / 'bin' / 'activate'
     
     cmd = [
-        'comfy',
+        COMFY_CLI,
         '--workspace', str(COMFY_DIR),
         'launch',
         '--',

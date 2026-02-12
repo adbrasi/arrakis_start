@@ -1,11 +1,6 @@
 # Requirements for Arrakis Start v2.0
 # Install with: pip install -r requirements.txt
 
-# Core dependencies
-# Keep <1.0 for compatibility with current transformers version bundled by ComfyUI
-huggingface_hub[cli]>=0.34.0,<1.0
-hf_xet>=1.1.8
-
 # WebSocket server for real-time updates
 websockets>=12.0
 
