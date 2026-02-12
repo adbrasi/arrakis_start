@@ -61,7 +61,8 @@ class ProcessManager:
             return (
                 'comfyui' in cmdline or
                 'comfy launch' in cmdline or
-                str(COMFY_DIR).lower() in cmdline
+                str(COMFY_DIR).lower() in cmdline or
+                ('main.py' in cmdline and '--port' in cmdline)
             )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return False
@@ -88,6 +89,41 @@ class ProcessManager:
         except Exception as e:
             logger.error(f"Failed to terminate PID {pid}: {e}")
             return False
+
+    def _try_comfy_stop(self, timeout: int = 12) -> bool:
+        """Try stopping ComfyUI through comfy-cli before PID-level fallback."""
+        commands = [
+            [COMFY_CLI, '--workspace', str(COMFY_DIR), 'stop'],
+            [COMFY_CLI, 'stop'],
+        ]
+        for cmd in commands:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(COMFY_DIR),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    logger.info(f"comfy stop succeeded: {' '.join(cmd)}")
+                    return True
+                stderr = (result.stderr or "").strip()
+                stdout = (result.stdout or "").strip()
+                detail = stderr or stdout
+                if detail:
+                    logger.info(
+                        f"comfy stop returned {result.returncode}: {detail.splitlines()[-1]}"
+                    )
+            except FileNotFoundError:
+                logger.warning(f"comfy binary not found: {COMFY_CLI}")
+                return False
+            except subprocess.TimeoutExpired:
+                logger.warning(f"comfy stop timed out: {' '.join(cmd)}")
+            except Exception as e:
+                logger.warning(f"comfy stop failed ({' '.join(cmd)}): {e}")
+        return False
     
     def is_running(self) -> bool:
         """Check if ComfyUI is running"""
@@ -246,6 +282,11 @@ class ProcessManager:
         stopped_any = False
         ok = True
 
+        logger.info("Trying comfy-cli stop before PID fallback...")
+        if self._try_comfy_stop():
+            stopped_any = True
+            time.sleep(1)
+
         if self._pid_is_alive(tracked_pid):
             logger.info(f"Stopping tracked ComfyUI PID: {tracked_pid}")
             ok = self._terminate_pid(tracked_pid, timeout=timeout) and ok
@@ -269,12 +310,27 @@ class ProcessManager:
 
         logger.info(f"Waiting for port {port} to be released...")
         for _ in range(timeout):
-            if not self._is_port_in_use(port):
+            owner_pid = self._find_port_owner_pid(port)
+            if owner_pid is None:
                 logger.info(f"✓ Port {port} released")
                 break
+
+            if self._is_comfy_process(owner_pid):
+                logger.warning(
+                    f"Port {port} still owned by ComfyUI-like PID {owner_pid}; forcing stop."
+                )
+                ok = self._terminate_pid(owner_pid, timeout=5) and ok
+            else:
+                logger.warning(
+                    f"Port {port} still owned by non-Comfy PID {owner_pid}; waiting."
+                )
             time.sleep(1)
         else:
-            logger.error(f"Port {port} is still in use after stop attempts")
+            owner_pid = self._find_port_owner_pid(port)
+            logger.error(
+                f"Port {port} is still in use after stop attempts "
+                f"(owner PID: {owner_pid})"
+            )
             ok = False
 
         if stopped_any:
@@ -299,14 +355,8 @@ class ProcessManager:
         return self.ensure_stopped(port=port, timeout=timeout)
     
     def _is_port_in_use(self, port: int) -> bool:
-        """Check if a port is in use"""
-        import socket
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(('0.0.0.0', port))
-                return False  # Port is free
-            except OSError:
-                return True  # Port is in use
+        """Check if a listening process owns this port."""
+        return self._find_port_owner_pid(port) is not None
     
     def restart(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:
         """Restart ComfyUI with optional new flags"""
