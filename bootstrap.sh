@@ -105,6 +105,16 @@ else
     log_success "ComfyUI installed"
 fi
 
+# Ensure ComfyUI Python dependencies are present even if ComfyUI folder already existed.
+# This is required when /workspace/comfy/.venv is recreated from scratch.
+if [ -f "$COMFY_DIR/requirements.txt" ]; then
+    log_info "Syncing ComfyUI core requirements..."
+    "$COMFY_PYTHON" -m pip install -q --upgrade -r "$COMFY_DIR/requirements.txt"
+    log_success "ComfyUI core requirements synced"
+else
+    log_warn "ComfyUI requirements.txt not found, skipping dependency sync"
+fi
+
 # 4. Clone/update Arrakis Start
 log_info "[4/5] Setting up Arrakis Start..."
 
