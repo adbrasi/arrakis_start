@@ -160,11 +160,18 @@ def _verify_python_import(package_name: str) -> bool:
 
 
 def configure_runtime_stack(use_sage_attention: bool) -> bool:
-    """Configure runtime stack based on selected presets."""
+    """Configure runtime stack only when SageAttention is explicitly requested."""
+    state = get_state_manager()
+    current_stack = state.get_runtime_stack()
+
     if use_sage_attention:
+        if current_stack == 'sageattention':
+            logger.info("SageAttention runtime already active, skipping reconfiguration")
+            return True
+
         logger.info(
-            "Preset requests SageAttention: skipping default torch installation "
-            "and running unified SageAttention installer"
+            "Preset requests SageAttention: keeping normal ComfyUI install and "
+            "running unified SageAttention installer"
         )
         cmd = [
             'bash',
@@ -186,27 +193,19 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
             if not _verify_python_import(package_name):
                 return False
 
+        state.set_runtime_stack('sageattention')
         logger.info("✓ SageAttention runtime stack configured")
         return True
 
-    logger.info("Using standard runtime stack: installing PyTorch CUDA 12.8")
-    cmd = [
-        sys.executable, '-m', 'pip', 'install',
-        '--force', '--upgrade',
-        'torch', 'torchvision', 'torchaudio',
-        '--index-url', DEFAULT_TORCH_INDEX_URL
-    ]
-    result_code, output_lines = _run_streaming_command(cmd, "PyTorch CUDA 12.8 install", log_prefix='pip')
-    if result_code != 0:
-        logger.error(f"Failed default PyTorch installation (exit {result_code})")
-        if output_lines:
-            logger.error(f"Last pip lines: {' | '.join(output_lines[-10:])}")
-        return False
-
-    if not _verify_python_import('torch'):
-        return False
-
-    logger.info("✓ Standard PyTorch runtime configured")
+    # Important: keep normal ComfyUI runtime untouched for non-Sage presets.
+    if current_stack == 'sageattention':
+        logger.info(
+            "Preset without SageAttention selected. Keeping current runtime stack unchanged."
+        )
+    else:
+        if current_stack == 'unknown':
+            state.set_runtime_stack('standard')
+        logger.info("Preset without SageAttention selected. No runtime stack changes applied.")
     return True
 
 

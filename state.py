@@ -44,6 +44,7 @@ class StateManager:
             "comfyui_pid": None,
             "comfyui_flags": [],
             "comfyui_port": 8818,
+            "runtime_stack": "unknown",
             "last_install": None,
             "version": "2.0"
         }
@@ -132,6 +133,16 @@ class StateManager:
     def get_comfyui_flags(self) -> List[str]:
         """Get preset-specific ComfyUI flags"""
         return self.state.get("comfyui_flags", [])
+
+    # Runtime stack tracking
+    def set_runtime_stack(self, stack: str):
+        """Persist current runtime stack marker."""
+        self.state["runtime_stack"] = stack
+        self._save_state()
+
+    def get_runtime_stack(self) -> str:
+        """Get current runtime stack marker."""
+        return self.state.get("runtime_stack", "unknown")
     
     # ComfyUI status
     def set_comfyui_status(self, status: str, pid: Optional[int] = None,
@@ -173,6 +184,7 @@ class StateManager:
             "comfyui_pid": None,
             "comfyui_flags": [],
             "comfyui_port": 8818,
+            "runtime_stack": "unknown",
             "last_install": None,
             "version": "2.0"
         }
