@@ -1,0 +1,81 @@
+{
+    "name": "illustrious-sdxl-anime",
+    "description": "SDXL/Illustrious checkpoints with anime LoRAs and ControlNet",
+    "use_sage_attention": false,
+    "models": [
+        {
+            "url": "https://civitai.com/api/download/models/2320393?type=Model&format=SafeTensor&size=pruned&fp=fp16",
+            "dir": "checkpoints",
+            "filename": ""
+        },
+        {
+            "url": "https://huggingface.co/ChenkinNoob/ChenkinNoob-XL-V0.2/resolve/main/ChenkinNoob-XL-V0.2.safetensors",
+            "dir": "checkpoints",
+            "filename": "ChenkinNoob-XL-V0.2.safetensors"
+        },
+        {
+            "url": "https://civitai.com/api/download/models/1828803?type=Model&format=SafeTensor&size=full&fp=fp16",
+            "dir": "checkpoints",
+            "filename": ""
+        },
+        {
+            "url": "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors",
+            "dir": "controlnet",
+            "filename": "controlnet_union_promax.safetensors"
+        },
+        {
+            "url": "https://civitai.com/api/download/models/1818185?type=Model&format=SafeTensor",
+            "dir": "loras",
+            "filename": ""
+        },
+        {
+            "url": "https://civitai.com/api/download/models/2295041?type=Model&format=SafeTensor",
+            "dir": "loras",
+            "filename": ""
+        },
+        {
+            "url": "https://civitai.com/api/download/models/1245271?type=Model&format=SafeTensor",
+            "dir": "loras",
+            "filename": ""
+        },
+        {
+            "url": "https://civitai.com/api/download/models/2310692?type=Model&format=SafeTensor",
+            "dir": "loras",
+            "filename": ""
+        },
+        {
+            "url": "https://civitai.com/api/download/models/1164079?type=Model&format=SafeTensor",
+            "dir": "loras",
+            "filename": ""
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/Eyeful_v2-Individual.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "Eyeful_v2-Paired.pt"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/ntd11_anime_nsfw_segm_v5-variant1.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "ntd11_anime_nsfw_segm_v5-variant1.pt"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/testedownload/resolve/main/99coins_anime_girl_face_m_seg.pt",
+            "dir": "ultralytics/bbox",
+            "filename": "99coins_anime_girl_face_m_seg.pt"
+        }
+    ],
+    "nodes": [
+        "https://github.com/adbrasi/huggpackreator",
+        "https://github.com/adbrasi/packreator_processor",
+        "https://github.com/Cezarsaint/Packreator_managerMEita",
+        "https://github.com/adbrasi/cezarsave34",
+        "https://github.com/adbrasi/pageonetor",
+        "https://github.com/QuietNoise/comfyui_queue_manager",
+        "https://github.com/pythongosssss/ComfyUI-WD14-Tagger",
+        "https://github.com/ssitu/ComfyUI_UltimateSDUpscale",
+        "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes",
+        "https://github.com/sipherxyz/comfyui-art-venture",
+        "https://github.com/chflame163/ComfyUI_LayerStyle",
+        "https://github.com/regiellis/ComfyUI-EasyIllustrious"
+    ]
+}
