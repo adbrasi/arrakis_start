@@ -115,6 +115,13 @@ else
     log_warn "ComfyUI requirements.txt not found, skipping dependency sync"
 fi
 
+# Force PyTorch nightly cu128 in ComfyUI runtime (Blackwell/RTX 50xx compatibility)
+log_info "Installing PyTorch nightly cu128 in ComfyUI runtime..."
+"$COMFY_PYTHON" -m pip install --force-reinstall --pre \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
+log_success "PyTorch nightly cu128 installed"
+
 # 4. Clone/update Arrakis Start
 log_info "[4/5] Setting up Arrakis Start..."
 
