@@ -46,6 +46,8 @@ SAGEATTENTION_INSTALLER_URL = os.environ.get(
     'SAGEATTENTION_INSTALLER_URL',
     'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
 )
+SAGEATTENTION_INSTALL_ATTEMPTS = int(os.environ.get('SAGEATTENTION_INSTALL_ATTEMPTS', '3'))
+SAGEATTENTION_RETRY_DELAY_SECONDS = int(os.environ.get('SAGEATTENTION_RETRY_DELAY_SECONDS', '8'))
 
 
 def _comfy_python() -> str:
@@ -61,11 +63,11 @@ def _comfy_python() -> str:
 def load_presets() -> List[Dict]:
     """Load all preset JSON files from presets/ directory"""
     presets = []
-    
+
     if not PRESETS_DIR.exists():
         logger.warning(f"Presets directory not found: {PRESETS_DIR}")
         return presets
-    
+
     for preset_file in PRESETS_DIR.glob('*.json'):
         try:
             with open(preset_file, 'r', encoding='utf-8') as f:
@@ -75,7 +77,7 @@ def load_presets() -> List[Dict]:
                 logger.info(f"Loaded preset: {preset.get('name', preset_file.name)}")
         except Exception as e:
             logger.error(f"Failed to load preset {preset_file}: {e}")
-    
+
     return presets
 
 # Global tracker for cancellation
@@ -186,6 +188,58 @@ def _verify_python_import(package_name: str, python_bin: Optional[str] = None) -
     return True
 
 
+def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]:
+    """
+    Run SageAttention installer with retry/backoff.
+    Uses pipefail so download failures are not masked by the shell pipe.
+    """
+    attempts = max(SAGEATTENTION_INSTALL_ATTEMPTS, 1)
+    retry_delay = max(SAGEATTENTION_RETRY_DELAY_SECONDS, 1)
+    last_output: List[str] = []
+
+    curl_shell = (
+        f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
+        f"curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "
+        f"--connect-timeout 30 --max-time 300 {shlex.quote(SAGEATTENTION_INSTALLER_URL)} "
+        f"| bash -s -- auto"
+    )
+    wget_shell = (
+        f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
+        f"wget -qO- --timeout=30 --tries=5 {shlex.quote(SAGEATTENTION_INSTALLER_URL)} "
+        f"| bash -s -- auto"
+    )
+
+    for attempt in range(1, attempts + 1):
+        curl_cmd = ['bash', '-lc', curl_shell]
+        result_code, output_lines = _run_streaming_command(
+            curl_cmd,
+            f"SageAttention unified installer (curl attempt {attempt}/{attempts})",
+            log_prefix='sage'
+        )
+        last_output = output_lines
+        if result_code == 0:
+            return True, output_lines
+
+        logger.warning(f"SageAttention installer via curl failed (exit {result_code})")
+
+        wget_cmd = ['bash', '-lc', wget_shell]
+        result_code, output_lines = _run_streaming_command(
+            wget_cmd,
+            f"SageAttention unified installer (wget fallback {attempt}/{attempts})",
+            log_prefix='sage'
+        )
+        last_output = output_lines
+        if result_code == 0:
+            return True, output_lines
+
+        logger.warning(f"SageAttention installer via wget failed (exit {result_code})")
+        if attempt < attempts:
+            logger.info(f"Retrying SageAttention installer in {retry_delay}s...")
+            time.sleep(retry_delay)
+
+    return False, last_output
+
+
 def configure_runtime_stack(use_sage_attention: bool) -> bool:
     """Configure runtime stack only when SageAttention is explicitly requested."""
     state = get_state_manager()
@@ -201,21 +255,9 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
             "Preset requests SageAttention: keeping normal ComfyUI install and "
             "running unified SageAttention installer"
         )
-        cmd = [
-            'bash',
-            '-lc',
-            (
-                f"source {shlex.quote(str(comfy_activate))} && "
-                f"curl -fsSL {shlex.quote(SAGEATTENTION_INSTALLER_URL)} | bash -s -- auto"
-            )
-        ]
-        result_code, output_lines = _run_streaming_command(
-            cmd,
-            "SageAttention unified installer",
-            log_prefix='sage'
-        )
-        if result_code != 0:
-            logger.error(f"SageAttention installer failed (exit {result_code})")
+        ok, output_lines = _run_sageattention_installer(comfy_activate)
+        if not ok:
+            logger.error("SageAttention installer failed after retries")
             if output_lines:
                 logger.error(f"Last installer lines: {' | '.join(output_lines[-10:])}")
             return False
@@ -310,32 +352,32 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     from downloader import DownloadManager
     state = get_state_manager()
     global _active_downloader
-    
+
     # Auto-include base preset unless explicitly disabled
     if include_base and 'Base' not in preset_names:
         preset_names = ['Base'] + preset_names
         logger.info("Auto-including 'Base' preset")
-    
+
     logger.info(f"Installing presets: {', '.join(preset_names)}")
-    
+
     # Load all presets
     all_presets = load_presets()
     preset_map = {p.get('name', p['_filename']): p for p in all_presets}
-    
+
     # Collect all downloads, nodes, flags, and preset pip commands
     downloads = []
     nodes = []
     collected_flags = []  # Preset-specific ComfyUI flags
     pip_commands = []
     use_sage_attention = False
-    
+
     for preset_name in preset_names:
         if preset_name not in preset_map:
             logger.error(f"Preset not found: {preset_name}")
             continue
-        
+
         preset = preset_map[preset_name]
-        
+
         # Filter out already-installed models
         if 'models' in preset:
             for model in preset['models']:
@@ -355,11 +397,11 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
                     state.add_model(filename, model_dir, model.get('url', ''), 0)
                 else:
                     downloads.append(model)
-        
+
         # Add custom nodes
         if 'nodes' in preset:
             nodes.extend(preset['nodes'])
-        
+
         # Collect preset-specific ComfyUI flags
         if 'comfyui_flags' in preset:
             collected_flags.extend(preset['comfyui_flags'])
@@ -369,7 +411,7 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         if bool(preset.get('use_sage_attention', False)):
             use_sage_attention = True
             logger.info(f"Preset '{preset_name}' enables SageAttention runtime stack")
-        
+
         # Collect preset-specific pip commands
         if 'pip_commands' in preset:
             pip_commands.extend(preset['pip_commands'])
@@ -390,12 +432,12 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     unique_flags = list(dict.fromkeys(collected_flags))
     state.set_comfyui_flags(unique_flags)
     logger.info(f"Saved {len(unique_flags)} preset-specific ComfyUI flags")
-    
+
     # 3. Execute downloads and node installs in parallel
     with ThreadPoolExecutor(max_workers=4) as executor:
         download_future = None
         nodes_future = None
-        
+
         # 3.1 Download models
         if downloads:
             logger.info(f"Downloading {len(downloads)} new models...")
@@ -403,24 +445,24 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             download_future = executor.submit(_active_downloader.download_all, downloads)
         else:
             logger.info("All models already installed, skipping downloads")
-            
+
         # 3.2 Install custom nodes (concurrently)
         if nodes:
             logger.info(f"Installing {len(nodes)} custom nodes...")
             nodes_future = executor.submit(install_custom_nodes, nodes)
-        
+
         download_success = True
         nodes_success = True
         if download_future is not None:
             download_success = bool(download_future.result())
         if nodes_future is not None:
             nodes_success = bool(nodes_future.result())
-    
+
     downloader_failures = []
     if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
         downloader_failures = _active_downloader.get_failure_report()
     _active_downloader = None
-    
+
     # Download errors are non-blocking (continue install/start); node errors remain blocking.
     if not download_success:
         if downloader_failures:
@@ -431,7 +473,7 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
                     f"stage={failure.get('stage')} reason={failure.get('reason')} "
                     f"url={failure.get('url')}"
                 )
-            
+
             # Configuration/credential errors are fatal (don't pretend install succeeded).
             fatal_download_error = any(
                 str(f.get('stage', '')).lower() == 'precheck' or
@@ -441,17 +483,17 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             if fatal_download_error:
                 logger.error("Installation failed due to missing/invalid download configuration (precheck error)")
                 return False
-        
+
         logger.warning("Some downloads failed, continuing installation as requested.")
-    
+
     if not nodes_success:
         logger.error("Installation failed: one or more custom nodes failed to install")
         return False
-    
+
     # 4. Mark presets as installed
     for preset_name in preset_names:
         state.add_preset(preset_name)
-    
+
     logger.info("All presets installed successfully!")
     return True
 
@@ -461,14 +503,14 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
     state = get_state_manager()
     cn_dir = COMFY_DIR / 'custom_nodes'
     cn_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Deduplicate while preserving order
     node_urls = list(dict.fromkeys(node_urls))
-    
+
     for url in node_urls:
         node_name = url.rstrip('/').split('/')[-1]
         dest = cn_dir / node_name
-        
+
         try:
             if (dest / '.git').exists():
                 logger.info(f"✓ Already installed: {node_name} (skipping)")
@@ -482,7 +524,7 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
                     f"Renaming to {backup.name} and retrying clone."
                 )
                 dest.rename(backup)
-            
+
             logger.info(f"Cloning: {node_name}")
             clone_ok = False
             for attempt in range(1, 3):
@@ -509,7 +551,7 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
             if not clone_ok:
                 logger.error(f"Failed to clone node {node_name} after retries: {url}")
                 return False
-            
+
             # Install requirements if exists
             req_file = dest / 'requirements.txt'
             if req_file.exists():
@@ -528,34 +570,34 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
                         logger.warning(f"[{node_name} req stderr] {req.stderr.strip()}")
                     if req.stdout:
                         logger.warning(f"[{node_name} req stdout] {req.stdout.strip()}")
-            
+
             # Track as installed
             state.add_node(url)
-        
+
         except Exception as e:
             logger.error(f"Failed to install {node_name}: {e}")
             return False
-    
+
     return True
 
 
 def start_web_server():
     """Start the preset selector web server"""
     from server import run_server
-    
+
     logger.info(f"Starting web selector on port {WEB_PORT}")
     logger.info(f"Access via VastAI/Runpod port forwarding")
-    
+
     run_server(port=WEB_PORT, presets_callback=load_presets)
 
 
 def start_comfyui():
     """Start ComfyUI server"""
     logger.info(f"Starting ComfyUI on port {COMFY_PORT}")
-    
+
     # Activate venv and run comfy
     activate_script = VENV_DIR / 'bin' / 'activate'
-    
+
     cmd = [
         COMFY_CLI,
         '--workspace', str(COMFY_DIR),
@@ -566,7 +608,7 @@ def start_comfyui():
         '--preview-method', 'latent2rgb',
         '--front-end-version', 'Comfy-Org/ComfyUI_frontend@latest'
     ]
-    
+
     # Run in subprocess
     subprocess.Popen(cmd, cwd=str(COMFY_DIR))
     logger.info(f"ComfyUI started at http://0.0.0.0:{COMFY_PORT}")
@@ -578,7 +620,7 @@ def start_cloudflared():
     # Users should configure port forwarding in VastAI/Runpod instead
     logger.info("Cloudflared auto-start is disabled (configure VastAI/Runpod port forwarding)")
     return
-    
+
     # Uncomment below to enable Cloudflared
     # logger.info("Starting Cloudflared tunnel...")
     # cmd = [
@@ -622,33 +664,33 @@ def main():
         action='store_true',
         help='Enable Cloudflared tunnel (disabled by default)'
     )
-    
+
     args = parser.parse_args()
-    
+
     # Install base-only if specified
     if args.base_only:
         success = install_presets(['Base'], include_base=False)
         if not success:
             logger.error("Installation failed")
             sys.exit(1)
-        
+
         if args.start_comfy:
             start_comfyui()
             if args.enable_cloudflared:
                 start_cloudflared()
-    
+
     # Install presets if specified
     elif args.presets:
         success = install_presets(args.presets, include_base=not args.no_base)
         if not success:
             logger.error("Installation failed")
             sys.exit(1)
-        
+
         if args.start_comfy:
             start_comfyui()
             if args.enable_cloudflared:
                 start_cloudflared()
-    
+
     # Start web server
     elif args.web_only or not args.presets:
         start_web_server()

@@ -52,6 +52,16 @@
             "url": "https://huggingface.co/lllyasviel/fooocus_inpaint/resolve/main/fooocus_inpaint_head.pth?download=true",
             "dir": "inpaint",
             "filename": "fooocus_inpaint_head.pth"
+        },
+        {
+            "url": "https://huggingface.co/adbrasi/model/resolve/main/1xDeJPG_OmniSR.pth?download=true",
+            "dir": "upscale_models",
+            "filename": "1xDeJPG_OmniSR.pth"
+        },
+        {
+            "url": "https://huggingface.co/fal/AuraSR-v2/resolve/main/model.safetensors?download=true",
+            "dir": "Aura-SR",
+            "filename": "model.safetensors"
         }
     ],
     "nodes": [
@@ -91,6 +101,14 @@
         "https://github.com/rgthree/rgthree-comfy",
         "https://github.com/crystian/ComfyUI-Crystools",
         "https://github.com/chrisgoringe/cg-image-filter",
-        "https://github.com/adbrasi/ComfyI2I"
+        "https://github.com/adbrasi/ComfyI2I",
+        "https://github.com/Kosinkadink/ComfyUI-Advanced-ControlNet",
+        "https://github.com/Fannovel16/comfyui_controlnet_aux",
+        "https://github.com/kijai/ComfyUI-Marigold",
+        "https://github.com/1038lab/ComfyUI-RMBG",
+        "https://github.com/kijai/ComfyUI-SUPIR",
+        "https://github.com/GreenLandisaLie/AuraSR-ComfyUI",
+        "https://github.com/jtydhr88/ComfyUI-qwenmultiangle",
+        "https://github.com/kijai/ComfyUI-segment-anything-2"
     ]
 }
