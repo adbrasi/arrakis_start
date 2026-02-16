@@ -1,0 +1,11 @@
+{
+    "name": "seedvr tester",
+    "description": "Minimal preset with SeedVR, VideoHelperSuite, rgthree, and SageAttention runtime",
+    "use_sage_attention": true,
+    "models": [],
+    "nodes": [
+        "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+        "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+        "https://github.com/rgthree/rgthree-comfy"
+    ]
+}
