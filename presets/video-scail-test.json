@@ -1,0 +1,46 @@
+{
+  "name": "video scail test",
+  "description": "Wan/Kijai video stack with Qwen Image models, selected custom nodes, and SageAttention runtime",
+  "use_sage_attention": true,
+  "models": [
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/SCAIL/Wan21-14B-SCAIL-preview_comfy_bf16.safetensors?download=true",
+      "dir": "diffusion_models",
+      "filename": "Wan21-14B-SCAIL-preview_comfy_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+      "dir": "diffusion_models",
+      "filename": "qwen_image_edit_2511_fp8mixed.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "dir": "vae",
+      "filename": "qwen_image_vae.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "https://github.com/kijai/ComfyUI-GIMM-VFI",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+    "https://github.com/sipherxyz/comfyui-art-venture",
+    "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes",
+    "https://github.com/kijai/ComfyUI-segment-anything-2",
+    "https://github.com/1038lab/ComfyUI-RMBG",
+    "https://github.com/Fannovel16/comfyui_controlnet_aux",
+    "https://github.com/adbrasi/ComfyI2I",
+    "https://github.com/pythongosssss/ComfyUI-WD14-Tagger",
+    "https://github.com/adbrasi/upavidito",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes"
+  ]
+}
