@@ -9,6 +9,21 @@
       "filename": "Wan21-14B-SCAIL-preview_comfy_bf16.safetensors"
     },
     {
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors?download=true",
+      "dir": "clip_vision",
+      "filename": "clip_vision_h.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true",
+      "dir": "vae",
+      "filename": "wan_2.1_vae.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "umt5_xxl_fp16.safetensors"
+    },
+    {
       "url": "https://huggingface.co/Kijai/vitpose_comfy/resolve/main/onnx/vitpose_h_wholebody_data.bin?download=true",
       "dir": "detection",
       "filename": "vitpose_h_wholebody_data.bin"
@@ -93,6 +108,7 @@
     "https://github.com/yolain/ComfyUI-Easy-Use",
     "https://github.com/kijai/ComfyUI-SCAIL-pose",
     "https://github.com/kijai/ComfyUI-WanAnimatePreprocess",
+    "https://github.com/kijai/ComfyUI-Florence2",
     "https://github.com/TinyTerra/ComfyUI_tinyterraNodes"
   ]
 }
