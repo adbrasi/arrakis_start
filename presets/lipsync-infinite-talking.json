@@ -1,0 +1,112 @@
+{
+  "name": "lipsync infinite talking",
+  "description": "Wan/Kijai video stack with SCAIL, detection models, selected custom nodes, and SageAttention runtime",
+  "use_sage_attention": true,
+  "models": [
+
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/InfiniteTalk/Wan2_1-InfiniTetalk-Single_fp16.safetensors?download=true",
+      "dir": "diffusion_models",
+      "filename": "Wan2_1-InfiniTetalk-Single_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1-Anisora-I2V-480P-14B_fp8_e4m3fn.safetensors?download=true",
+      "dir": "diffusion_models",
+      "filename": "Wan2_1-Anisora-I2V-480P-14B_fp8_e4m3fn.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/MelBandRoFormer_comfy/resolve/main/MelBandRoformer_fp16.safetensors?download=true",
+      "dir": "diffusion_models",
+      "filename": "MelBandRoformer_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors?download=true",
+      "dir": "clip_vision",
+      "filename": "clip_vision_h.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors",
+      "dir": "checkpoints",
+      "filename": "ltx-2-19b-dev-fp8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors?download=true",
+      "dir": "vae",
+      "filename": "wan_2.1_vae.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "umt5_xxl_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/NSFW-API/NSFW-Wan-UMT5-XXL/resolve/main/nsfw_wan_umt5-xxl_fp8_scaled.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "nsfw_wan_umt5-xxl_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+      "dir": "text_encoders",
+      "filename": "gemma_3_12B_it_fp4_mixed.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors?download=true",
+      "dir": "loras",
+      "filename": "lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/AniSora/Wan2_2_I2V_AniSora_3_2_HIGH_rank_64_fp16.safetensors?download=true",
+      "dir": "loras",
+      "filename": "Wan2_2_I2V_AniSora_3_2_HIGH_rank_64_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2-19b-distilled-lora-384.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors?download=true",
+      "dir": "loras",
+      "filename": "lightx2v_I2V_14B_480p_cfg_step_distill_rank256_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/xChenNing/Wan21-Anti-Realistic-Transformation/resolve/main/Wan21-Anti-Realistic-Transformation-720p-rank256.safetensors?download=true",
+      "dir": "loras",
+      "filename": "Wan21-Anti-Realistic-Transformation-720p-rank256.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/xChenNing/Wan21-Anti-Realistic-Transformation/resolve/main/Wan21-Anti-Realistic-Transformation-720p-rank128.safetensors?download=true",
+      "dir": "loras",
+      "filename": "Wan21-Anti-Realistic-Transformation-720p-rank128.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "https://github.com/kijai/ComfyUI-GIMM-VFI",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+    "https://github.com/sipherxyz/comfyui-art-venture",
+    "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes",
+    "https://github.com/kijai/ComfyUI-segment-anything-2",
+    "https://github.com/1038lab/ComfyUI-RMBG",
+    "https://github.com/adbrasi/ComfyI2I",
+    "https://github.com/pythongosssss/ComfyUI-WD14-Tagger",
+    "https://github.com/adbrasi/upavidito",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/PozzettiAndrea/ComfyUI-SAM3",
+    "https://github.com/Ltamann/ComfyUI-TBG-SAM3",
+    "https://github.com/kijai/ComfyUI-WanAnimatePreprocess",
+    "https://github.com/kijai/ComfyUI-Florence2",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/scraed/LanPaint"
+  ]
+}
