@@ -16,6 +16,51 @@ log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
 
+requirements_hash() {
+    local req_file="$1"
+    sha256sum "$req_file" | awk '{print $1}'
+}
+
+is_requirements_synced() {
+    local req_file="$1"
+    local marker_file="$2"
+
+    [ -f "$marker_file" ] || return 1
+    [ -f "$req_file" ] || return 1
+
+    local current_hash
+    current_hash="$(requirements_hash "$req_file")"
+    local saved_hash
+    saved_hash="$(cat "$marker_file" 2>/dev/null || true)"
+
+    [ "$current_hash" = "$saved_hash" ]
+}
+
+mark_requirements_synced() {
+    local req_file="$1"
+    local marker_file="$2"
+    requirements_hash "$req_file" > "$marker_file"
+}
+
+torch_runtime_is_ready() {
+    "$COMFY_PYTHON" - <<'PY' >/dev/null 2>&1
+import importlib
+import sys
+
+required = ("torch", "torchvision", "torchaudio")
+for module_name in required:
+    try:
+        importlib.import_module(module_name)
+    except Exception:
+        raise SystemExit(1)
+
+import torch
+cuda_version = (getattr(torch.version, "cuda", None) or "").strip()
+if not cuda_version.startswith("12.8"):
+    raise SystemExit(2)
+PY
+}
+
 # Configuration
 COMFY_BASE="${COMFY_BASE:-/workspace/comfy}"
 COMFY_DIR="$COMFY_BASE/ComfyUI"
@@ -25,6 +70,7 @@ ARRAKIS_VENV_DIR="$ARRAKIS_DIR/.venv"
 COMFY_PYTHON="$COMFY_VENV_DIR/bin/python"
 COMFY_CLI="$COMFY_VENV_DIR/bin/comfy"
 ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
+COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
 
 export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
@@ -79,12 +125,21 @@ log_info "[2/5] Setting up ComfyUI Python environment..."
 
 if [ ! -d "$COMFY_VENV_DIR/bin" ]; then
     python3 -m venv "$COMFY_VENV_DIR"
+    COMFY_VENV_CREATED=1
     log_success "ComfyUI virtual environment created"
 else
+    COMFY_VENV_CREATED=0
     log_info "ComfyUI virtual environment already exists"
 fi
 
-"$COMFY_PYTHON" -m pip install -q --upgrade pip wheel setuptools comfy-cli
+if [ "$COMFY_VENV_CREATED" -eq 1 ]; then
+    "$COMFY_PYTHON" -m pip install -q --upgrade pip wheel setuptools comfy-cli
+elif [ ! -x "$COMFY_CLI" ]; then
+    log_warn "comfy-cli não encontrado no venv; instalando..."
+    "$COMFY_PYTHON" -m pip install -q --upgrade comfy-cli
+else
+    log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
+fi
 
 # Configure hf_xet for MAXIMUM download speed (100x+ faster than default)
 # HF_XET_HIGH_PERFORMANCE: saturates network/CPU for fastest downloads
@@ -108,19 +163,34 @@ fi
 # Ensure ComfyUI Python dependencies are present even if ComfyUI folder already existed.
 # This is required when /workspace/comfy/.venv is recreated from scratch.
 if [ -f "$COMFY_DIR/requirements.txt" ]; then
-    log_info "Syncing ComfyUI core requirements..."
-    "$COMFY_PYTHON" -m pip install -q --upgrade -r "$COMFY_DIR/requirements.txt"
-    log_success "ComfyUI core requirements synced"
+    if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
+        log_info "Syncing ComfyUI core requirements..."
+        "$COMFY_PYTHON" -m pip install -q --upgrade -r "$COMFY_DIR/requirements.txt"
+        mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
+        log_success "ComfyUI core requirements synced"
+    else
+        log_info "ComfyUI core requirements já sincronizados; pulando"
+    fi
 else
     log_warn "ComfyUI requirements.txt not found, skipping dependency sync"
 fi
 
-# Force PyTorch nightly cu128 in ComfyUI runtime (Blackwell/RTX 50xx compatibility)
-log_info "Installing PyTorch nightly cu128 in ComfyUI runtime..."
-"$COMFY_PYTHON" -m pip install --force-reinstall --pre \
-    torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
-log_success "PyTorch nightly cu128 installed"
+# Keep PyTorch nightly cu128 in ComfyUI runtime (Blackwell/RTX 50xx compatibility)
+if torch_runtime_is_ready; then
+    log_info "PyTorch nightly cu128 já está correto no runtime; pulando reinstall"
+else
+    log_info "PyTorch ausente/incompatível; instalando nightly cu128 no runtime..."
+    "$COMFY_PYTHON" -m pip install --pre --upgrade --force-reinstall \
+        torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/nightly/cu128
+
+    if torch_runtime_is_ready; then
+        log_success "PyTorch nightly cu128 installed"
+    else
+        log_error "PyTorch install completed but validation failed (torch/torchvision/torchaudio + CUDA 12.8)"
+        exit 1
+    fi
+fi
 
 # 4. Clone/update Arrakis Start
 log_info "[4/5] Setting up Arrakis Start..."

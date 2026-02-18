@@ -188,6 +188,28 @@ def _verify_python_import(package_name: str, python_bin: Optional[str] = None) -
     return True
 
 
+def _can_import(package_name: str, python_bin: Optional[str] = None) -> bool:
+    """Fast import probe without noisy logs."""
+    target_python = python_bin or _comfy_python()
+    probe = subprocess.run(
+        [target_python, '-c', f'import {package_name}'],
+        check=False,
+        capture_output=True,
+        text=True
+    )
+    return probe.returncode == 0
+
+
+def _detect_runtime_stack() -> str:
+    """Detect runtime stack from installed packages in ComfyUI venv."""
+    comfy_python = _comfy_python()
+    if _can_import('sageattention', python_bin=comfy_python):
+        return 'sageattention'
+    if _can_import('torch', python_bin=comfy_python):
+        return 'standard'
+    return 'unknown'
+
+
 def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]:
     """
     Run SageAttention installer with retry/backoff.
@@ -196,6 +218,9 @@ def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]
     attempts = max(SAGEATTENTION_INSTALL_ATTEMPTS, 1)
     retry_delay = max(SAGEATTENTION_RETRY_DELAY_SECONDS, 1)
     last_output: List[str] = []
+    logger.info(
+        f"Starting SageAttention installer (url={SAGEATTENTION_INSTALLER_URL}, attempts={attempts})"
+    )
 
     curl_shell = (
         f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
@@ -244,6 +269,15 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
     """Configure runtime stack only when SageAttention is explicitly requested."""
     state = get_state_manager()
     current_stack = state.get_runtime_stack()
+    detected_stack = _detect_runtime_stack()
+
+    if detected_stack != 'unknown' and detected_stack != current_stack:
+        logger.info(
+            f"Runtime stack autodetected as '{detected_stack}' (state had '{current_stack}'). "
+            "Updating state marker."
+        )
+        state.set_runtime_stack(detected_stack)
+        current_stack = detected_stack
 
     if use_sage_attention:
         if current_stack == 'sageattention':
