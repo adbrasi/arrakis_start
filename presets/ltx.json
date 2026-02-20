@@ -40,6 +40,7 @@
     }
   ],
   "nodes": [
+    "https://github.com/Lightricks/ComfyUI-LTXVideo",
     "https://github.com/kijai/ComfyUI-GIMM-VFI",
     "https://github.com/rgthree/rgthree-comfy",
     "https://github.com/MoonGoblinDev/Civicomfy",
