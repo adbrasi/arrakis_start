@@ -1,7 +1,7 @@
 {
   "name": "ltx lip sync",
   "description": "LTX lip sync preset with LTX-2 models and required custom nodes",
-  "use_sage_attention": true,
+  "use_sage_attention": false,
   "models": [
     {
       "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors",
