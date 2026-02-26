@@ -45,7 +45,7 @@ class DownloadManager:
         self._cancelled = False
         self.failures: List[Dict[str, str]] = []
         self.attempt_logs: List[Dict[str, str]] = []
-        
+
         # Bandwidth throttling (e.g., "50M" for 50MB/s, "0" for unlimited)
         self.speed_limit = os.environ.get('DOWNLOAD_SPEED_LIMIT', '0')
         if self.speed_limit != '0':
@@ -65,21 +65,33 @@ class DownloadManager:
             f"splits={self.aria2_splits}, min_split={self.aria2_min_split_size}"
         )
         logger.info(f"aria2 stall timeout: {self.aria2_stall_timeout_seconds}s")
-        
+
         # Check for aria2c
         self.has_aria2c = shutil.which('aria2c') is not None
         if not self.has_aria2c:
             logger.warning("aria2c not found, falling back to wget")
-        
+
         # Find HuggingFace CLI (check venv first, then system)
         # New CLI command is `hf`, fallback to `huggingface-cli` for compatibility
         self.hf_cli_path = self._find_hf_cli()
         self.current_process = None
-        
-        # Check for hf_xet (modern high-performance path for HF downloads)
-        self.use_hf_xet = os.environ.get('HF_XET_HIGH_PERFORMANCE', '0') == '1'
-        if self.use_hf_xet and self.hf_cli_path:
-            logger.info("✓ hf_xet high-performance mode enabled for ultra-fast HuggingFace downloads")
+
+        # hf_xet is now the default transfer backend in huggingface_hub v1.0+
+        # HF_XET_HIGH_PERFORMANCE=1 enables extra parallelism for large files
+        self._check_hf_xet()
+
+    def _check_hf_xet(self):
+        """Check hf_xet availability and log transfer backend info."""
+        try:
+            import hf_xet  # noqa: F401
+            self.has_hf_xet = True
+            logger.info("✓ hf_xet installed — XET transfer backend available (ultra-fast HF downloads)")
+        except ImportError:
+            self.has_hf_xet = False
+            logger.warning(
+                "hf_xet not installed — HF downloads will use default transfer. "
+                "Install with: pip install hf_xet"
+            )
     
     def _load_civitai_token(self) -> Tuple[str, str]:
         """Load CIVITAI token from env first, then ~/.civitai/config fallback."""
@@ -258,6 +270,28 @@ class DownloadManager:
         except Exception as e:
             return None, f"civitai_resolve_exception: {e}"
     
+    def _read_lines_cr_aware(self, stream):
+        """Read lines from a binary stream, splitting on both \\r and \\n.
+
+        tqdm and hf_xet progress bars use \\r to overwrite lines in-place.
+        Python's default line iteration only splits on \\n, so progress
+        updates are buffered until a newline arrives (often only at the end).
+        This method yields each \\r-delimited update as a separate line.
+        """
+        buf = b''
+        while True:
+            chunk = stream.read(1)
+            if not chunk:
+                if buf:
+                    yield buf.decode('utf-8', errors='replace')
+                break
+            if chunk in (b'\r', b'\n'):
+                if buf:
+                    yield buf.decode('utf-8', errors='replace')
+                    buf = b''
+            else:
+                buf += chunk
+
     def _find_hf_cli(self) -> Optional[str]:
         """Find HuggingFace CLI executable (new `hf` or legacy `huggingface-cli`)"""
         # Try new `hf` command first (recommended)
@@ -483,27 +517,32 @@ class DownloadManager:
         return authenticated_url
     
     def _download_hf_direct(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
-        """Download from HuggingFace using `hf download` with hf_xet for max speed"""
+        """Download from HuggingFace using `hf download` with hf_xet for max speed.
+
+        Progress is read using CR-aware streaming so tqdm/hf_xet updates
+        (which use \\r) are captured in real-time instead of buffered.
+        """
         # Parse HF URL: https://huggingface.co/repo/resolve/main/file.safetensors
         clean_url = url.split('?', 1)[0]
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', clean_url)
         if not match:
             logger.warning(f"Could not parse HF URL, falling back to aria2c: {url}")
             return False, "invalid_hf_url_format"
-        
+
         repo_id, branch, file_path = match.groups()
-        # URL decode the file path
         file_path = unquote(file_path)
-        
-        logger.info(f"Downloading from HuggingFace: {repo_id}/{file_path}")
-        
+
+        xet_label = " [XET]" if self.has_hf_xet else ""
+        logger.info(f"Downloading from HuggingFace{xet_label}: {repo_id}/{file_path}")
+
         # Configure environment for hf_xet maximum speed
         env = os.environ.copy()
         env['HF_XET_HIGH_PERFORMANCE'] = '1'
         env['HF_XET_NUM_CONCURRENT_RANGE_GETS'] = os.environ.get('HF_XET_NUM_CONCURRENT_RANGE_GETS', '32')
         env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '60')
-        
-        # Build command - works for both `hf` and `huggingface-cli`
+        # Ensure tqdm doesn't get disabled
+        env.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+
         cmd = [
             self.hf_cli_path,
             'download',
@@ -514,41 +553,76 @@ class DownloadManager:
         ]
         if self.hf_token:
             cmd.extend(['--token', self.hf_token])
-        
+
         try:
-            # Run with visible output for progress
+            # Use binary mode + unbuffered so we can split on \r (tqdm progress)
             process = subprocess.Popen(
                 cmd,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1  # Line buffered
+                bufsize=0
             )
             self.current_process = process
-            
+
             tail = deque(maxlen=12)
-            # Stream output in real-time
-            for line in process.stdout:
-                print(line, end='', flush=True)
-                if line.strip():
-                    tail.append(line.strip())
-                
-                # Parse progress for WebSocket
-                if HAS_WEBSOCKET:
-                    # hf_transfer output or tqdm
-                    # Example: 45%|████▌     | 1.23G/2.75G [00:12<00:15, 102MB/s]
-                    match = re.search(r'(\d+)%\|.*\[.*, ([\d\.]+\w+/s)\]', line)
-                    if match:
-                        percent = float(match.group(1))
-                        speed = match.group(2)
-                        send_download_progress(filename, percent, speed, "")
-            
+            last_logged_pct = -10  # log every ~10% change
+            last_log_ts = time.monotonic()
+
+            for line in self._read_lines_cr_aware(process.stdout):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                tail.append(stripped)
+
+                # Parse tqdm-style progress:
+                #   model.safetensors: 45%|████▌     | 1.23G/2.75G [00:12<00:15, 102MB/s]
+                #   Fetching 1 files: 100%|██████████| 1/1 [00:05<00:00, 1.02GB/s]
+                pct_match = re.search(
+                    r'(\d+)%\|'           # percent + bar start
+                    r'[^|]*\|'            # bar characters
+                    r'\s*([^[]*)'         # size info (e.g., 1.23G/2.75G)
+                    r'\[([^\]]*)\]',      # timing info [elapsed<remaining, speed]
+                    stripped
+                )
+                if pct_match:
+                    percent = float(pct_match.group(1))
+                    timing_info = pct_match.group(3)
+
+                    # Extract speed from timing: "00:12<00:15, 102MB/s"
+                    speed_match = re.search(r'([\d\.]+\s*\w+/s)', timing_info)
+                    speed = speed_match.group(1) if speed_match else ""
+
+                    # Extract ETA: "00:12<00:15" -> remaining is after <
+                    eta_match = re.search(r'<([\d:]+)', timing_info)
+                    eta = eta_match.group(1) if eta_match else ""
+
+                    # Send to WebSocket
+                    if HAS_WEBSOCKET:
+                        send_download_progress(filename, percent, speed, eta)
+
+                    # Log progress periodically (every ~10% or every 15s)
+                    now = time.monotonic()
+                    if percent - last_logged_pct >= 10 or (now - last_log_ts) > 15:
+                        size_info = pct_match.group(2).strip()
+                        speed_str = f" @ {speed}" if speed else ""
+                        eta_str = f" ETA {eta}" if eta else ""
+                        logger.info(
+                            f"  ↓ {filename}: {percent:.0f}% {size_info}{speed_str}{eta_str}"
+                        )
+                        last_logged_pct = percent
+                        last_log_ts = now
+                else:
+                    # Log non-progress lines (errors, warnings, etc.)
+                    # Skip pure bar-render fragments
+                    if not stripped.startswith('|') and '%|' not in stripped:
+                        logger.debug(f"  [hf] {stripped}")
+
             process.wait()
             self.current_process = None
-            
+
             if process.returncode == 0:
-                logger.info(f"✓ Downloaded from HF: {filename}")
+                logger.info(f"✓ Downloaded from HF{xet_label}: {filename}")
                 return True, ""
             else:
                 logger.error(f"HF download failed with code {process.returncode}")
@@ -556,22 +630,32 @@ class DownloadManager:
                 if tail:
                     reason = f"{reason} | tail: {' || '.join(tail)}"
                 return False, reason
-                
+
         except Exception as e:
             self.current_process = None
             logger.error(f"HF download failed: {e}")
             return False, str(e)
     
     def _download_hf_via_python(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
-        """Fallback HuggingFace download via huggingface_hub API."""
+        """Fallback HuggingFace download via huggingface_hub Python API.
+
+        Uses tqdm callback to report progress via WebSocket and periodic logs.
+        hf_xet is automatically used if installed (default since huggingface_hub v1.0).
+        """
         clean_url = url.split('?', 1)[0]
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', clean_url)
         if not match:
             return False, "invalid_hf_url_for_python_fallback"
         repo_id, branch, file_path = match.groups()
-        
+
+        logger.info(f"Fallback: downloading via huggingface_hub Python API: {repo_id}/{file_path}")
+
         try:
             from huggingface_hub import hf_hub_download
+            # Ensure progress bars are enabled for this download
+            os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
+            os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+
             downloaded_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=file_path,
@@ -584,7 +668,7 @@ class DownloadManager:
             if downloaded.resolve() != target.resolve():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(downloaded), str(target))
-            logger.info(f"✓ Downloaded from huggingface_hub: {filename}")
+            logger.info(f"✓ Downloaded from huggingface_hub (Python API): {filename}")
             return True, ""
         except Exception as e:
             return False, f"hf_hub_python_exception: {e}"
@@ -640,39 +724,52 @@ class DownloadManager:
         cmd.append(url)
         
         try:
-            # Run with real-time output
+            # Use binary mode + unbuffered for CR-aware progress reading
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                bufsize=0
             )
             self.current_process = process
-            
+
             tail = deque(maxlen=12)
             last_progress_ts = time.monotonic()
             last_percent = 0.0
-            for line in process.stdout:
-                print(line, end='', flush=True)
-                if line.strip():
-                    tail.append(line.strip())
-                
-                # Parse progress for WebSocket
-                if HAS_WEBSOCKET:
-                    # aria2c output: [#2089b0 27MiB/91MiB(29%) CN:8 DL:110MiB ETA:1s]
-                    match = re.search(r'\(([\d\.]+)%\).*DL:([\d\.]+\w+)(?:.*?ETA:([\d\w]+))?', line)
-                    if match:
-                        percent = float(match.group(1))
-                        speed = match.group(2) + "/s"
-                        eta = match.group(3) or ""
+            last_logged_pct = -10
+
+            for line in self._read_lines_cr_aware(process.stdout):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                tail.append(stripped)
+
+                # aria2c output: [#2089b0 27MiB/91MiB(29%) CN:8 DL:110MiB ETA:1s]
+                match = re.search(r'\(([\d\.]+)%\).*DL:([\d\.]+\w+)(?:.*?ETA:([\d\w]+))?', stripped)
+                if match:
+                    percent = float(match.group(1))
+                    speed = match.group(2) + "/s"
+                    eta = match.group(3) or ""
+
+                    if HAS_WEBSOCKET:
                         send_download_progress(filename, percent, speed, eta)
-                        # Track forward progress (percent increase or non-zero instantaneous speed)
-                        if percent > (last_percent + 0.01):
-                            last_percent = percent
-                            last_progress_ts = time.monotonic()
-                        elif not speed.startswith("0B"):
-                            last_progress_ts = time.monotonic()
+
+                    # Log progress periodically
+                    if percent - last_logged_pct >= 10:
+                        eta_str = f" ETA {eta}" if eta else ""
+                        logger.info(f"  ↓ {filename}: {percent:.0f}% @ {speed}{eta_str}")
+                        last_logged_pct = percent
+
+                    # Track forward progress
+                    if percent > (last_percent + 0.01):
+                        last_percent = percent
+                        last_progress_ts = time.monotonic()
+                    elif not speed.startswith("0B"):
+                        last_progress_ts = time.monotonic()
+                else:
+                    # Log non-progress lines (download start, errors, etc.)
+                    if not stripped.startswith('[#') and not stripped.startswith('***'):
+                        logger.debug(f"  [aria2c] {stripped}")
 
                 # Guard against stalled aria2c sessions (e.g., DL:0B forever)
                 if (
@@ -691,10 +788,10 @@ class DownloadManager:
                     if tail:
                         reason = f"{reason} | tail: {' || '.join(tail)}"
                     return False, reason
-            
+
             process.wait()
             self.current_process = None
-            
+
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {filename}")
                 return True, ""
@@ -704,7 +801,7 @@ class DownloadManager:
                 if tail:
                     reason = f"{reason} | tail: {' || '.join(tail)}"
                 return False, reason
-                
+
         except Exception as e:
             logger.error(f"aria2c error: {e}")
             return False, str(e)
@@ -744,30 +841,37 @@ class DownloadManager:
         cmd.append(url)
         
         try:
+            # Use binary mode + unbuffered for CR-aware progress reading
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                bufsize=0
             )
             self.current_process = process
-            
+
             tail = deque(maxlen=12)
-            for line in process.stdout:
-                print(line, end='', flush=True)
-                if line.strip():
-                    tail.append(line.strip())
-                
-                # Parse progress for WebSocket
-                if HAS_WEBSOCKET:
-                    # wget output:  52% [============>           ] 14,833,969  21.3MB/s  eta 1s
-                    match = re.search(r'(\d+)%.*?([\d\.]+[KMG]B/s).*?eta\s+([\w\d]+)', line)
-                    if match:
-                        percent = float(match.group(1))
-                        speed = match.group(2)
-                        eta = match.group(3)
+            last_logged_pct = -10
+
+            for line in self._read_lines_cr_aware(process.stdout):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                tail.append(stripped)
+
+                # wget output:  52% [============>           ] 14,833,969  21.3MB/s  eta 1s
+                match = re.search(r'(\d+)%.*?([\d\.]+[KMG]B/s).*?eta\s+([\w\d]+)', stripped)
+                if match:
+                    percent = float(match.group(1))
+                    speed = match.group(2)
+                    eta = match.group(3)
+
+                    if HAS_WEBSOCKET:
                         send_download_progress(dest_path.name, percent, speed, eta)
+
+                    if percent - last_logged_pct >= 10:
+                        logger.info(f"  ↓ {dest_path.name}: {percent:.0f}% @ {speed} ETA {eta}")
+                        last_logged_pct = percent
             
             process.wait()
             self.current_process = None
