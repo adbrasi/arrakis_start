@@ -73,25 +73,11 @@ class DownloadManager:
 
         # Find HuggingFace CLI (check venv first, then system)
         # New CLI command is `hf`, fallback to `huggingface-cli` for compatibility
-        self.hf_cli_path = self._find_hf_cli()
+        self.hf_cli_path, self._hf_cli_pip = self._find_hf_cli()
         self.current_process = None
 
-        # hf_xet is now the default transfer backend in huggingface_hub v1.0+
-        # HF_XET_HIGH_PERFORMANCE=1 enables extra parallelism for large files
-        self._check_hf_xet()
-
-    def _check_hf_xet(self):
-        """Check hf_xet availability and log transfer backend info."""
-        try:
-            import hf_xet  # noqa: F401
-            self.has_hf_xet = True
-            logger.info("✓ hf_xet installed — XET transfer backend available (ultra-fast HF downloads)")
-        except ImportError:
-            self.has_hf_xet = False
-            logger.warning(
-                "hf_xet not installed — HF downloads will use default transfer. "
-                "Install with: pip install hf_xet"
-            )
+        # Ensure hf_xet is installed in the same env as the HF CLI
+        self._ensure_hf_xet()
     
     def _load_civitai_token(self) -> Tuple[str, str]:
         """Load CIVITAI token from env first, then ~/.civitai/config fallback."""
@@ -292,25 +278,135 @@ class DownloadManager:
             else:
                 buf += chunk
 
-    def _find_hf_cli(self) -> Optional[str]:
-        """Find HuggingFace CLI executable (new `hf` or legacy `huggingface-cli`)"""
-        # Try new `hf` command first (recommended)
+    def _find_hf_cli(self) -> Tuple[Optional[str], Optional[str]]:
+        """Find HuggingFace CLI executable and its corresponding pip.
+
+        Returns (hf_cli_path, pip_path) so we can install packages in the
+        correct venv — the same one where `hf` CLI lives.
+        """
         for cmd_name in ['hf', 'huggingface-cli']:
             # Prefer Arrakis venv (orchestrator), fallback to ComfyUI venv.
             for venv_bin in (ARRAKIS_VENV_BIN, COMFY_VENV_BIN):
                 venv_hf = venv_bin / cmd_name
                 if venv_hf.exists():
+                    pip_path = str(venv_bin / 'pip')
                     logger.info(f"Found HF CLI in venv: {cmd_name} ({venv_bin})")
-                    return str(venv_hf)
-            
+                    return str(venv_hf), pip_path
+
             # Check system PATH
             system_hf = shutil.which(cmd_name)
             if system_hf:
                 logger.info(f"Found HF CLI in system: {cmd_name}")
-                return system_hf
-        
+                # For system installs, use the python that owns the CLI
+                cli_dir = Path(system_hf).resolve().parent
+                pip_candidate = cli_dir / 'pip'
+                pip_path = str(pip_candidate) if pip_candidate.exists() else 'pip'
+                return system_hf, pip_path
+
         logger.warning("HuggingFace CLI (hf/huggingface-cli) not found, will use aria2c for HF downloads")
-        return None
+        return None, None
+
+    def _ensure_hf_xet(self):
+        """Ensure hf_xet is installed in the HF CLI's venv and log diagnostics.
+
+        hf_xet is the modern XET transfer backend that provides ultra-fast
+        downloads (GBs/s). Without it, huggingface_hub falls back to slow
+        default HTTP transfers.
+        """
+        self.has_hf_xet = False
+
+        if not self.hf_cli_path:
+            return
+
+        # Determine the python executable in the same venv as the HF CLI
+        cli_bin_dir = Path(self.hf_cli_path).resolve().parent
+        hf_python = cli_bin_dir / 'python'
+        if not hf_python.exists():
+            hf_python = cli_bin_dir / 'python3'
+        if not hf_python.exists():
+            # Fallback: just use current python
+            hf_python = Path(sys.executable)
+
+        # Check huggingface_hub version and hf_xet availability in that env
+        check_script = "\n".join([
+            "import json",
+            "d = {}",
+            "try:",
+            "    import huggingface_hub; d['hf_hub_version'] = huggingface_hub.__version__",
+            "except Exception:",
+            "    d['hf_hub_version'] = 'not_found'",
+            "try:",
+            "    import hf_xet; d['hf_xet'] = True",
+            "except Exception:",
+            "    d['hf_xet'] = False",
+            "try:",
+            "    import hf_transfer; d['hf_transfer'] = True",
+            "except Exception:",
+            "    d['hf_transfer'] = False",
+            "print(json.dumps(d))",
+        ])
+
+        try:
+            result = subprocess.run(
+                [str(hf_python), '-c', check_script],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                info = json.loads(result.stdout.strip())
+            else:
+                info = {'hf_hub_version': 'unknown', 'hf_xet': False, 'hf_transfer': False}
+                logger.warning(f"Failed to check HF env: {result.stderr.strip()}")
+        except Exception as e:
+            info = {'hf_hub_version': 'unknown', 'hf_xet': False, 'hf_transfer': False}
+            logger.warning(f"Could not inspect HF CLI environment: {e}")
+
+        hf_hub_ver = info.get('hf_hub_version', 'unknown')
+        has_xet = info.get('hf_xet', False)
+        has_transfer = info.get('hf_transfer', False)
+
+        logger.info(
+            f"HF CLI env: huggingface_hub={hf_hub_ver}, "
+            f"hf_xet={'✓' if has_xet else '✗'}, "
+            f"hf_transfer={'✓' if has_transfer else '✗'}, "
+            f"python={hf_python}"
+        )
+
+        if has_xet:
+            self.has_hf_xet = True
+            logger.info("✓ hf_xet available — XET transfer backend active (ultra-fast downloads)")
+            return
+
+        # hf_xet not installed — try to auto-install it
+        logger.warning("hf_xet NOT installed in HF CLI env — downloads will be SLOW without it")
+        logger.info("Auto-installing hf_xet...")
+
+        pip_path = self._hf_cli_pip or 'pip'
+        try:
+            install_result = subprocess.run(
+                [pip_path, 'install', '-q', '--upgrade', 'hf_xet'],
+                capture_output=True, text=True, timeout=120
+            )
+            if install_result.returncode == 0:
+                self.has_hf_xet = True
+                logger.info("✓ hf_xet auto-installed successfully — XET backend now active")
+            else:
+                logger.error(
+                    f"Failed to auto-install hf_xet (exit {install_result.returncode}): "
+                    f"{install_result.stderr.strip()}"
+                )
+                # Try hf_transfer as legacy fallback
+                if not has_transfer:
+                    logger.info("Attempting hf_transfer as fallback...")
+                    transfer_result = subprocess.run(
+                        [pip_path, 'install', '-q', 'hf_transfer'],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    if transfer_result.returncode == 0:
+                        logger.info("✓ hf_transfer installed as fallback (slower than XET but faster than default)")
+                    else:
+                        logger.warning("Could not install hf_transfer either — downloads will use default HTTP")
+        except Exception as e:
+            logger.error(f"Auto-install failed: {e}")
     
     def cancel(self):
         """Cancel ongoing downloads immediately"""
@@ -535,11 +631,14 @@ class DownloadManager:
         xet_label = " [XET]" if self.has_hf_xet else ""
         logger.info(f"Downloading from HuggingFace{xet_label}: {repo_id}/{file_path}")
 
-        # Configure environment for hf_xet maximum speed
+        # Configure environment for maximum download speed
         env = os.environ.copy()
+        # hf_xet (v1.0+): high-performance mode
         env['HF_XET_HIGH_PERFORMANCE'] = '1'
         env['HF_XET_NUM_CONCURRENT_RANGE_GETS'] = os.environ.get('HF_XET_NUM_CONCURRENT_RANGE_GETS', '32')
-        env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '60')
+        # hf_transfer (legacy): enable if installed (ignored on v1.0+ but safe)
+        env['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+        env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '120')
         # Ensure tqdm doesn't get disabled
         env.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
@@ -652,8 +751,9 @@ class DownloadManager:
 
         try:
             from huggingface_hub import hf_hub_download
-            # Ensure progress bars are enabled for this download
+            # Ensure fast backend + progress bars are enabled
             os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
+            os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
             os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
             downloaded_path = hf_hub_download(
