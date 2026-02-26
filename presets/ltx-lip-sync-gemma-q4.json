@@ -1,0 +1,142 @@
+{
+  "name": "LTX2 FULL",
+  "description": "LTX lip sync preset with LTX-2 dev checkpoint and full Gemma 3 12B QAT Q4_0 files",
+  "use_sage_attention": true,
+  "models": [
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev.safetensors?download=true",
+      "dir": "checkpoints",
+      "filename": "ltx-2-19b-dev.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2-19b-IC-LoRA-Detailer/resolve/main/ltx-2-19b-ic-lora-detailer.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2-19b-ic-lora-detailer.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2-19b-distilled-lora-384.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/.gitattributes?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": ".gitattributes"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/README.md?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "README.md"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/added_tokens.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "added_tokens.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/chat_template.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "chat_template.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/config.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "config.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/generation_config.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "generation_config.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00001-of-00005.safetensors?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "model-00001-of-00005.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00002-of-00005.safetensors?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "model-00002-of-00005.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00003-of-00005.safetensors?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "model-00003-of-00005.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00004-of-00005.safetensors?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "model-00004-of-00005.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00005-of-00005.safetensors?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "model-00005-of-00005.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model.safetensors.index.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "model.safetensors.index.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/preprocessor_config.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "preprocessor_config.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/processor_config.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "processor_config.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/special_tokens_map.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "special_tokens_map.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/tokenizer.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "tokenizer.json"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/tokenizer.model?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "tokenizer.model"
+    },
+    {
+      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/tokenizer_config.json?download=true",
+      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
+      "filename": "tokenizer_config.json"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-temporal-upscaler-x2-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2-temporal-upscaler-x2-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/LTX2_audio_vae_bf16.safetensors",
+      "dir": "vae",
+      "filename": "LTX2_audio_vae_bf16.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "https://github.com/Lightricks/ComfyUI-LTXVideo",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/CY-CHENYUE/ComfyUI-InpaintEasy",
+    "https://github.com/ltdrdata/ComfyUI-Impact-Subpack",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+    "https://github.com/adbrasi/adfit-test-node",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
+    "https://github.com/drozbay/res4lyf"
+  ]
+}
