@@ -37,6 +37,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
         """Handle GET requests"""
         if self.path == '/api/presets':
             self._handle_get_presets()
+        elif self.path == '/api/status':
+            self._handle_get_status()
         else:
             # Serve static files
             super().do_GET()
@@ -45,6 +47,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
         """Handle POST requests"""
         if self.path == '/api/install':
             self._handle_install()
+        elif self.path == '/api/restart':
+            self._handle_restart()
         else:
             self.send_error(404)
     
@@ -77,7 +81,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     'description': p.get('description', ''),
                     'models_count': len(p.get('models', [])),
                     'nodes_count': len(p.get('nodes', [])),
-                    'installed': preset_name in installed_presets
+                    'installed': preset_name in installed_presets,
+                    'workflow_url': p.get('workflow_url', '')
                 }
                 clean_presets.append(clean)
             
@@ -91,6 +96,69 @@ class PresetHandler(SimpleHTTPRequestHandler):
             logger.error(f"Failed to get presets: {e}")
             self.send_error(500, str(e))
     
+    def _handle_get_status(self):
+        """Return ComfyUI status"""
+        try:
+            state = _state_manager or get_state_manager()
+            from process_manager import ProcessManager
+            pm = ProcessManager(state)
+            is_running = pm.is_running()
+            status_data = state.get_comfyui_status()
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'running': is_running,
+                'status': status_data.get('status', 'unknown'),
+                'port': status_data.get('port', 8818),
+                'installed_presets': state.get_installed_presets()
+            }).encode())
+        except Exception as e:
+            logger.error(f"Failed to get status: {e}")
+            self.send_error(500, str(e))
+
+    def _handle_restart(self):
+        """Handle ComfyUI restart request (kill + start with last preset flags)"""
+        try:
+            from process_manager import ProcessManager
+            state = _state_manager or get_state_manager()
+
+            def do_restart():
+                pm = ProcessManager(state)
+                logger.info("Restart requested via web UI")
+
+                # Stop ComfyUI
+                if not pm.ensure_stopped(timeout=20):
+                    logger.error("Failed to stop ComfyUI for restart")
+                    return
+
+                import time
+                time.sleep(2)
+
+                # Start with existing preset flags from state
+                started = pm.start()
+                if started:
+                    logger.info("ComfyUI restarted successfully via web UI")
+                else:
+                    logger.error("ComfyUI failed to start after restart")
+
+            thread = threading.Thread(target=do_restart, daemon=True)
+            thread.start()
+
+            self.send_response(202)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': True,
+                'message': 'Restart initiated'
+            }).encode())
+        except Exception as e:
+            logger.error(f"Restart error: {e}")
+            self.send_error(500, str(e))
+
     def _handle_install(self):
         """Handle preset installation request"""
         try:

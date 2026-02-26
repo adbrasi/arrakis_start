@@ -1,4 +1,4 @@
-/* Arrakis Start - Minimal UI Styling */
+/* Arrakis Start - UI Styling */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
@@ -39,7 +39,13 @@ body {
         radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 40%);
     color: var(--text-primary);
     min-height: 100vh;
-    padding: 2rem;
+    padding: 1rem;
+}
+
+@media (min-width: 640px) {
+    body {
+        padding: 2rem;
+    }
 }
 
 .container {
@@ -48,22 +54,120 @@ body {
 }
 
 section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
 }
 
-h3 {
+/* ===== Top Bar: Status + Restart ===== */
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 0.75rem 1.25rem;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.status-area {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background-color 0.3s;
+}
+
+.status-dot.running {
+    background: var(--success);
+    box-shadow: 0 0 8px var(--success);
+}
+
+.status-dot.stopped {
+    background: var(--text-muted);
+}
+
+.status-dot.starting {
+    background: var(--warning);
+    animation: pulse 1.5s infinite;
+}
+
+.status-dot.error {
+    background: var(--error);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.status-text {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.btn-restart {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--bg-tertiary);
     color: var(--text-primary);
-    font-weight: 600;
-    font-size: 1.25rem;
-    margin-bottom: 1rem;
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
-/* Installed Presets */
+.btn-restart:hover:not(:disabled) {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.btn-restart:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-restart svg {
+    flex-shrink: 0;
+}
+
+.btn-restart.restarting svg {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ===== Installed Presets ===== */
 .installed-section {
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    padding: 1.5rem;
+    padding: 1.25rem;
+}
+
+.installed-section h3 {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 0.75rem;
 }
 
 .installed-list {
@@ -75,9 +179,9 @@ h3 {
 .installed-item {
     background: var(--bg-tertiary);
     color: var(--success);
-    padding: 0.5rem 1rem;
+    padding: 0.375rem 0.75rem;
     border-radius: 8px;
-    font-size: 0.875rem;
+    font-size: 0.8125rem;
     font-weight: 500;
 }
 
@@ -92,11 +196,17 @@ h3 {
     font-style: italic;
 }
 
-/* Preset Grid */
+/* ===== Preset Grid ===== */
 .presets-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 1.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .presets-grid {
+        gap: 1.25rem;
+    }
 }
 
 .loading {
@@ -106,15 +216,16 @@ h3 {
     padding: 2rem;
 }
 
-/* Preset Cards */
+/* ===== Preset Cards ===== */
 .preset-card {
     background: var(--bg-secondary);
     border: 2px solid var(--border-color);
     border-radius: 12px;
-    padding: 1.5rem;
     cursor: pointer;
     transition: all 0.2s ease;
     position: relative;
+    display: flex;
+    flex-direction: column;
 }
 
 .preset-card:hover {
@@ -127,67 +238,144 @@ h3 {
     background: rgba(99, 102, 241, 0.1);
 }
 
-.preset-checkbox {
-    position: absolute;
-    top: 1rem;
-    left: 1rem;
-    width: 20px;
-    height: 20px;
-    cursor: pointer;
+/* Card header: checkbox + title + badge */
+.card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    padding: 1rem 1rem 0 1rem;
 }
 
-.preset-card h3 {
-    margin-top: 0;
-    margin-bottom: 0.5rem;
-    font-size: 1.125rem;
-    padding-left: 2rem;
-    /* Space for checkbox on left */
-    padding-right: 6rem;
-    /* Space for badge on right */
+.preset-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-top: 2px;
+    accent-color: var(--accent-primary);
+}
+
+.card-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+.installed-badge {
+    background: var(--success);
+    color: white;
+    padding: 0.175rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Selection order badge */
+.selection-order {
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    width: 22px;
+    height: 22px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+    box-shadow: 0 2px 6px rgba(99, 102, 241, 0.4);
+    opacity: 0;
+    transform: scale(0);
+    transition: all 0.2s ease;
+}
+
+.preset-card.selected .selection-order {
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* Card body */
+.card-body {
+    padding: 0.5rem 1rem 0.75rem 1rem;
+    flex: 1;
 }
 
 .description {
     color: var(--text-secondary);
-    font-size: 0.875rem;
-    margin-bottom: 1rem;
+    font-size: 0.8125rem;
+    margin-bottom: 0.75rem;
     line-height: 1.5;
+}
+
+/* Card footer: stats + workflow */
+.card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 1rem 0.75rem 1rem;
+    gap: 0.5rem;
 }
 
 .stats {
     display: flex;
-    gap: 1rem;
-    font-size: 0.75rem;
+    gap: 0.75rem;
+    font-size: 0.6875rem;
     color: var(--text-muted);
+    flex-shrink: 0;
 }
 
-.installed-badge {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    background: var(--success);
-    color: white;
-    padding: 0.25rem 0.75rem;
+.stat {
+    white-space: nowrap;
+}
+
+.workflow-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.6875rem;
+    color: var(--accent-primary);
+    text-decoration: none;
+    padding: 0.25rem 0.5rem;
     border-radius: 6px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    background: rgba(99, 102, 241, 0.1);
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
-/* Action Button */
+.workflow-link:hover {
+    background: rgba(99, 102, 241, 0.2);
+    color: var(--accent-secondary);
+}
+
+/* ===== Action Button ===== */
 .actions-section {
     text-align: center;
+    padding-top: 0.5rem;
 }
 
 .btn-primary {
     background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
     color: white;
     border: none;
-    padding: 1rem 2.5rem;
-    font-size: 1.125rem;
+    padding: 0.875rem 2rem;
+    font-size: 1rem;
     font-weight: 600;
     border-radius: 12px;
     cursor: pointer;
     transition: all 0.2s ease;
     box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+    width: 100%;
+    max-width: 400px;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -200,33 +388,35 @@ h3 {
     cursor: not-allowed;
 }
 
-/* Toast Notifications */
+/* ===== Toast Notifications ===== */
 .toast-container {
     position: fixed;
-    top: 2rem;
-    right: 2rem;
+    top: 1rem;
+    right: 1rem;
     z-index: 9999;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
+    max-width: calc(100vw - 2rem);
 }
 
 .toast {
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 12px;
-    padding: 1rem 1.5rem;
-    min-width: 300px;
+    padding: 0.75rem 1rem;
+    min-width: 260px;
+    max-width: 360px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
     animation: slideIn 0.3s ease;
+    font-size: 0.875rem;
 }
 
 @keyframes slideIn {
     from {
-        transform: translateX(400px);
+        transform: translateX(120%);
         opacity: 0;
     }
-
     to {
         transform: translateX(0);
         opacity: 1;

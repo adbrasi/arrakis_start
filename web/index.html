@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 
 <head>
     <meta charset="UTF-8">
@@ -16,6 +16,20 @@
 <body>
     <div class="container">
         <main>
+            <!-- Top Bar: Status + Restart -->
+            <section class="top-bar">
+                <div class="status-area">
+                    <span id="status-dot" class="status-dot stopped"></span>
+                    <span id="status-text" class="status-text">ComfyUI: Verificando...</span>
+                </div>
+                <button id="restart-btn" class="btn-restart" title="Reiniciar ComfyUI com o ultimo preset">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M13.65 2.35A7.96 7.96 0 008 0C3.58 0 .01 3.58.01 8S3.58 16 8 16c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 018 14 6 6 0 012 8a6 6 0 016-6c1.66 0 3.14.69 4.22 1.78L9 7h7V0l-2.35 2.35z" fill="currentColor"/>
+                    </svg>
+                    Reiniciar ComfyUI
+                </button>
+            </section>
+
             <!-- Presets Instalados -->
             <section class="installed-section">
                 <h3>Presets Instalados</h3>
@@ -31,7 +45,7 @@
                 </div>
             </section>
 
-            <!-- Botão de Ação -->
+            <!-- Botao de Acao -->
             <section class="actions-section">
                 <button id="start-btn" class="btn-primary" disabled>
                     Iniciar com Presets Selecionados
