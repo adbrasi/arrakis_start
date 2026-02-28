@@ -1,0 +1,23 @@
+{
+  "name": "Flux2 Klein 9B Distilled",
+  "description": "FLUX.2 [klein] 9B distilled (4-step) for fast generation/editing. Requires accepted HF access for the gated BFL diffusion model.",
+  "use_sage_attention": false,
+  "models": [
+    {
+      "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors",
+      "dir": "diffusion_models",
+      "filename": "flux-2-klein-9b-fp8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen_3_8b_fp8mixed.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+      "dir": "vae",
+      "filename": "flux2-vae.safetensors"
+    }
+  ],
+  "nodes": []
+}
