@@ -1,0 +1,66 @@
+{
+  "name": "LTX GERADOR OFICIAL NSFW",
+  "description": "GERAÇÃO DE NSFW COM LTX - USANDO NOSSO LORA ESPECIALIZADO.",
+  "use_sage_attention": true,
+  "models": [
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors",
+      "dir": "checkpoints",
+      "filename": "ltx-2-19b-dev-fp8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2-19b-IC-LoRA-Detailer/resolve/main/ltx-2-19b-ic-lora-detailer.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2-19b-ic-lora-detailer.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2-19b-distilled-lora-384.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fpmixed.safetensors",
+      "dir": "text_encoders",
+      "filename": "gemma_3_12B_it_fpmixed.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-temporal-upscaler-x2-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2-temporal-upscaler-x2-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/LTX2_audio_vae_bf16.safetensors",
+      "dir": "vae",
+      "filename": "LTX2_audio_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/looper_ltxV2/resolve/main/looper_ltxV2_step_18000.safetensors",
+      "dir": "loras",
+      "filename": "looper_ltxV2_step_18000.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2599977?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": ""
+    }
+  ],
+  "nodes": [
+    "https://github.com/Lightricks/ComfyUI-LTXVideo",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/pythongosssss/ComfyUI-WD14-Tagger",
+    "https://github.com/cubiq/ComfyUI_essentials",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/filliptm/ComfyUI_Fill-Nodes",
+    "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
+    "https://github.com/adbrasi/loppiner",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public"
+  ]
+}
