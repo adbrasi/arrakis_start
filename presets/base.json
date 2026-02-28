@@ -44,7 +44,7 @@
             "filename": "4x-UltraSharpV2_Lite.pth"
         },
         {
-            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/Eyeful_v2-Individual.pt",
+            "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/Eyeful_v2-Paired.pt",
             "dir": "ultralytics/bbox",
             "filename": "Eyeful_v2-Paired.pt"
         },
@@ -62,11 +62,8 @@
     "nodes": [
         "https://github.com/ltdrdata/ComfyUI-Manager",
         "https://github.com/kijai/ComfyUI-KJNodes",
-        "https://github.com/ltdrdata/ComfyUI-Inspire-Pack",
-        "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
-        "https://github.com/ltdrdata/ComfyUI-Impact-Subpack",
         "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
         "https://github.com/rgthree/rgthree-comfy",
-        "https://github.com/WASasquatch/was-node-suite-comfyui"
+        "https://github.com/ltdrdata/was-node-suite-comfyui"
     ]
 }
