@@ -1,0 +1,44 @@
+{
+  "name": "Flux2 Klein 4B Base Full",
+  "description": "FLUX.2 [klein] 4B base full (non-FP8) preset with core model/text encoder/VAE and 3 curated Civitai LoRAs for style and character tests.",
+  "use_sage_attention": false,
+  "models": [
+    {
+      "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/diffusion_models/flux-2-klein-base-4b.safetensors",
+      "dir": "diffusion_models",
+      "filename": "flux-2-klein-base-4b.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen_3_4b.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors",
+      "dir": "vae",
+      "filename": "flux2-vae.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2583950?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": "hayley_flux2_klein_4b.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2545223?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": "face_expression_transfer_flux2_klein_4b.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2597117?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": "album_artwork_flux2_klein_4b.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/lrzjason/ComfyUI-EditUtils",
+    "https://github.com/scraed/LanPaint",
+    "https://github.com/philipy1219/ComfyUI-TaylorSeer",
+    "https://github.com/city96/ComfyUI-GGUF",
+    "https://github.com/yolain/ComfyUI-Easy-Use"
+  ]
+}

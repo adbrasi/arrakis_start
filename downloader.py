@@ -627,6 +627,8 @@ class DownloadManager:
 
         repo_id, branch, file_path = match.groups()
         file_path = unquote(file_path)
+        if not filename:
+            filename = Path(file_path).name
 
         xet_label = " [XET]" if self.has_hf_xet else ""
         logger.info(f"Downloading from HuggingFace{xet_label}: {repo_id}/{file_path}")
@@ -721,6 +723,37 @@ class DownloadManager:
             self.current_process = None
 
             if process.returncode == 0:
+                # `hf download --local-dir` preserves subfolders from repo paths (e.g., VAE/file.safetensors).
+                # Normalize output to the requested target name inside dest_dir.
+                downloaded = dest_dir / file_path
+                target = dest_dir / filename
+
+                if downloaded.exists():
+                    if downloaded.resolve() != target.resolve():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(downloaded), str(target))
+
+                        # Remove now-empty intermediate directories created by HF.
+                        parent = downloaded.parent
+                        while parent != dest_dir and parent.exists():
+                            try:
+                                parent.rmdir()
+                            except OSError:
+                                break
+                            parent = parent.parent
+                elif not target.exists():
+                    flat_downloaded = dest_dir / Path(file_path).name
+                    if flat_downloaded.exists() and flat_downloaded.resolve() != target.resolve():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(flat_downloaded), str(target))
+                    else:
+                        reason = (
+                            "hf_download_missing_output: "
+                            f"expected '{downloaded}' or '{target}'"
+                        )
+                        logger.error(reason)
+                        return False, reason
+
                 logger.info(f"✓ Downloaded from HF{xet_label}: {filename}")
                 return True, ""
             else:
