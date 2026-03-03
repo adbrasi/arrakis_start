@@ -20,94 +20,14 @@
       "filename": "ltx-2-19b-distilled-lora-384.safetensors"
     },
     {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/.gitattributes?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": ".gitattributes"
+      "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "gemma_3_12B_it.safetensors"
     },
     {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/README.md?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "README.md"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/added_tokens.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "added_tokens.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/chat_template.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "chat_template.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/config.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "config.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/generation_config.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "generation_config.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00001-of-00005.safetensors?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "model-00001-of-00005.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00002-of-00005.safetensors?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "model-00002-of-00005.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00003-of-00005.safetensors?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "model-00003-of-00005.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00004-of-00005.safetensors?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "model-00004-of-00005.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00005-of-00005.safetensors?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "model-00005-of-00005.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model.safetensors.index.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "model.safetensors.index.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/preprocessor_config.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "preprocessor_config.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/processor_config.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "processor_config.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/special_tokens_map.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "special_tokens_map.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/tokenizer.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "tokenizer.json"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/tokenizer.model?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "tokenizer.model"
-    },
-    {
-      "url": "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/tokenizer_config.json?download=true",
-      "dir": "text_encoders/gemma-3-12b-it-qat-q4_0-unquantized",
-      "filename": "tokenizer_config.json"
+      "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors"
     },
     {
       "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors",
