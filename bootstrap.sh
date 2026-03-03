@@ -16,6 +16,18 @@ log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
 
+path_real() {
+    local path="$1"
+    readlink -f "$path" 2>/dev/null || printf '%s' "$path"
+}
+
+paths_match() {
+    local left right
+    left="$(path_real "$1")"
+    right="$(path_real "$2")"
+    [ "$left" = "$right" ]
+}
+
 requirements_hash() {
     local req_file="$1"
     sha256sum "$req_file" | awk '{print $1}'
@@ -40,6 +52,65 @@ mark_requirements_synced() {
     local req_file="$1"
     local marker_file="$2"
     requirements_hash "$req_file" > "$marker_file"
+}
+
+stop_template_comfy_processes() {
+    local pattern="$1"
+    if pgrep -f "$pattern" >/dev/null 2>&1; then
+        log_warn "Stopping template ComfyUI process(es): $pattern"
+        pkill -TERM -f "$pattern" >/dev/null 2>&1 || true
+        sleep 2
+        pkill -KILL -f "$pattern" >/dev/null 2>&1 || true
+    fi
+}
+
+cleanup_template_comfyui() {
+    local template_dir="$1"
+    local target_dir="$2"
+    local template_supervisor_conf="$3"
+
+    log_info "Checking template-managed ComfyUI conflicts..."
+
+    # User requested: only cleanup template when /workspace/ComfyUI exists.
+    if [ ! -d "$template_dir" ]; then
+        log_info "Template ComfyUI directory not found at $template_dir; skipping template cleanup."
+        return 0
+    fi
+
+    # 1) Stop/disable supervisor-managed comfyui from template images.
+    if command -v supervisorctl >/dev/null 2>&1; then
+        if timeout 10 supervisorctl status comfyui >/dev/null 2>&1; then
+            log_warn "Template supervisor service 'comfyui' detected; stopping..."
+            timeout 15 supervisorctl stop comfyui >/dev/null 2>&1 || true
+        fi
+
+        if [ -f "$template_supervisor_conf" ]; then
+            local disabled_conf="${template_supervisor_conf}.arrakis-disabled"
+            if [ ! -f "$disabled_conf" ]; then
+                mv "$template_supervisor_conf" "$disabled_conf"
+                log_success "Disabled template supervisor config: $template_supervisor_conf"
+            else
+                rm -f "$template_supervisor_conf"
+                log_info "Template supervisor config already disabled"
+            fi
+            timeout 10 supervisorctl reread >/dev/null 2>&1 || true
+            timeout 10 supervisorctl update >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # 2) Stop leftover processes that may still hold 8818.
+    stop_template_comfy_processes "$template_dir/main.py"
+    stop_template_comfy_processes "python.*ComfyUI/main.py"
+    stop_template_comfy_processes "comfy.*--workspace $template_dir"
+
+    # 3) Remove template ComfyUI folder only when it's not our target install dir.
+    if paths_match "$template_dir" "$target_dir"; then
+        log_warn "Template ComfyUI path equals target path ($target_dir); skipping removal."
+    else
+        log_warn "Removing template ComfyUI folder: $template_dir"
+        rm -rf --one-file-system "$template_dir"
+        log_success "Template ComfyUI folder removed"
+    fi
 }
 
 torch_runtime_is_ready() {
@@ -71,6 +142,9 @@ COMFY_PYTHON="$COMFY_VENV_DIR/bin/python"
 COMFY_CLI="$COMFY_VENV_DIR/bin/comfy"
 ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
 COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
+TEMPLATE_COMFY_DIR="${TEMPLATE_COMFY_DIR:-/workspace/ComfyUI}"
+TEMPLATE_COMFY_SUPERVISOR_CONF="${TEMPLATE_COMFY_SUPERVISOR_CONF:-/etc/supervisor/conf.d/comfyui.conf}"
+DISABLE_TEMPLATE_COMFY="${DISABLE_TEMPLATE_COMFY:-1}"
 
 export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
@@ -92,6 +166,12 @@ mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
 log_info "========================================="
 log_info " Arrakis Start - ComfyUI Deployment"
 log_info "========================================="
+
+if [ "$DISABLE_TEMPLATE_COMFY" = "1" ]; then
+    cleanup_template_comfyui "$TEMPLATE_COMFY_DIR" "$COMFY_DIR" "$TEMPLATE_COMFY_SUPERVISOR_CONF"
+else
+    log_warn "DISABLE_TEMPLATE_COMFY=0, skipping template ComfyUI cleanup"
+fi
 
 # 1. Install system dependencies
 log_info "[1/4] Installing system dependencies..."

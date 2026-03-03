@@ -133,6 +133,8 @@ The web UI will automatically detect and display new presets.
 | `HF_TOKEN` | HuggingFace authentication token | Yes (for HF downloads) |
 | `CIVITAI_TOKEN` | Civitai API token | Yes (for Civitai downloads) |
 | `COMFY_BASE` | Base directory for ComfyUI | No (default: `/workspace/comfy`) |
+| `DISABLE_TEMPLATE_COMFY` | Auto-clean template ComfyUI (`/workspace/ComfyUI`) before install | No (default: `1`) |
+| `TEMPLATE_COMFY_DIR` | Template ComfyUI directory to clean when present | No (default: `/workspace/ComfyUI`) |
 | `WEB_PORT` | Web selector port | No (default: `8090`) |
 | `COMFY_PORT` | ComfyUI server port | No (default: `8818`) |
 
@@ -182,3 +184,10 @@ arrakis_start/
 ### ComfyUI not starting
 - Check logs in terminal
 - Verify PyTorch is installed correctly: `python -c "import torch; print(torch.cuda.is_available())"`
+
+### Template already has ComfyUI preinstalled
+- `bootstrap.sh` now checks `/workspace/ComfyUI` and only then:
+  - stops/disables template `supervisor` ComfyUI service
+  - removes template folder
+  - continues with standard Arrakis install in `/workspace/comfy`
+- If `/workspace/ComfyUI` does not exist, no template cleanup action is performed.

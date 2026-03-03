@@ -164,7 +164,62 @@ class DownloadManager:
             return False
         if 'auth_http_401' in reason_lower or 'auth_http_403' in reason_lower:
             return False
+        if '401 unauthorized' in reason_lower or '403 forbidden' in reason_lower:
+            return False
+        if 'username/password authentication failed' in reason_lower:
+            return False
         return True
+
+    def _classify_hf_auth_error(self, reason: str) -> str:
+        """Classify deterministic HuggingFace auth failures."""
+        reason_lower = (reason or '').lower()
+        if (
+            'auth_http_401' in reason_lower or
+            '401 unauthorized' in reason_lower or
+            '401 client error' in reason_lower
+        ):
+            return 'auth_http_401'
+        if (
+            'auth_http_403' in reason_lower or
+            '403 forbidden' in reason_lower or
+            '403 client error' in reason_lower
+        ):
+            return 'auth_http_403'
+        if 'username/password authentication failed' in reason_lower:
+            return 'auth_http_401'
+        return ''
+
+    def _is_invalid_existing_file(self, dest_path: Path, source_url: str) -> bool:
+        """
+        Detect invalid leftovers from failed downloads (e.g., HTML 401 pages).
+        Prevents false "Already exists" successes on retry.
+        """
+        try:
+            if not dest_path.exists():
+                return False
+
+            size = dest_path.stat().st_size
+            if size == 0:
+                return True
+
+            if 'huggingface.co' not in source_url:
+                return False
+
+            # Small HF files that contain auth HTML should not be treated as valid artifacts.
+            if size <= 256 * 1024:
+                with open(dest_path, 'rb') as f:
+                    snippet = f.read(4096).decode('utf-8', errors='ignore').lower()
+                if (
+                    '<html' in snippet or
+                    '<!doctype html' in snippet or
+                    'unauthorized' in snippet or
+                    'authentication failed' in snippet
+                ):
+                    return True
+        except Exception:
+            return False
+
+        return False
     
     def _append_query_param(self, url: str, key: str, value: str) -> str:
         parsed = urlparse(url)
@@ -530,15 +585,25 @@ class DownloadManager:
         
         # Skip if exists
         if dest_path is not None and dest_path.exists():
-            logger.info(f"✓ Already exists: {filename}")
-            return True, 'already_exists', 'skip'
+            if self._is_invalid_existing_file(dest_path, url):
+                logger.warning(
+                    f"Found invalid existing file for {filename}, removing and retrying download"
+                )
+                try:
+                    dest_path.unlink()
+                except Exception as e:
+                    logger.warning(f"Could not remove invalid file {dest_path}: {e}")
+                    return False, f"invalid_existing_file_cleanup_failed: {e}", 'precheck'
+            else:
+                logger.info(f"✓ Already exists: {filename}")
+                return True, 'already_exists', 'skip'
 
         # Validate Civitai token early for clearer errors
         if is_civitai_source and not self.civitai_token:
             reason = "CIVITAI_TOKEN is missing (required for Civitai downloads)"
             logger.error(reason)
             return False, reason, 'precheck'
-        
+
         # HuggingFace priority: always try HF CLI first for HF URLs (token optional).
         if 'huggingface.co' in url and self.hf_cli_path:
             result, reason = self._download_hf_direct(url, dest_dir, filename)
@@ -550,7 +615,12 @@ class DownloadManager:
             self._record_attempt(url, 'hf-hub-python', hub_ok, hub_reason)
             if hub_ok:
                 return True, 'ok', 'hf-hub-python'
-        
+
+            # Fail fast on deterministic auth errors (retry won't fix).
+            auth_failure = self._classify_hf_auth_error(f"{reason} || {hub_reason}")
+            if auth_failure:
+                return False, auth_failure, 'precheck'
+
         # Resolve Civitai URL with authenticated redirect handling
         if is_civitai_source:
             resolved_url, resolve_reason = self._resolve_civitai_download_url(url)
@@ -566,14 +636,24 @@ class DownloadManager:
                 filename = self._extract_filename(url)
             dest_path = dest_dir / filename
             if dest_path.exists():
-                logger.info(f"✓ Already exists: {filename}")
-                return True, 'already_exists', 'skip'
+                if self._is_invalid_existing_file(dest_path, url):
+                    logger.warning(
+                        f"Found invalid existing file for {filename}, removing and retrying download"
+                    )
+                    try:
+                        dest_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"Could not remove invalid file {dest_path}: {e}")
+                        return False, f"invalid_existing_file_cleanup_failed: {e}", 'precheck'
+                else:
+                    logger.info(f"✓ Already exists: {filename}")
+                    return True, 'already_exists', 'skip'
             if resolved_url != url:
                 logger.info("Resolved Civitai download URL via authenticated redirect")
         else:
             # Add CivitAI token for generic path if needed
             download_url = self._add_civitai_token(url)
-        
+
         # Download with aria2c or wget
         if self.has_aria2c:
             ok, reason = self._download_aria2c(
