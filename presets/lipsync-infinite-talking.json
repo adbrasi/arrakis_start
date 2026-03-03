@@ -2,8 +2,8 @@
   "name": "lipsync infinite talking",
   "description": "Wan/Kijai video stack with SCAIL, detection models, selected custom nodes, and SageAttention runtime",
   "use_sage_attention": true,
+  "comfyui_flags": [],
   "models": [
-
     {
       "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/InfiniteTalk/Wan2_1-InfiniTetalk-Single_fp16.safetensors?download=true",
       "dir": "diffusion_models",

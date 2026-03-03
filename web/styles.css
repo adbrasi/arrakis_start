@@ -115,6 +115,35 @@ section {
     white-space: nowrap;
 }
 
+.top-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.extra-flags-input {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-family: 'JetBrains Mono', monospace;
+    width: 260px;
+    outline: none;
+    transition: border-color 0.2s ease;
+}
+
+.extra-flags-input:focus {
+    border-color: var(--accent-primary);
+}
+
+.extra-flags-input::placeholder {
+    color: var(--text-muted);
+    font-family: 'Inter', system-ui, sans-serif;
+}
+
 .btn-restart {
     display: inline-flex;
     align-items: center;

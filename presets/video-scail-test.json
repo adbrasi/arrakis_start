@@ -2,6 +2,7 @@
   "name": "video scail test",
   "description": "Wan/Kijai video stack with SCAIL, detection models, selected custom nodes, and SageAttention runtime",
   "use_sage_attention": true,
+  "comfyui_flags": [],
   "models": [
     {
       "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/SCAIL/Wan21-14B-SCAIL-preview_comfy_bf16.safetensors?download=true",

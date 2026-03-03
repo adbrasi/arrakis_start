@@ -2,6 +2,7 @@
   "name": "LTX BASE",
   "description": "LTX COM ALGUNS LANCES",
   "use_sage_attention": false,
+  "comfyui_flags": [],
   "models": [
     {
       "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/LTX2_audio_vae_bf16.safetensors",

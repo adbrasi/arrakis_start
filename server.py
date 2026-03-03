@@ -167,16 +167,17 @@ class PresetHandler(SimpleHTTPRequestHandler):
             data = json.loads(body.decode())
             
             preset_names = data.get('presets', [])
-            logger.info(f"Installation request: {preset_names}")
-            
+            extra_flags = data.get('extra_flags', [])
+            logger.info(f"Installation request: {preset_names} (extra flags: {extra_flags})")
+
             # Start installation in background thread
             from start import install_presets
             from process_manager import ProcessManager
-            
+
             def install_and_restart():
                 state = _state_manager or get_state_manager()
                 pm = ProcessManager(state)
-                
+
                 # STEP 1: Always ensure ComfyUI is stopped (including stale PID state)
                 logger.info("Ensuring ComfyUI is stopped before installation...")
                 if not pm.ensure_stopped(timeout=20):
@@ -185,19 +186,19 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     print("="*60 + "\n")
                     logger.error("Failed to stop existing ComfyUI process/port before installation")
                     return
-                
+
                 # STEP 2: Install presets (this also saves preset flags to state)
                 logger.info(f"Installing presets: {preset_names}")
                 success = install_presets(preset_names, include_base=True)
-                
-                # STEP 3: Restart ComfyUI with new preset flags
+
+                # STEP 3: Restart ComfyUI with new preset flags (+ optional extra flags from UI)
                 if success:
                     print("\n" + "="*60)
                     print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
                     print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
                     print("="*60 + "\n")
                     logger.info("Installation complete, starting ComfyUI with preset flags...")
-                    started = pm.start()  # start() will automatically merge preset flags from state
+                    started = pm.start(flags=extra_flags if extra_flags else None)
                     if started:
                         logger.info("✓ ComfyUI started successfully")
                     else:

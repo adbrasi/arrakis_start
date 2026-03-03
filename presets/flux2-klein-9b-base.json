@@ -2,6 +2,7 @@
   "name": "Flux2 Klein 9B Base",
   "description": "FLUX.2 [klein] 9B base preset with community-tested nodes for edit/inpaint/acceleration and Klein LoRAs for testing.",
   "use_sage_attention": false,
+  "comfyui_flags": [],
   "models": [
     {
       "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",

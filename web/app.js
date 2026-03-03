@@ -273,11 +273,15 @@ async function startWithPresets() {
     showToast('Instalando presets e iniciando ComfyUI...', 'info');
 
     try {
+        const extraFlagsStr = document.getElementById('extra-flags-input').value.trim();
+        const extraFlags = extraFlagsStr ? extraFlagsStr.split(/\s+/).filter(Boolean) : [];
+
         const response = await fetch('/api/install', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                presets: selectedPresets
+                presets: selectedPresets,
+                extra_flags: extraFlags
             })
         });
 

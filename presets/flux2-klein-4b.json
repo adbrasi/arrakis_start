@@ -2,6 +2,7 @@
   "name": "Flux2 Klein 4B",
   "description": "FLUX.2 [klein] 4B distilled preset with core model/text encoder/VAE and 3 curated Civitai LoRAs for style and character tests.",
   "use_sage_attention": false,
+  "comfyui_flags": [],
   "models": [
     {
       "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/resolve/main/flux-2-klein-4b-fp8.safetensors",

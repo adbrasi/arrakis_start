@@ -2,6 +2,7 @@
   "name": "LTX2 FULL",
   "description": "LTX lip sync preset with LTX-2 dev checkpoint and full Gemma 3 12B QAT Q4_0 files",
   "use_sage_attention": true,
+  "comfyui_flags": [],
   "models": [
     {
       "url": "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev.safetensors?download=true",
