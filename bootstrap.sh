@@ -64,6 +64,13 @@ stop_template_comfy_processes() {
     fi
 }
 
+template_comfy_is_still_running() {
+    local template_dir="$1"
+    pgrep -f "$template_dir/main.py" >/dev/null 2>&1 && return 0
+    pgrep -f "comfy.*--workspace $template_dir" >/dev/null 2>&1 && return 0
+    return 1
+}
+
 cleanup_template_comfyui() {
     local template_dir="$1"
     local target_dir="$2"
@@ -100,7 +107,7 @@ cleanup_template_comfyui() {
 
     # 2) Stop leftover processes that may still hold 8818.
     stop_template_comfy_processes "$template_dir/main.py"
-    stop_template_comfy_processes "python.*ComfyUI/main.py"
+    stop_template_comfy_processes "python.*$template_dir/main.py"
     stop_template_comfy_processes "comfy.*--workspace $template_dir"
 
     # 3) Remove template ComfyUI folder only when it's not our target install dir.
@@ -111,6 +118,21 @@ cleanup_template_comfyui() {
         rm -rf --one-file-system "$template_dir"
         log_success "Template ComfyUI folder removed"
     fi
+
+    # 4) Soft validation: warn if cleanup was partial, but keep bootstrap running.
+    if template_comfy_is_still_running "$template_dir"; then
+        log_warn "Template ComfyUI process still running after cleanup attempt: $template_dir"
+    fi
+
+    if [ -d "$template_dir" ] && ! paths_match "$template_dir" "$target_dir"; then
+        log_warn "Template ComfyUI directory still exists after cleanup attempt: $template_dir"
+    fi
+
+    if [ -f "$template_supervisor_conf" ]; then
+        log_warn "Template supervisor config still active after cleanup attempt: $template_supervisor_conf"
+    fi
+
+    log_success "Template ComfyUI cleanup attempt completed"
 }
 
 torch_runtime_is_ready() {
