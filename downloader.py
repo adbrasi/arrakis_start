@@ -13,7 +13,7 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Tuple
-from urllib.parse import urlparse, unquote, parse_qsl, urlencode, urlunparse
+from urllib.parse import urlparse, unquote, parse_qsl, urlencode, urlunparse, urljoin
 import shutil
 import re
 import requests
@@ -162,9 +162,13 @@ class DownloadManager:
             return False
         if 'missing (required for civitai downloads)' in reason_lower:
             return False
+        if 'auth_redirect_login' in reason_lower:
+            return False
         if 'auth_http_401' in reason_lower or 'auth_http_403' in reason_lower:
             return False
         if '401 unauthorized' in reason_lower or '403 forbidden' in reason_lower:
+            return False
+        if 'requires you to be logged in' in reason_lower:
             return False
         if 'username/password authentication failed' in reason_lower:
             return False
@@ -296,15 +300,30 @@ class DownloadManager:
                 timeout=30
             )
             if response.status_code in (301, 302, 303, 307, 308):
-                location = response.headers.get('Location')
+                location = (response.headers.get('Location') or '').strip()
                 if location:
-                    return location, ""
+                    location_lower = location.lower()
+                    if location_lower.startswith('/login') or 'reason=download-auth' in location_lower:
+                        return None, (
+                            f"civitai_auth_http_401_auth_redirect_login "
+                            f"(token tail: {self._token_tail(self.civitai_token)})"
+                        )
+                    return urljoin(auth_url, location), ""
                 return None, f"civitai_redirect_without_location_{response.status_code}"
             if response.status_code == 200:
                 return auth_url, ""
             if response.status_code in (401, 403):
+                detail = ""
+                try:
+                    body = response.json() if response.content else {}
+                    msg = str(body.get('message') or body.get('error') or '').strip()
+                    if msg:
+                        detail = f": {msg}"
+                except Exception:
+                    detail = ""
                 return None, (
                     f"civitai_auth_http_{response.status_code} "
+                    f"{detail} "
                     f"(token tail: {self._token_tail(self.civitai_token)})"
                 )
             return None, f"civitai_resolve_http_{response.status_code}"
