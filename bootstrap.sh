@@ -16,6 +16,41 @@ log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
 
+run_with_progress() {
+    local label="$1"
+    shift
+
+    local interval="${LOG_HEARTBEAT_INTERVAL:-25}"
+    local start_ts now elapsed next_log_at
+    start_ts="$(date +%s)"
+    next_log_at=$((start_ts + interval))
+
+    "$@" &
+    local cmd_pid=$!
+
+    while kill -0 "$cmd_pid" >/dev/null 2>&1; do
+        sleep 1
+        now="$(date +%s)"
+        if [ "$now" -ge "$next_log_at" ] && kill -0 "$cmd_pid" >/dev/null 2>&1; then
+            elapsed=$((now - start_ts))
+            log_info "$label... ainda executando (${elapsed}s)"
+            next_log_at=$((now + interval))
+        fi
+    done
+
+    if wait "$cmd_pid"; then
+        now="$(date +%s)"
+        elapsed=$((now - start_ts))
+        log_success "$label concluido (${elapsed}s)"
+    else
+        local exit_code=$?
+        now="$(date +%s)"
+        elapsed=$((now - start_ts))
+        log_error "$label falhou apos ${elapsed}s (exit code $exit_code)"
+        return "$exit_code"
+    fi
+}
+
 path_real() {
     local path="$1"
     readlink -f "$path" 2>/dev/null || printf '%s' "$path"
@@ -198,15 +233,14 @@ fi
 # 1. Install system dependencies
 log_info "[1/4] Installing system dependencies..."
 
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
+run_with_progress "Atualizando indices do APT" apt-get update -qq
+run_with_progress "Instalando dependencias de sistema" apt-get install -y -qq --no-install-recommends \
     python3-venv \
     python3-pip \
     aria2 \
     git \
     wget \
-    curl \
-    2>/dev/null
+    curl
 
 # Install Cloudflared
 if ! command -v cloudflared &>/dev/null; then
@@ -214,7 +248,8 @@ if ! command -v cloudflared &>/dev/null; then
     mkdir -p --mode=0755 /usr/share/keyrings
     curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" | tee /etc/apt/sources.list.d/cloudflared.list
-    apt-get update -qq && apt-get install -y cloudflared
+    run_with_progress "Atualizando indices para instalar cloudflared" apt-get update -qq
+    run_with_progress "Instalando cloudflared" apt-get install -y cloudflared
 fi
 
 apt-get clean
@@ -235,10 +270,12 @@ else
 fi
 
 if [ "$COMFY_VENV_CREATED" -eq 1 ]; then
-    "$COMFY_PYTHON" -m pip install -q --upgrade pip wheel setuptools comfy-cli
+    run_with_progress "Instalando tooling base do venv ComfyUI (pip/wheel/setuptools/comfy-cli)" \
+        "$COMFY_PYTHON" -m pip install -q --upgrade pip wheel setuptools comfy-cli
 elif [ ! -x "$COMFY_CLI" ]; then
     log_warn "comfy-cli não encontrado no venv; instalando..."
-    "$COMFY_PYTHON" -m pip install -q --upgrade comfy-cli
+    run_with_progress "Instalando comfy-cli no venv ComfyUI" \
+        "$COMFY_PYTHON" -m pip install -q --upgrade comfy-cli
 else
     log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
 fi
@@ -258,7 +295,8 @@ log_info "[3/5] Installing ComfyUI..."
 if [ -f "$COMFY_DIR/main.py" ]; then
     log_warn "ComfyUI already exists, skipping installation"
 else
-    "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --fast-deps --nvidia
+    run_with_progress "Instalando ComfyUI (comfy-cli)" \
+        "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --fast-deps --nvidia
     log_success "ComfyUI installed"
 fi
 
@@ -267,7 +305,8 @@ fi
 if [ -f "$COMFY_DIR/requirements.txt" ]; then
     if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
         log_info "Syncing ComfyUI core requirements..."
-        "$COMFY_PYTHON" -m pip install -q --upgrade -r "$COMFY_DIR/requirements.txt"
+        run_with_progress "Instalando dependencias core do ComfyUI" \
+            "$COMFY_PYTHON" -m pip install -q --upgrade -r "$COMFY_DIR/requirements.txt"
         mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
         log_success "ComfyUI core requirements synced"
     else
@@ -282,7 +321,8 @@ if torch_runtime_is_ready; then
     log_info "PyTorch nightly cu128 já está correto no runtime; pulando reinstall"
 else
     log_info "PyTorch ausente/incompatível; instalando nightly cu128 no runtime..."
-    "$COMFY_PYTHON" -m pip install --pre --upgrade --force-reinstall \
+    run_with_progress "Instalando PyTorch nightly cu128 (pode demorar)" \
+        "$COMFY_PYTHON" -m pip install --pre --upgrade --force-reinstall \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/nightly/cu128
 
@@ -310,14 +350,16 @@ if [ -d "$ARRAKIS_DIR/.git" ]; then
     log_info "Updating Arrakis Start..."
     # Configure remote URL with token (if available) before pulling
     git -C "$ARRAKIS_DIR" remote set-url origin "$ARRAKIS_CLONE_URL" 2>/dev/null || true
-    if timeout 45 git -C "$ARRAKIS_DIR" pull --ff-only; then
+    if run_with_progress "Atualizando repositorio Arrakis Start (git pull)" \
+        timeout 45 git -C "$ARRAKIS_DIR" pull --ff-only; then
         log_success "Arrakis Start atualizado"
     else
         log_warn "Update pulado (timeout, rede ou bloqueio de git). Continuando com versão local."
     fi
 else
     log_info "Cloning Arrakis Start..."
-    if timeout 45 git clone --depth 1 "$ARRAKIS_CLONE_URL" "$ARRAKIS_DIR"; then
+    if run_with_progress "Clonando repositorio Arrakis Start" \
+        timeout 45 git clone --depth 1 "$ARRAKIS_CLONE_URL" "$ARRAKIS_DIR"; then
         log_success "Arrakis Start clonado"
     else
         # Fallback: if repo doesn't exist yet, copy from current directory
@@ -343,10 +385,13 @@ else
     log_info "Arrakis virtual environment already exists"
 fi
 
-"$ARRAKIS_PYTHON" -m pip install -q --upgrade pip wheel setuptools
+run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptools)" \
+    "$ARRAKIS_PYTHON" -m pip install -q --upgrade pip wheel setuptools
 # HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps)
-"$ARRAKIS_PYTHON" -m pip install -q --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
-"$ARRAKIS_PYTHON" -m pip install -q --upgrade -r "$ARRAKIS_DIR/requirements.txt"
+run_with_progress "Instalando huggingface_hub[cli] + hf_xet no venv Arrakis" \
+    "$ARRAKIS_PYTHON" -m pip install -q --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
+run_with_progress "Instalando requirements do Arrakis" \
+    "$ARRAKIS_PYTHON" -m pip install -q --upgrade -r "$ARRAKIS_DIR/requirements.txt"
 log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
 
 log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
