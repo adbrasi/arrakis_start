@@ -126,6 +126,36 @@ The web UI will automatically detect and display new presets.
 
 ---
 
+## Workflows por Preset
+
+Alguns presets têm um workflow ComfyUI recomendado. Você pode disponibilizá-lo para download direto na UI do Arrakis Start.
+
+### Como adicionar um workflow a um preset
+
+1. Coloque o arquivo `.json` do workflow na pasta `workflows/`:
+
+```
+arrakis_start/
+└── workflows/
+    └── ltx-lip-sync.json
+```
+
+2. Adicione a chave `"workflow"` no preset correspondente:
+
+```json
+{
+  "name": "ltx lip sync",
+  "workflow": "ltx-lip-sync.json",
+  ...
+}
+```
+
+Na UI, o card do preset exibirá um botão **Workflow** — ao clicar, o arquivo é baixado direto para o computador do usuário. Basta arrastar o `.json` para o ComfyUI.
+
+> **Nota:** a chave `"workflow_url"` (URL externa) ainda é suportada para links de workflow hospedados externamente. A chave `"workflow"` (arquivo local) tem prioridade quando ambas estiverem presentes.
+
+---
+
 ## Environment Variables
 
 | Variable | Description | Required |
@@ -152,6 +182,8 @@ arrakis_start/
 │   ├── base.json
 │   ├── qwen-image.json
 │   └── sdxl-anime.json
+├── workflows/            # ComfyUI workflow files (download via UI)
+│   └── *.json
 └── web/                  # Selector UI
     ├── index.html
     ├── app.js

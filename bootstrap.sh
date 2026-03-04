@@ -297,8 +297,19 @@ fi
 # 4. Clone/update Arrakis Start
 log_info "[4/5] Setting up Arrakis Start..."
 
+# Build authenticated GitHub URL if GITHUB_TOKEN is set
+GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+if [ -n "$GITHUB_TOKEN" ]; then
+    ARRAKIS_CLONE_URL="https://${GITHUB_TOKEN}@github.com/adbrasi/arrakis_start.git"
+    log_info "GitHub token detected — using authenticated clone URL"
+else
+    ARRAKIS_CLONE_URL="https://github.com/adbrasi/arrakis_start.git"
+fi
+
 if [ -d "$ARRAKIS_DIR/.git" ]; then
     log_info "Updating Arrakis Start..."
+    # Configure remote URL with token (if available) before pulling
+    git -C "$ARRAKIS_DIR" remote set-url origin "$ARRAKIS_CLONE_URL" 2>/dev/null || true
     if timeout 45 git -C "$ARRAKIS_DIR" pull --ff-only; then
         log_success "Arrakis Start atualizado"
     else
@@ -306,7 +317,7 @@ if [ -d "$ARRAKIS_DIR/.git" ]; then
     fi
 else
     log_info "Cloning Arrakis Start..."
-    if timeout 45 git clone --depth 1 https://github.com/adbrasi/arrakis_start.git "$ARRAKIS_DIR"; then
+    if timeout 45 git clone --depth 1 "$ARRAKIS_CLONE_URL" "$ARRAKIS_DIR"; then
         log_success "Arrakis Start clonado"
     else
         # Fallback: if repo doesn't exist yet, copy from current directory

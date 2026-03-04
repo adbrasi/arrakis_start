@@ -212,10 +212,14 @@ function createPresetCard(preset) {
         const wfLink = document.createElement('a');
         wfLink.className = 'workflow-link';
         wfLink.href = preset.workflow_url;
-        wfLink.target = '_blank';
-        wfLink.rel = 'noopener';
         wfLink.title = 'Baixar workflow (arraste para o ComfyUI)';
         wfLink.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 12l-4-4h2.5V2h3v6H12L8 12zm-6 2h12v1.5H2V14z"/></svg> Workflow`;
+        if (preset.workflow_local) {
+            wfLink.download = preset.workflow_file || 'workflow.json';
+        } else {
+            wfLink.target = '_blank';
+            wfLink.rel = 'noopener';
+        }
         wfLink.addEventListener('click', (e) => e.stopPropagation());
         footer.appendChild(wfLink);
     }

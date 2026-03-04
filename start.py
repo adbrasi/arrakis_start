@@ -49,6 +49,12 @@ SAGEATTENTION_INSTALLER_URL = os.environ.get(
 SAGEATTENTION_INSTALL_ATTEMPTS = int(os.environ.get('SAGEATTENTION_INSTALL_ATTEMPTS', '3'))
 SAGEATTENTION_RETRY_DELAY_SECONDS = int(os.environ.get('SAGEATTENTION_RETRY_DELAY_SECONDS', '8'))
 
+# GitHub token for private repositories (GITHUB_TOKEN or GH_TOKEN)
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', '')
+
+# GitHub token for private repositories (GITHUB_TOKEN or GH_TOKEN)
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', '')
+
 
 def _comfy_python() -> str:
     """Return ComfyUI runtime python executable."""
@@ -58,6 +64,13 @@ def _comfy_python() -> str:
         f"ComfyUI python not found at {COMFY_PYTHON}; falling back to current interpreter"
     )
     return sys.executable
+
+
+def _inject_github_token(url: str) -> str:
+    """Inject GITHUB_TOKEN into a GitHub HTTPS URL for private repo access."""
+    if GITHUB_TOKEN and 'github.com' in url and url.startswith('https://'):
+        return url.replace('https://', f'https://{GITHUB_TOKEN}@', 1)
+    return url
 
 
 def load_presets() -> List[Dict]:
@@ -560,10 +573,13 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
                 dest.rename(backup)
 
             logger.info(f"Cloning: {node_name}")
+            clone_url = _inject_github_token(url)
+            if clone_url != url:
+                logger.info(f"Using authenticated URL for: {node_name}")
             clone_ok = False
             for attempt in range(1, 3):
                 clone = subprocess.run(
-                    ['git', 'clone', '--depth', '1', url, str(dest)],
+                    ['git', 'clone', '--depth', '1', clone_url, str(dest)],
                     check=False,
                     capture_output=True,
                     text=True

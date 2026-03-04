@@ -39,6 +39,9 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self._handle_get_presets()
         elif self.path == '/api/status':
             self._handle_get_status()
+        elif self.path.startswith('/api/workflows/'):
+            filename = self.path[len('/api/workflows/'):]
+            self._handle_get_workflow(filename)
         else:
             # Serve static files
             super().do_GET()
@@ -76,13 +79,23 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 if preset_name.lower() == 'base':
                     continue
                 
+                # Resolve workflow: local file takes priority over external URL
+                workflow_file = p.get('workflow', '')
+                workflow_url = p.get('workflow_url', '')
+                workflow_local = False
+                if workflow_file:
+                    workflow_url = f'/api/workflows/{workflow_file}'
+                    workflow_local = True
+
                 clean = {
                     'name': preset_name,
                     'description': p.get('description', ''),
                     'models_count': len(p.get('models', [])),
                     'nodes_count': len(p.get('nodes', [])),
                     'installed': preset_name in installed_presets,
-                    'workflow_url': p.get('workflow_url', '')
+                    'workflow_url': workflow_url,
+                    'workflow_local': workflow_local,
+                    'workflow_file': workflow_file,
                 }
                 clean_presets.append(clean)
             
@@ -96,6 +109,33 @@ class PresetHandler(SimpleHTTPRequestHandler):
             logger.error(f"Failed to get presets: {e}")
             self.send_error(500, str(e))
     
+    def _handle_get_workflow(self, filename):
+        """Serve a workflow file from the workflows/ directory"""
+        try:
+            # Prevent path traversal
+            if '/' in filename or '..' in filename or not filename.endswith('.json'):
+                self.send_error(400, 'Invalid filename')
+                return
+
+            workflows_dir = Path(__file__).parent / 'workflows'
+            workflow_path = workflows_dir / filename
+
+            if not workflow_path.exists():
+                self.send_error(404, 'Workflow not found')
+                return
+
+            content = workflow_path.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(content)
+
+        except Exception as e:
+            logger.error(f"Failed to serve workflow {filename}: {e}")
+            self.send_error(500, str(e))
+
     def _handle_get_status(self):
         """Return ComfyUI status"""
         try:

@@ -43,6 +43,11 @@
       "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/LTX2_audio_vae_bf16.safetensors",
       "dir": "vae",
       "filename": "LTX2_audio_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/taeltx_2.safetensors",
+      "dir": "vae",
+      "filename": "taeltx_2.safetensors"
     }
   ],
   "nodes": [
