@@ -7,6 +7,7 @@
   "nodes": [
     "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
-    "https://github.com/rgthree/rgthree-comfy"
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/adbrasi/comfyui-media-collector"
   ]
 }

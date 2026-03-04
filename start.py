@@ -73,6 +73,28 @@ def _inject_github_token(url: str) -> str:
     return url
 
 
+def should_ignore_preset_file(preset_file: Path) -> bool:
+    """Return True when a preset file is intentionally disabled/hidden."""
+    name = preset_file.name
+    lower_name = name.lower()
+
+    # Hidden preset file (e.g. .illustrious_3d_test.json)
+    if name.startswith('.'):
+        logger.info(f"Ignoring hidden preset file: {name}")
+        return True
+
+    # Explicitly disabled preset file (e.g. illustrious_3d_test.json.ignore)
+    if lower_name.endswith('.ignore'):
+        logger.info(f"Ignoring disabled preset file (.ignore): {name}")
+        return True
+
+    # Only .json files are valid preset files
+    if not lower_name.endswith('.json'):
+        return True
+
+    return False
+
+
 def load_presets() -> List[Dict]:
     """Load all preset JSON files from presets/ directory"""
     presets = []
@@ -81,7 +103,9 @@ def load_presets() -> List[Dict]:
         logger.warning(f"Presets directory not found: {PRESETS_DIR}")
         return presets
 
-    for preset_file in PRESETS_DIR.glob('*.json'):
+    for preset_file in sorted(PRESETS_DIR.iterdir(), key=lambda p: p.name.lower()):
+        if not preset_file.is_file() or should_ignore_preset_file(preset_file):
+            continue
         try:
             with open(preset_file, 'r', encoding='utf-8') as f:
                 preset = json.load(f)
