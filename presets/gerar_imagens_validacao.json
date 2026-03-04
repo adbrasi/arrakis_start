@@ -1,6 +1,7 @@
 {
   "name": "Gerar imagens de validação",
   "description": "Um preset + workflow Illustrious que gera imagens aleatorias se baseando em artistas ja presentes no modelo base para maxima randomicidade.",
+  "workflow": "gerador_rapido_validar.json",
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
@@ -18,6 +19,10 @@
     "https://github.com/adbrasi/comfydodi",
     "https://github.com/pythongosssss/ComfyUI-WD14-Tagger",
     "https://github.com/adbrasi/randomsizito",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/Cezarsaint/blacklisto",
+    "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
     "https://github.com/adbrasi/comfyui-hf-ultimate-uploader"
   ]
 }
