@@ -271,11 +271,11 @@ fi
 
 if [ "$COMFY_VENV_CREATED" -eq 1 ]; then
     run_with_progress "Instalando tooling base do venv ComfyUI (pip/wheel/setuptools/comfy-cli)" \
-        "$COMFY_PYTHON" -m pip install -q --upgrade pip wheel setuptools comfy-cli
+        "$COMFY_PYTHON" -m pip install --progress-bar on --upgrade pip wheel setuptools comfy-cli
 elif [ ! -x "$COMFY_CLI" ]; then
     log_warn "comfy-cli não encontrado no venv; instalando..."
     run_with_progress "Instalando comfy-cli no venv ComfyUI" \
-        "$COMFY_PYTHON" -m pip install -q --upgrade comfy-cli
+        "$COMFY_PYTHON" -m pip install --progress-bar on --upgrade comfy-cli
 else
     log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
 fi
@@ -306,7 +306,7 @@ if [ -f "$COMFY_DIR/requirements.txt" ]; then
     if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
         log_info "Syncing ComfyUI core requirements..."
         run_with_progress "Instalando dependencias core do ComfyUI" \
-            "$COMFY_PYTHON" -m pip install -q --upgrade -r "$COMFY_DIR/requirements.txt"
+            "$COMFY_PYTHON" -m pip install --progress-bar on --upgrade -r "$COMFY_DIR/requirements.txt"
         mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
         log_success "ComfyUI core requirements synced"
     else
@@ -386,12 +386,12 @@ else
 fi
 
 run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptools)" \
-    "$ARRAKIS_PYTHON" -m pip install -q --upgrade pip wheel setuptools
+    "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade pip wheel setuptools
 # HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps)
 run_with_progress "Instalando huggingface_hub[cli] + hf_xet no venv Arrakis" \
-    "$ARRAKIS_PYTHON" -m pip install -q --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
+    "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
 run_with_progress "Instalando requirements do Arrakis" \
-    "$ARRAKIS_PYTHON" -m pip install -q --upgrade -r "$ARRAKIS_DIR/requirements.txt"
+    "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade -r "$ARRAKIS_DIR/requirements.txt"
 log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
 
 log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."

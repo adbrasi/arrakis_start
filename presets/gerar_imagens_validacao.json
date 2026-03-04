@@ -13,6 +13,8 @@
   "nodes": [
     "https://github.com/pythongosssss/ComfyUI-WD14-Tagger",
     "https://github.com/adbrasi/cezarsave34",
+    "https://github.com/ltdrdata/was-node-suite-comfyui",
+    "https://github.com/adbrasi/Importador",
     "https://github.com/adbrasi/comfyui-hf-ultimate-uploader"
   ]
 }
