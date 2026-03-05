@@ -533,8 +533,11 @@ class DownloadManager:
                 self._report_progress("Download cancelled", i, total)
                 return False
             
-            self._report_progress(f"[{i}/{total}] {filename or 'file'}", i, total)
-            
+            domain = urlparse(url).netloc or url[:40]
+            self._report_progress(
+                f"[{i}/{total}] Baixando: {filename or 'arquivo'} ({domain})", i, total
+            )
+
             # Retry logic: up to 3 attempts
             max_retries = 3
             for attempt in range(1, max_retries + 1):
@@ -730,7 +733,7 @@ class DownloadManager:
             filename = Path(file_path).name
 
         xet_label = " [XET]" if self.has_hf_xet else ""
-        logger.info(f"Downloading from HuggingFace{xet_label}: {repo_id}/{file_path}")
+        logger.info(f"━━ HuggingFace{xet_label}: {repo_id}/{file_path} → {filename}")
 
         # Configure environment for maximum download speed
         env = os.environ.copy()
@@ -768,12 +771,15 @@ class DownloadManager:
             tail = deque(maxlen=12)
             last_logged_pct = -10  # log every ~10% change
             last_log_ts = time.monotonic()
+            last_activity_ts = time.monotonic()
+            heartbeat_interval = 20  # warn if silent for this many seconds
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
                 if not stripped:
                     continue
                 tail.append(stripped)
+                last_activity_ts = time.monotonic()
 
                 # Parse tqdm-style progress:
                 #   model.safetensors: 45%|████▌     | 1.23G/2.75G [00:12<00:15, 102MB/s]
@@ -801,9 +807,9 @@ class DownloadManager:
                     if HAS_WEBSOCKET:
                         send_download_progress(filename, percent, speed, eta)
 
-                    # Log progress periodically (every ~10% or every 15s)
+                    # Log progress periodically (every ~10% or every 20s)
                     now = time.monotonic()
-                    if percent - last_logged_pct >= 10 or (now - last_log_ts) > 15:
+                    if percent - last_logged_pct >= 10 or (now - last_log_ts) > 20:
                         size_info = pct_match.group(2).strip()
                         speed_str = f" @ {speed}" if speed else ""
                         eta_str = f" ETA {eta}" if eta else ""
@@ -813,10 +819,22 @@ class DownloadManager:
                         last_logged_pct = percent
                         last_log_ts = now
                 else:
-                    # Log non-progress lines (errors, warnings, etc.)
-                    # Skip pure bar-render fragments
+                    # Non-progress lines: promote important ones to info, skip bar fragments
                     if not stripped.startswith('|') and '%|' not in stripped:
-                        logger.debug(f"  [hf] {stripped}")
+                        line_lower = stripped.lower()
+                        if any(kw in line_lower for kw in ('error', 'warning', 'failed', 'unauthorized', 'forbidden', 'downloading', 'fetching')):
+                            logger.info(f"  [hf] {stripped}")
+                        else:
+                            logger.debug(f"  [hf] {stripped}")
+                    # Heartbeat: log if no progress update appeared for a while
+                    now = time.monotonic()
+                    if (now - last_log_ts) > heartbeat_interval:
+                        elapsed = now - last_activity_ts
+                        logger.info(
+                            f"  ↓ {filename}: aguardando dados do HuggingFace... "
+                            f"({elapsed:.0f}s sem atualização de progresso)"
+                        )
+                        last_log_ts = now
 
             process.wait()
             self.current_process = None
@@ -969,6 +987,10 @@ class DownloadManager:
             last_progress_ts = time.monotonic()
             last_percent = 0.0
             last_logged_pct = -10
+            last_log_ts = time.monotonic()
+            stall_warn_seconds = max(30, self.aria2_stall_timeout_seconds // 4)
+            stall_warned = False
+            last_speed_zero_warned = False
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
@@ -982,44 +1004,65 @@ class DownloadManager:
                     percent = float(match.group(1))
                     speed = match.group(2) + "/s"
                     eta = match.group(3) or ""
+                    now = time.monotonic()
+                    speed_is_zero = match.group(2).startswith("0B")
 
                     if HAS_WEBSOCKET:
                         send_download_progress(filename, percent, speed, eta)
 
-                    # Log progress periodically
-                    if percent - last_logged_pct >= 10:
+                    # Warn when speed drops to zero
+                    if speed_is_zero and not last_speed_zero_warned:
+                        logger.warning(f"  ⚠ {filename}: velocidade caiu para 0 — aguardando conexão...")
+                        last_speed_zero_warned = True
+                    elif not speed_is_zero:
+                        last_speed_zero_warned = False
+                        stall_warned = False
+
+                    # Log progress periodically (every ~10% or every 30s)
+                    if percent - last_logged_pct >= 10 or (now - last_log_ts) > 30:
                         eta_str = f" ETA {eta}" if eta else ""
                         logger.info(f"  ↓ {filename}: {percent:.0f}% @ {speed}{eta_str}")
                         last_logged_pct = percent
+                        last_log_ts = now
 
                     # Track forward progress
                     if percent > (last_percent + 0.01):
                         last_percent = percent
-                        last_progress_ts = time.monotonic()
-                    elif not speed.startswith("0B"):
-                        last_progress_ts = time.monotonic()
+                        last_progress_ts = now
+                    elif not speed_is_zero:
+                        last_progress_ts = now
                 else:
-                    # Log non-progress lines (download start, errors, etc.)
+                    # Non-progress lines: promote important ones to info
                     if not stripped.startswith('[#') and not stripped.startswith('***'):
-                        logger.debug(f"  [aria2c] {stripped}")
+                        line_lower = stripped.lower()
+                        if any(kw in line_lower for kw in ('error', 'download', 'redirect', 'connect', 'warning', 'exception')):
+                            logger.info(f"  [aria2c] {stripped}")
+                        else:
+                            logger.debug(f"  [aria2c] {stripped}")
 
                 # Guard against stalled aria2c sessions (e.g., DL:0B forever)
-                if (
-                    self.aria2_stall_timeout_seconds > 0 and
-                    process.poll() is None and
-                    (time.monotonic() - last_progress_ts) > self.aria2_stall_timeout_seconds
-                ):
-                    logger.error(
-                        f"aria2c stall timeout for {filename or url} "
-                        f"(no progress for {self.aria2_stall_timeout_seconds}s), killing process"
-                    )
-                    process.kill()
-                    process.wait()
-                    self.current_process = None
-                    reason = f"aria2c_stall_timeout_{self.aria2_stall_timeout_seconds}s"
-                    if tail:
-                        reason = f"{reason} | tail: {' || '.join(tail)}"
-                    return False, reason
+                now = time.monotonic()
+                stall_elapsed = now - last_progress_ts
+                if self.aria2_stall_timeout_seconds > 0 and process.poll() is None:
+                    if not stall_warned and stall_elapsed > stall_warn_seconds:
+                        logger.warning(
+                            f"  ⚠ {filename}: sem progresso há {stall_elapsed:.0f}s "
+                            f"(timeout em {self.aria2_stall_timeout_seconds}s) — "
+                            f"internet lenta ou travado?"
+                        )
+                        stall_warned = True
+                    if stall_elapsed > self.aria2_stall_timeout_seconds:
+                        logger.error(
+                            f"aria2c stall timeout para {filename or url} "
+                            f"(sem progresso por {self.aria2_stall_timeout_seconds}s), encerrando"
+                        )
+                        process.kill()
+                        process.wait()
+                        self.current_process = None
+                        reason = f"aria2c_stall_timeout_{self.aria2_stall_timeout_seconds}s"
+                        if tail:
+                            reason = f"{reason} | tail: {' || '.join(tail)}"
+                        return False, reason
 
             process.wait()
             self.current_process = None
@@ -1084,6 +1127,7 @@ class DownloadManager:
 
             tail = deque(maxlen=12)
             last_logged_pct = -10
+            last_log_ts = time.monotonic()
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
@@ -1097,13 +1141,23 @@ class DownloadManager:
                     percent = float(match.group(1))
                     speed = match.group(2)
                     eta = match.group(3)
+                    now = time.monotonic()
 
                     if HAS_WEBSOCKET:
                         send_download_progress(dest_path.name, percent, speed, eta)
 
-                    if percent - last_logged_pct >= 10:
+                    # Log every ~10% or every 30s
+                    if percent - last_logged_pct >= 10 or (now - last_log_ts) > 30:
                         logger.info(f"  ↓ {dest_path.name}: {percent:.0f}% @ {speed} ETA {eta}")
                         last_logged_pct = percent
+                        last_log_ts = now
+                else:
+                    # Promote important wget lines to info
+                    line_lower = stripped.lower()
+                    if any(kw in line_lower for kw in ('error', 'failed', 'redirect', 'location', 'saving')):
+                        logger.info(f"  [wget] {stripped}")
+                    elif stripped and not stripped.startswith('%'):
+                        logger.debug(f"  [wget] {stripped}")
             
             process.wait()
             self.current_process = None
