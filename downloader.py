@@ -770,9 +770,11 @@ class DownloadManager:
 
             tail = deque(maxlen=12)
             last_logged_pct = -10  # log every ~10% change
+            download_start_ts = time.monotonic()
             last_log_ts = time.monotonic()
             last_activity_ts = time.monotonic()
             heartbeat_interval = 20  # warn if silent for this many seconds
+            had_progress = False  # track if we ever saw tqdm progress
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
@@ -792,6 +794,7 @@ class DownloadManager:
                     stripped
                 )
                 if pct_match:
+                    had_progress = True
                     percent = float(pct_match.group(1))
                     timing_info = pct_match.group(3)
 
@@ -871,7 +874,20 @@ class DownloadManager:
                         logger.error(reason)
                         return False, reason
 
-                logger.info(f"✓ Downloaded from HF{xet_label}: {filename}")
+                # Calculate speed from file size and elapsed time
+                elapsed = time.monotonic() - download_start_ts
+                speed_str = ""
+                if elapsed > 0.5 and target.exists():
+                    size_bytes = target.stat().st_size
+                    if size_bytes > 0:
+                        speed_bps = size_bytes / elapsed
+                        if speed_bps >= 1_073_741_824:
+                            speed_str = f" ({speed_bps / 1_073_741_824:.1f} GB/s, {elapsed:.0f}s)"
+                        elif speed_bps >= 1_048_576:
+                            speed_str = f" ({speed_bps / 1_048_576:.0f} MB/s, {elapsed:.0f}s)"
+                        else:
+                            speed_str = f" ({speed_bps / 1024:.0f} KB/s, {elapsed:.0f}s)"
+                logger.info(f"✓ Downloaded from HF{xet_label}: {filename}{speed_str}")
                 return True, ""
             else:
                 logger.error(f"HF download failed with code {process.returncode}")
@@ -906,6 +922,7 @@ class DownloadManager:
             os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
             os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
+            dl_start = time.monotonic()
             downloaded_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=file_path,
@@ -918,7 +935,18 @@ class DownloadManager:
             if downloaded.resolve() != target.resolve():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(downloaded), str(target))
-            logger.info(f"✓ Downloaded from huggingface_hub (Python API): {filename}")
+
+            elapsed = time.monotonic() - dl_start
+            speed_str = ""
+            if elapsed > 0.5 and target.exists():
+                size_bytes = target.stat().st_size
+                if size_bytes > 0:
+                    speed_bps = size_bytes / elapsed
+                    if speed_bps >= 1_048_576:
+                        speed_str = f" ({speed_bps / 1_048_576:.0f} MB/s, {elapsed:.0f}s)"
+                    else:
+                        speed_str = f" ({speed_bps / 1024:.0f} KB/s, {elapsed:.0f}s)"
+            logger.info(f"✓ Downloaded from huggingface_hub (Python API): {filename}{speed_str}")
             return True, ""
         except Exception as e:
             return False, f"hf_hub_python_exception: {e}"
