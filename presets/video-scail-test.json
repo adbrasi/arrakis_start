@@ -1,5 +1,5 @@
 {
-  "name": "video scail test",
+  "name": "Dança com Scail + Wan",
   "description": "Wan/Kijai video stack with SCAIL, detection models, selected custom nodes, and SageAttention runtime",
   "workflow": "scail_danceV0-1.json",
   "use_sage_attention": true,
