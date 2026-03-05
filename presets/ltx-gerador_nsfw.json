@@ -1,6 +1,7 @@
 {
   "name": "LTX GERADOR OFICIAL NSFW",
   "description": "GERAÇÃO DE NSFW COM LTX - USANDO NOSSO LORA ESPECIALIZADO.",
+  "workflow": "padrao_ltx2_arrakisV1-3.json",
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [

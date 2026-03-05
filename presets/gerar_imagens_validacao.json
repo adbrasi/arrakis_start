@@ -1,7 +1,7 @@
 {
   "name": "Gerar imagens de validação",
   "description": "Um preset + workflow Illustrious que gera imagens aleatorias se baseando em artistas ja presentes no modelo base para maxima randomicidade.",
-  "workflow": "gerador_rapido_validar.json",
+  "workflow": "gerador_rapido_validador.json",
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
