@@ -1,6 +1,7 @@
 {
   "name": "seedvr tester",
   "description": "Minimal preset with SeedVR, VideoHelperSuite, rgthree, and SageAttention runtime",
+  "workflow": "seedvr_tester.json",
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [],
