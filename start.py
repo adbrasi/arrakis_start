@@ -85,7 +85,7 @@ def should_ignore_preset_file(preset_file: Path) -> bool:
 
     # Explicitly disabled preset file (e.g. illustrious_3d_test.json.ignore)
     if lower_name.endswith('.ignore'):
-        logger.info(f"Ignoring disabled preset file (.ignore): {name}")
+        logger.debug(f"Ignoring disabled preset file (.ignore): {name}")
         return True
 
     # Only .json files are valid preset files
@@ -111,10 +111,12 @@ def load_presets() -> List[Dict]:
                 preset = json.load(f)
                 preset['_filename'] = preset_file.name
                 presets.append(preset)
-                logger.info(f"Loaded preset: {preset.get('name', preset_file.name)}")
+                logger.debug(f"Loaded preset: {preset.get('name', preset_file.name)}")
         except Exception as e:
             logger.error(f"Failed to load preset {preset_file}: {e}")
 
+    names = ", ".join(p.get('name', p['_filename']) for p in presets)
+    logger.info(f"Presets carregados ({len(presets)}): {names}")
     return presets
 
 # Global tracker for cancellation
