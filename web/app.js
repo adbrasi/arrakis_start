@@ -317,6 +317,25 @@ async function startWithPresets() {
 }
 
 // ============================================
+// Shutdown
+// ============================================
+async function shutdownArrakis() {
+    if (!confirm('Tem certeza que deseja desligar o Arrakis Start e o ComfyUI?')) return;
+    try {
+        const response = await fetch('/api/shutdown', { method: 'POST' });
+        if (response.ok) {
+            showToast('Arrakis Start desligando...', 'success');
+            document.getElementById('shutdown-btn').disabled = true;
+            document.getElementById('shutdown-btn').textContent = 'Desligando...';
+        } else {
+            showToast('Falha ao desligar.', 'error');
+        }
+    } catch (error) {
+        showToast('Arrakis Start desligado.', 'success');
+    }
+}
+
+// ============================================
 // Initialize
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
@@ -324,4 +343,5 @@ document.addEventListener('DOMContentLoaded', () => {
     startStatusPolling();
     document.getElementById('start-btn').addEventListener('click', startWithPresets);
     document.getElementById('restart-btn').addEventListener('click', restartComfyUI);
+    document.getElementById('shutdown-btn').addEventListener('click', shutdownArrakis);
 });

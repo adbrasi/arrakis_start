@@ -52,6 +52,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self._handle_install()
         elif self.path == '/api/restart':
             self._handle_restart()
+        elif self.path == '/api/shutdown':
+            self._handle_shutdown()
         else:
             self.send_error(404)
     
@@ -166,23 +168,26 @@ class PresetHandler(SimpleHTTPRequestHandler):
             state = _state_manager or get_state_manager()
 
             def do_restart():
-                pm = ProcessManager(state)
-                logger.info("Restart requested via web UI")
+                try:
+                    pm = ProcessManager(state)
+                    logger.info("Restart requested via web UI")
 
-                # Stop ComfyUI
-                if not pm.ensure_stopped(timeout=20):
-                    logger.error("Failed to stop ComfyUI for restart")
-                    return
+                    # Stop ComfyUI
+                    if not pm.ensure_stopped(timeout=20):
+                        logger.error("Failed to stop ComfyUI for restart")
+                        return
 
-                import time
-                time.sleep(2)
+                    import time
+                    time.sleep(2)
 
-                # Start with existing preset flags from state
-                started = pm.start()
-                if started:
-                    logger.info("ComfyUI restarted successfully via web UI")
-                else:
-                    logger.error("ComfyUI failed to start after restart")
+                    # Start with existing preset flags from state
+                    started = pm.start()
+                    if started:
+                        logger.info("ComfyUI restarted successfully via web UI")
+                    else:
+                        logger.error("ComfyUI failed to start after restart")
+                except Exception as e:
+                    logger.error(f"Restart thread error: {e}")
 
             thread = threading.Thread(target=do_restart, daemon=True)
             thread.start()
@@ -202,7 +207,11 @@ class PresetHandler(SimpleHTTPRequestHandler):
     def _handle_install(self):
         """Handle preset installation request"""
         try:
-            content_length = int(self.headers['Content-Length'])
+            cl = self.headers.get('Content-Length')
+            if not cl:
+                self.send_error(411, 'Content-Length required')
+                return
+            content_length = int(cl)
             body = self.rfile.read(content_length)
             data = json.loads(body.decode())
             
@@ -215,39 +224,42 @@ class PresetHandler(SimpleHTTPRequestHandler):
             from process_manager import ProcessManager
 
             def install_and_restart():
-                state = _state_manager or get_state_manager()
-                pm = ProcessManager(state)
+                try:
+                    state = _state_manager or get_state_manager()
+                    pm = ProcessManager(state)
 
-                # STEP 1: Always ensure ComfyUI is stopped (including stale PID state)
-                logger.info("Ensuring ComfyUI is stopped before installation...")
-                if not pm.ensure_stopped(timeout=20):
-                    print("\n" + "="*60)
-                    print("\033[1;31m❌ ERRO AO PARAR COMFYUI ❌\033[0m")
-                    print("="*60 + "\n")
-                    logger.error("Failed to stop existing ComfyUI process/port before installation")
-                    return
+                    # STEP 1: Always ensure ComfyUI is stopped (including stale PID state)
+                    logger.info("Ensuring ComfyUI is stopped before installation...")
+                    if not pm.ensure_stopped(timeout=20):
+                        print("\n" + "="*60)
+                        print("\033[1;31m❌ ERRO AO PARAR COMFYUI ❌\033[0m")
+                        print("="*60 + "\n")
+                        logger.error("Failed to stop existing ComfyUI process/port before installation")
+                        return
 
-                # STEP 2: Install presets (this also saves preset flags to state)
-                logger.info(f"Installing presets: {preset_names}")
-                success = install_presets(preset_names, include_base=True)
+                    # STEP 2: Install presets (this also saves preset flags to state)
+                    logger.info(f"Installing presets: {preset_names}")
+                    success = install_presets(preset_names, include_base=True)
 
-                # STEP 3: Restart ComfyUI with new preset flags (+ optional extra flags from UI)
-                if success:
-                    print("\n" + "="*60)
-                    print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
-                    print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
-                    print("="*60 + "\n")
-                    logger.info("Installation complete, starting ComfyUI with preset flags...")
-                    started = pm.start(flags=extra_flags if extra_flags else None)
-                    if started:
-                        logger.info("✓ ComfyUI started successfully")
+                    # STEP 3: Restart ComfyUI with new preset flags (+ optional extra flags from UI)
+                    if success:
+                        print("\n" + "="*60)
+                        print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
+                        print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
+                        print("="*60 + "\n")
+                        logger.info("Installation complete, starting ComfyUI with preset flags...")
+                        started = pm.start(flags=extra_flags if extra_flags else None)
+                        if started:
+                            logger.info("✓ ComfyUI started successfully")
+                        else:
+                            logger.error("ComfyUI failed to start after installation")
                     else:
-                        logger.error("ComfyUI failed to start after installation")
-                else:
-                    print("\n" + "="*60)
-                    print("\033[1;31m❌ ERRO NA INSTALAÇÃO ❌\033[0m")
-                    print("="*60 + "\n")
-                    logger.error("Installation failed")
+                        print("\n" + "="*60)
+                        print("\033[1;31m❌ ERRO NA INSTALAÇÃO ❌\033[0m")
+                        print("="*60 + "\n")
+                        logger.error("Installation failed")
+                except Exception as e:
+                    logger.error(f"Install thread error: {e}")
             
             thread = threading.Thread(target=install_and_restart, daemon=True)
             thread.start()
@@ -264,6 +276,44 @@ class PresetHandler(SimpleHTTPRequestHandler):
         
         except Exception as e:
             logger.error(f"Installation error: {e}")
+            self.send_error(500, str(e))
+
+    def _handle_shutdown(self):
+        """Handle Arrakis Start shutdown request"""
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': True,
+                'message': 'Shutdown initiated'
+            }).encode())
+
+            def do_shutdown():
+                try:
+                    import time
+                    time.sleep(0.5)
+                    logger.info("Shutdown requested via web UI")
+                    # Stop ComfyUI first
+                    from process_manager import ProcessManager
+                    state = _state_manager or get_state_manager()
+                    pm = ProcessManager(state)
+                    if pm.is_running():
+                        logger.info("Stopping ComfyUI before shutdown...")
+                        pm.ensure_stopped(timeout=15)
+                    logger.info("Arrakis Start shutting down...")
+                    import os, signal
+                    os.kill(os.getpid(), signal.SIGTERM)
+                except Exception as e:
+                    logger.error(f"Shutdown thread error: {e}")
+                    os._exit(1)
+
+            thread = threading.Thread(target=do_shutdown, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            logger.error(f"Shutdown error: {e}")
             self.send_error(500, str(e))
 
 

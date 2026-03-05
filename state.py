@@ -6,6 +6,7 @@ Tracks installed presets, models, nodes, and ComfyUI status
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import List, Dict, Optional, Set
 from datetime import datetime
@@ -20,12 +21,13 @@ STATE_FILE = COMFY_BASE / 'arrakis_start' / 'data' / 'state.json'
 
 class StateManager:
     """Manages persistent state for Arrakis Start"""
-    
+
     def __init__(self):
         self.state_file = STATE_FILE
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
         self.state = self._load_state()
-    
+
     def _load_state(self) -> Dict:
         """Load state from disk"""
         if self.state_file.exists():
@@ -34,7 +36,7 @@ class StateManager:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Failed to load state: {e}")
-        
+
         # Default state
         return {
             "installed_presets": [],
@@ -48,12 +50,11 @@ class StateManager:
             "last_install": None,
             "version": "2.0"
         }
-    
+
     def _save_state(self):
-        """Save state to disk atomically (write to temp, then rename)"""
+        """Save state to disk atomically (write to temp, then os.replace)"""
         import tempfile
         try:
-            # Write to temporary file first
             temp_fd, temp_path = tempfile.mkstemp(
                 suffix='.json',
                 prefix='state_',
@@ -62,134 +63,148 @@ class StateManager:
             try:
                 with os.fdopen(temp_fd, 'w') as f:
                     json.dump(self.state, f, indent=2)
-                # Atomic rename (works on same filesystem)
-                import shutil
-                shutil.move(temp_path, self.state_file)
+                os.replace(temp_path, self.state_file)
             except Exception:
-                # Clean up temp file on error
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 raise
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
-    
+
     # Preset tracking
     def add_preset(self, preset_name: str):
         """Mark preset as installed"""
-        if preset_name not in self.state["installed_presets"]:
-            self.state["installed_presets"].append(preset_name)
-            self.state["last_install"] = datetime.now().isoformat()
-            self._save_state()
-            logger.info(f"Marked preset as installed: {preset_name}")
-    
+        with self._lock:
+            if preset_name not in self.state["installed_presets"]:
+                self.state["installed_presets"].append(preset_name)
+                self.state["last_install"] = datetime.now().isoformat()
+                self._save_state()
+                logger.info(f"Marked preset as installed: {preset_name}")
+
     def is_preset_installed(self, preset_name: str) -> bool:
         """Check if preset is installed"""
-        return preset_name in self.state["installed_presets"]
-    
+        with self._lock:
+            return preset_name in self.state["installed_presets"]
+
     def get_installed_presets(self) -> List[str]:
         """Get list of installed presets"""
-        return self.state["installed_presets"]
-    
+        with self._lock:
+            return list(self.state["installed_presets"])
+
     # Model tracking
     def add_model(self, filename: str, model_dir: str, url: str, size: int = 0):
         """Track installed model"""
-        self.state["installed_models"][filename] = {
-            "dir": model_dir,
-            "url": url,
-            "size": size,
-            "installed_at": datetime.now().isoformat()
-        }
-        self._save_state()
-    
+        with self._lock:
+            self.state["installed_models"][filename] = {
+                "dir": model_dir,
+                "url": url,
+                "size": size,
+                "installed_at": datetime.now().isoformat()
+            }
+            self._save_state()
+
     def is_model_installed(self, filename: str) -> bool:
         """Check if model is installed"""
-        return filename in self.state["installed_models"]
-    
+        with self._lock:
+            return filename in self.state["installed_models"]
+
     def get_installed_models(self) -> Dict:
         """Get all installed models"""
-        return self.state["installed_models"]
-    
+        with self._lock:
+            return dict(self.state["installed_models"])
+
     # Node tracking
     def add_node(self, node_url: str):
         """Mark custom node as installed"""
-        if node_url not in self.state["installed_nodes"]:
-            self.state["installed_nodes"].append(node_url)
-            self._save_state()
-    
+        with self._lock:
+            if node_url not in self.state["installed_nodes"]:
+                self.state["installed_nodes"].append(node_url)
+                self._save_state()
+
     def is_node_installed(self, node_url: str) -> bool:
         """Check if node is installed"""
-        return node_url in self.state["installed_nodes"]
-    
+        with self._lock:
+            return node_url in self.state["installed_nodes"]
+
     def get_installed_nodes(self) -> List[str]:
         """Get list of installed nodes"""
-        return self.state["installed_nodes"]
-    
+        with self._lock:
+            return list(self.state["installed_nodes"])
+
     # ComfyUI flags (preset-specific)
     def set_comfyui_flags(self, flags: List[str]):
         """Set ComfyUI flags from installed presets"""
-        self.state["comfyui_flags"] = flags
-        self._save_state()
-        
+        with self._lock:
+            self.state["comfyui_flags"] = flags
+            self._save_state()
+
     def get_comfyui_flags(self) -> List[str]:
         """Get preset-specific ComfyUI flags"""
-        return self.state.get("comfyui_flags", [])
+        with self._lock:
+            return list(self.state.get("comfyui_flags", []))
 
     # Runtime stack tracking
     def set_runtime_stack(self, stack: str):
         """Persist current runtime stack marker."""
-        self.state["runtime_stack"] = stack
-        self._save_state()
+        with self._lock:
+            self.state["runtime_stack"] = stack
+            self._save_state()
 
     def get_runtime_stack(self) -> str:
         """Get current runtime stack marker."""
-        return self.state.get("runtime_stack", "unknown")
-    
+        with self._lock:
+            return self.state.get("runtime_stack", "unknown")
+
     # ComfyUI status
     def set_comfyui_status(self, status: str, pid: Optional[int] = None,
                           flags: Optional[List[str]] = None, port: int = 8818,
                           clear_pid: bool = False):
         """Update ComfyUI status"""
-        self.state["comfyui_status"] = status
-        if clear_pid:
-            self.state["comfyui_pid"] = None
-        elif pid is not None:
-            self.state["comfyui_pid"] = pid
-        if flags is not None:
-            self.state["comfyui_flags"] = flags
-        self.state["comfyui_port"] = port
-        self._save_state()
-    
+        with self._lock:
+            self.state["comfyui_status"] = status
+            if clear_pid:
+                self.state["comfyui_pid"] = None
+            elif pid is not None:
+                self.state["comfyui_pid"] = pid
+            if flags is not None:
+                self.state["comfyui_flags"] = flags
+            self.state["comfyui_port"] = port
+            self._save_state()
+
     def get_comfyui_status(self) -> Dict:
         """Get ComfyUI status"""
-        return {
-            "status": self.state["comfyui_status"],
-            "pid": self.state["comfyui_pid"],
-            "flags": self.state["comfyui_flags"],
-            "port": self.state["comfyui_port"]
-        }
-    
+        with self._lock:
+            return {
+                "status": self.state["comfyui_status"],
+                "pid": self.state["comfyui_pid"],
+                "flags": list(self.state["comfyui_flags"]),
+                "port": self.state["comfyui_port"]
+            }
+
     # Full state
     def get_full_state(self) -> Dict:
         """Get complete state"""
-        return self.state.copy()
-    
+        with self._lock:
+            import copy
+            return copy.deepcopy(self.state)
+
     def reset_state(self):
         """Reset state to defaults"""
-        self.state = self._load_state()
-        self.state = {
-            "installed_presets": [],
-            "installed_models": {},
-            "installed_nodes": [],
-            "comfyui_status": "stopped",
-            "comfyui_pid": None,
-            "comfyui_flags": [],
-            "comfyui_port": 8818,
-            "runtime_stack": "unknown",
-            "last_install": None,
-            "version": "2.0"
-        }
-        self._save_state()
-        logger.info("State reset to defaults")
+        with self._lock:
+            self.state = {
+                "installed_presets": [],
+                "installed_models": {},
+                "installed_nodes": [],
+                "comfyui_status": "stopped",
+                "comfyui_pid": None,
+                "comfyui_flags": [],
+                "comfyui_port": 8818,
+                "runtime_stack": "unknown",
+                "last_install": None,
+                "version": "2.0"
+            }
+            self._save_state()
+            logger.info("State reset to defaults")
 
 
 # Global instance

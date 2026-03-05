@@ -158,7 +158,8 @@ class ProcessManager:
                 timeout=timeout
             )
             return response.status_code == 200
-        except:
+        except Exception as e:
+            logger.debug(f"Health check failed: {e}")
             return False
     
     def start(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:

@@ -28,13 +28,19 @@ async def broadcast(message: Dict[str, Any]):
     """Broadcast message to all connected clients"""
     if not _clients:
         return
-    
+
     message_json = json.dumps(message)
-    # Send to all clients concurrently
-    await asyncio.gather(
+    dead_clients = set()
+    results = await asyncio.gather(
         *[client.send(message_json) for client in _clients],
         return_exceptions=True
     )
+    for client, result in zip(list(_clients), results):
+        if isinstance(result, Exception):
+            dead_clients.add(client)
+    if dead_clients:
+        _clients.difference_update(dead_clients)
+        logger.debug(f"Removed {len(dead_clients)} dead WebSocket clients")
 
 
 async def process_message_queue():

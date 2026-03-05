@@ -52,9 +52,6 @@ SAGEATTENTION_RETRY_DELAY_SECONDS = int(os.environ.get('SAGEATTENTION_RETRY_DELA
 # GitHub token for private repositories (GITHUB_TOKEN or GH_TOKEN)
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', '')
 
-# GitHub token for private repositories (GITHUB_TOKEN or GH_TOKEN)
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', '')
-
 
 def _comfy_python() -> str:
     """Return ComfyUI runtime python executable."""
@@ -525,11 +522,13 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             nodes_future = executor.submit(install_custom_nodes, nodes)
 
         download_success = True
-        nodes_success = True
+        nodes_result = {"success": True, "failed": []}
         if download_future is not None:
             download_success = bool(download_future.result())
         if nodes_future is not None:
-            nodes_success = bool(nodes_future.result())
+            nodes_result = nodes_future.result()
+            if not isinstance(nodes_result, dict):
+                nodes_result = {"success": bool(nodes_result), "failed": []}
 
     downloader_failures = []
     if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
@@ -559,28 +558,68 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
 
         logger.warning("Some downloads failed, continuing installation as requested.")
 
-    if not nodes_success:
-        logger.error("Installation failed: one or more custom nodes failed to install")
-        return False
+    if not nodes_result["success"]:
+        failed = nodes_result.get("failed", [])
+        logger.warning(
+            f"Some custom nodes failed to install ({len(failed)}): {', '.join(failed)}. "
+            "Continuing installation..."
+        )
 
     # 4. Mark presets as installed
     for preset_name in preset_names:
         state.add_preset(preset_name)
 
-    logger.info("All presets installed successfully!")
+    all_ok = download_success and nodes_result["success"]
+    if all_ok:
+        logger.info("All presets installed successfully!")
+    else:
+        logger.warning("Presets installed with some failures (see warnings above)")
     return True
 
 
-def install_custom_nodes(node_urls: List[str]) -> bool:
-    """Clone/update custom nodes with better diagnostics and retry."""
+def _run_pip_install_streaming(cmd: List[str], node_name: str, heartbeat_interval: int = 20):
+    """Run pip install with streaming output and heartbeat logging."""
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1
+    )
+    last_log_ts = time.time()
+    last_line = ""
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            last_line = line
+            now = time.time()
+            # Log important lines (errors, warnings, collecting/downloading)
+            lower = line.lower()
+            if any(kw in lower for kw in ['error', 'warning', 'fail', 'collecting', 'downloading', 'building']):
+                logger.info(f"[{node_name} pip] {line}")
+                last_log_ts = now
+            elif now - last_log_ts >= heartbeat_interval:
+                logger.info(f"[{node_name} pip] still working... {line[:80]}")
+                last_log_ts = now
+    except Exception as e:
+        logger.warning(f"[{node_name} pip] stream read error: {e}")
+    proc.wait()
+    return proc.returncode, last_line
+
+
+def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
+    """Clone/update custom nodes with resilience - continues on failure.
+
+    Returns dict with 'success' (bool), 'failed' (list of failed node names).
+    """
     state = get_state_manager()
     cn_dir = COMFY_DIR / 'custom_nodes'
     cn_dir.mkdir(parents=True, exist_ok=True)
 
     # Deduplicate while preserving order
     node_urls = list(dict.fromkeys(node_urls))
+    failed_nodes = []
 
-    for url in node_urls:
+    for idx, url in enumerate(node_urls, 1):
         node_name = url.rstrip('/').split('/')[-1]
         dest = cn_dir / node_name
 
@@ -598,7 +637,7 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
                 )
                 dest.rename(backup)
 
-            logger.info(f"Cloning: {node_name}")
+            logger.info(f"[{idx}/{len(node_urls)}] Cloning: {node_name}")
             clone_url = _inject_github_token(url)
             if clone_url != url:
                 logger.info(f"Using authenticated URL for: {node_name}")
@@ -626,35 +665,36 @@ def install_custom_nodes(node_urls: List[str]) -> bool:
 
             if not clone_ok:
                 logger.error(f"Failed to clone node {node_name} after retries: {url}")
-                return False
+                failed_nodes.append(node_name)
+                continue
 
-            # Install requirements if exists
+            # Install requirements with streaming output
             req_file = dest / 'requirements.txt'
             if req_file.exists():
-                logger.info(f"Installing requirements for {node_name}")
-                req = subprocess.run(
-                    [_comfy_python(), '-m', 'pip', 'install', '-q', '-r', str(req_file)],
-                    check=False,
-                    capture_output=True,
-                    text=True
+                logger.info(f"Installing requirements for {node_name}...")
+                retcode, last_line = _run_pip_install_streaming(
+                    [_comfy_python(), '-m', 'pip', 'install', '-r', str(req_file)],
+                    node_name
                 )
-                if req.returncode != 0:
+                if retcode != 0:
                     logger.warning(
-                        f"Requirements install failed for {node_name} (exit {req.returncode}), continuing"
+                        f"Requirements install failed for {node_name} (exit {retcode}), continuing"
                     )
-                    if req.stderr:
-                        logger.warning(f"[{node_name} req stderr] {req.stderr.strip()}")
-                    if req.stdout:
-                        logger.warning(f"[{node_name} req stdout] {req.stdout.strip()}")
+                    if last_line:
+                        logger.warning(f"[{node_name} pip last] {last_line}")
 
             # Track as installed
             state.add_node(url)
 
         except Exception as e:
             logger.error(f"Failed to install {node_name}: {e}")
-            return False
+            failed_nodes.append(node_name)
+            continue
 
-    return True
+    if failed_nodes:
+        logger.warning(f"Nodes that failed to install: {', '.join(failed_nodes)}")
+
+    return {"success": len(failed_nodes) == 0, "failed": failed_nodes}
 
 
 def start_web_server():
