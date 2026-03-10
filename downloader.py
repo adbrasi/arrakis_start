@@ -158,7 +158,7 @@ class DownloadManager:
         """Return False for deterministic/precheck errors that retries cannot fix."""
         stage = (stage or '').lower()
         reason_lower = (reason or '').lower()
-        if stage in {'precheck'}:
+        if stage in {'precheck', 'auth'}:
             return False
         if 'missing (required for civitai downloads)' in reason_lower:
             return False
@@ -639,9 +639,11 @@ class DownloadManager:
                 return True, 'ok', 'hf-hub-python'
 
             # Fail fast on deterministic auth errors (retry won't fix).
+            # Use 'auth' stage (not 'precheck') so per-repo access errors
+            # (e.g. gated repos returning 403) don't abort the entire install.
             auth_failure = self._classify_hf_auth_error(f"{reason} || {hub_reason}")
             if auth_failure:
-                return False, auth_failure, 'precheck'
+                return False, auth_failure, 'auth'
 
         # Resolve Civitai URL with authenticated redirect handling
         if is_civitai_source:

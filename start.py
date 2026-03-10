@@ -547,6 +547,7 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
                 )
 
             # Configuration/credential errors are fatal (don't pretend install succeeded).
+            # Per-repo auth errors (stage='auth', e.g. gated HF repos) are NOT fatal.
             fatal_download_error = any(
                 str(f.get('stage', '')).lower() == 'precheck' or
                 'missing (required for civitai downloads)' in str(f.get('reason', '')).lower()
