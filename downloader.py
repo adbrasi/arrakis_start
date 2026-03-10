@@ -16,6 +16,7 @@ from typing import List, Dict, Optional, Callable, Tuple
 from urllib.parse import urlparse, unquote, parse_qsl, urlencode, urlunparse, urljoin
 import shutil
 import re
+import threading
 import requests
 try:
     from websocket_server import send_download_progress, send_log_message
@@ -75,6 +76,7 @@ class DownloadManager:
         # New CLI command is `hf`, fallback to `huggingface-cli` for compatibility
         self.hf_cli_path, self._hf_cli_pip = self._find_hf_cli()
         self.current_process = None
+        self._process_lock = threading.Lock()
 
         # Ensure hf_xet is installed in the same env as the HF CLI
         self._ensure_hf_xet()
@@ -255,7 +257,7 @@ class DownloadManager:
         if not content_disposition:
             return ''
         # RFC 5987: filename*=UTF-8''...
-        m = re.search(r"filename\\*=(?:UTF-8''|)([^;]+)", content_disposition, flags=re.IGNORECASE)
+        m = re.search(r"filename\*=(?:UTF-8''|)([^;]+)", content_disposition, flags=re.IGNORECASE)
         if m:
             return unquote(m.group(1).strip().strip('"'))
         # Legacy: filename="..."
@@ -338,7 +340,7 @@ class DownloadManager:
         updates are buffered until a newline arrives (often only at the end).
         This method yields each \\r-delimited update as a separate line.
         """
-        buf = b''
+        buf = bytearray()
         while True:
             chunk = stream.read(1)
             if not chunk:
@@ -348,7 +350,7 @@ class DownloadManager:
             if chunk in (b'\r', b'\n'):
                 if buf:
                     yield buf.decode('utf-8', errors='replace')
-                    buf = b''
+                    buf = bytearray()
             else:
                 buf += chunk
 
@@ -485,12 +487,13 @@ class DownloadManager:
     def cancel(self):
         """Cancel ongoing downloads immediately"""
         self._cancelled = True
-        if self.current_process:
-            logger.warning("Killing active download process...")
-            try:
-                self.current_process.kill()
-            except Exception as e:
-                logger.error(f"Failed to kill process: {e}")
+        with self._process_lock:
+            if self.current_process:
+                logger.warning("Killing active download process...")
+                try:
+                    self.current_process.kill()
+                except Exception as e:
+                    logger.error(f"Failed to kill process: {e}")
         logger.info("Download cancelled by user")
     
     def _report_progress(self, message: str, current: int = 0, total: int = 0):
@@ -768,7 +771,8 @@ class DownloadManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             )
-            self.current_process = process
+            with self._process_lock:
+                self.current_process = process
 
             tail = deque(maxlen=12)
             last_logged_pct = -10  # log every ~10% change
@@ -842,7 +846,8 @@ class DownloadManager:
                         last_log_ts = now
 
             process.wait()
-            self.current_process = None
+            with self._process_lock:
+                self.current_process = None
 
             if process.returncode == 0:
                 # `hf download --local-dir` preserves subfolders from repo paths (e.g., VAE/file.safetensors).
@@ -899,7 +904,14 @@ class DownloadManager:
                 return False, reason
 
         except Exception as e:
-            self.current_process = None
+            with self._process_lock:
+                if self.current_process is not None:
+                    try:
+                        self.current_process.kill()
+                        self.current_process.wait()
+                    except Exception:
+                        pass
+                self.current_process = None
             logger.error(f"HF download failed: {e}")
             return False, str(e)
     
@@ -917,6 +929,12 @@ class DownloadManager:
 
         logger.info(f"Fallback: downloading via huggingface_hub Python API: {repo_id}/{file_path}")
 
+        # Save original env values to restore later
+        _saved_env = {
+            'HF_XET_HIGH_PERFORMANCE': os.environ.get('HF_XET_HIGH_PERFORMANCE'),
+            'HF_HUB_ENABLE_HF_TRANSFER': os.environ.get('HF_HUB_ENABLE_HF_TRANSFER'),
+            'HF_HUB_DISABLE_PROGRESS_BARS': os.environ.get('HF_HUB_DISABLE_PROGRESS_BARS'),
+        }
         try:
             from huggingface_hub import hf_hub_download
             # Ensure fast backend + progress bars are enabled
@@ -952,7 +970,13 @@ class DownloadManager:
             return True, ""
         except Exception as e:
             return False, f"hf_hub_python_exception: {e}"
-    
+        finally:
+            for key, original in _saved_env.items():
+                if original is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = original
+
     def _download_aria2c(
         self,
         url: str,
@@ -1011,7 +1035,8 @@ class DownloadManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             )
-            self.current_process = process
+            with self._process_lock:
+                self.current_process = process
 
             tail = deque(maxlen=12)
             last_progress_ts = time.monotonic()
@@ -1088,14 +1113,16 @@ class DownloadManager:
                         )
                         process.kill()
                         process.wait()
-                        self.current_process = None
+                        with self._process_lock:
+                            self.current_process = None
                         reason = f"aria2c_stall_timeout_{self.aria2_stall_timeout_seconds}s"
                         if tail:
                             reason = f"{reason} | tail: {' || '.join(tail)}"
                         return False, reason
 
             process.wait()
-            self.current_process = None
+            with self._process_lock:
+                self.current_process = None
 
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {filename}")
@@ -1108,6 +1135,14 @@ class DownloadManager:
                 return False, reason
 
         except Exception as e:
+            with self._process_lock:
+                if self.current_process is not None:
+                    try:
+                        self.current_process.kill()
+                        self.current_process.wait()
+                    except Exception:
+                        pass
+                self.current_process = None
             logger.error(f"aria2c error: {e}")
             return False, str(e)
     
@@ -1153,7 +1188,8 @@ class DownloadManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             )
-            self.current_process = process
+            with self._process_lock:
+                self.current_process = process
 
             tail = deque(maxlen=12)
             last_logged_pct = -10
@@ -1190,8 +1226,9 @@ class DownloadManager:
                         logger.debug(f"  [wget] {stripped}")
             
             process.wait()
-            self.current_process = None
-            
+            with self._process_lock:
+                self.current_process = None
+
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {dest_path.name}")
                 return True, ""
@@ -1201,8 +1238,16 @@ class DownloadManager:
                 if tail:
                     reason = f"{reason} | tail: {' || '.join(tail)}"
                 return False, reason
-                
+
         except Exception as e:
+            with self._process_lock:
+                if self.current_process is not None:
+                    try:
+                        self.current_process.kill()
+                        self.current_process.wait()
+                    except Exception:
+                        pass
+                self.current_process = None
             logger.error(f"wget error: {e}")
             return False, str(e)
     
