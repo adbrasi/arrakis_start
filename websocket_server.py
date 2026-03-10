@@ -31,11 +31,12 @@ async def broadcast(message: Dict[str, Any]):
 
     message_json = json.dumps(message)
     dead_clients = set()
+    clients_snapshot = list(_clients)
     results = await asyncio.gather(
-        *[client.send(message_json) for client in _clients],
+        *[client.send(message_json) for client in clients_snapshot],
         return_exceptions=True
     )
-    for client, result in zip(list(_clients), results):
+    for client, result in zip(clients_snapshot, results):
         if isinstance(result, Exception):
             dead_clients.add(client)
     if dead_clients:

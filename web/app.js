@@ -128,9 +128,13 @@ async function loadPresets() {
         if (installed.length === 0) {
             installedList.innerHTML = '<p class="empty-text">Nenhum preset instalado ainda</p>';
         } else {
-            installedList.innerHTML = installed.map(name =>
-                `<div class="installed-item">\u2713 ${name}</div>`
-            ).join('');
+            installedList.innerHTML = '';
+            installed.forEach(name => {
+                const item = document.createElement('div');
+                item.className = 'installed-item';
+                item.textContent = '\u2713 ' + name;
+                installedList.appendChild(item);
+            });
         }
 
         // Render preset cards
@@ -292,17 +296,23 @@ async function startWithPresets() {
         if (response.ok) {
             showToast('Instalacao iniciada! ComfyUI sera iniciado quando estiver pronto.', 'success');
 
-            // Poll status more frequently during installation
-            const installPoll = setInterval(pollStatus, 3000);
-
-            // Reload presets after a reasonable delay
-            setTimeout(async () => {
-                clearInterval(installPoll);
-                await loadPresets();
-                selectedPresets = [];
-                isInstalling = false;
-                updateStartButton();
-            }, 10000);
+            // Poll status until ComfyUI is running again (installation complete)
+            const installPoll = setInterval(async () => {
+                try {
+                    const statusResp = await fetch('/api/status');
+                    const statusData = await statusResp.json();
+                    pollStatus(); // Update UI
+                    if (statusData.running) {
+                        clearInterval(installPoll);
+                        await loadPresets();
+                        selectedPresets = [];
+                        isInstalling = false;
+                        updateStartButton();
+                    }
+                } catch {
+                    // Keep polling on network errors
+                }
+            }, 3000);
         } else {
             throw new Error('Falha na requisicao de instalacao');
         }
@@ -325,8 +335,12 @@ async function shutdownArrakis() {
         const response = await fetch('/api/shutdown', { method: 'POST' });
         if (response.ok) {
             showToast('Arrakis Start desligando...', 'success');
-            document.getElementById('shutdown-btn').disabled = true;
-            document.getElementById('shutdown-btn').textContent = 'Desligando...';
+            const shutdownBtn = document.getElementById('shutdown-btn');
+            shutdownBtn.disabled = true;
+            const textNode = Array.from(shutdownBtn.childNodes).find(n => n.nodeType === Node.TEXT_NODE);
+            if (textNode) {
+                textNode.textContent = ' Desligando...';
+            }
         } else {
             showToast('Falha ao desligar.', 'error');
         }

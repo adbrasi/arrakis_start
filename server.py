@@ -212,6 +212,10 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 self.send_error(411, 'Content-Length required')
                 return
             content_length = int(cl)
+            max_body_size = 1 * 1024 * 1024  # 1 MB
+            if content_length > max_body_size:
+                self.send_error(413, 'Request body too large')
+                return
             body = self.rfile.read(content_length)
             data = json.loads(body.decode())
             
