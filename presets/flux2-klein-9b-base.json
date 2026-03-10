@@ -5,9 +5,9 @@
   "comfyui_flags": [],
   "models": [
     {
-      "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+      "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B/resolve/main/flux-2-klein-base-9b.safetensors",
       "dir": "diffusion_models",
-      "filename": "flux-2-klein-base-9b-fp8.safetensors"
+      "filename": "flux-2-klein-base-9b.safetensors"
     },
     {
       "url": "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
