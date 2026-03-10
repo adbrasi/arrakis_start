@@ -54,6 +54,15 @@ class DownloadManager:
         else:
             logger.info("Download speed limit: unlimited")
         logger.info(f"HF token present: {bool(self.hf_token)}")
+        # Warn if token is in env but not stored — hf_xet may not pick it up
+        if self.hf_token:
+            hf_home = Path(os.environ.get('HF_HOME', Path.home() / '.cache' / 'huggingface'))
+            token_file = hf_home / 'token'
+            if not token_file.exists():
+                logger.warning(
+                    f"HF_TOKEN is set but no stored token found at {token_file}. "
+                    f"Gated models may fail with hf_xet. Run: hf auth login --token $HF_TOKEN"
+                )
         logger.info(f"Civitai token present: {bool(self.civitai_token)} (source: {self.civitai_token_source})")
 
         # aria2 tunables (override via environment if needed)
@@ -168,6 +177,8 @@ class DownloadManager:
             return False
         if 'auth_http_401' in reason_lower or 'auth_http_403' in reason_lower:
             return False
+        if 'auth_gated_model_not_accepted' in reason_lower:
+            return False
         if '401 unauthorized' in reason_lower or '403 forbidden' in reason_lower:
             return False
         if 'requires you to be logged in' in reason_lower:
@@ -177,7 +188,11 @@ class DownloadManager:
         return True
 
     def _classify_hf_auth_error(self, reason: str) -> str:
-        """Classify deterministic HuggingFace auth failures."""
+        """Classify deterministic HuggingFace auth failures.
+
+        Distinguishes between invalid token (401), gated model not accepted (403
+        with 'access to model' or 'gated' hints), and generic forbidden (403).
+        """
         reason_lower = (reason or '').lower()
         if (
             'auth_http_401' in reason_lower or
@@ -185,14 +200,29 @@ class DownloadManager:
             '401 client error' in reason_lower
         ):
             return 'auth_http_401'
-        if (
+        if 'username/password authentication failed' in reason_lower:
+            return 'auth_http_401'
+
+        is_403 = (
             'auth_http_403' in reason_lower or
             '403 forbidden' in reason_lower or
             '403 client error' in reason_lower
-        ):
+        )
+        if is_403:
+            # Detect gated model errors (user hasn't accepted the license on HF)
+            gated_hints = (
+                'access to model', 'gated repo', 'gated model',
+                'must agree', 'accept the', 'restricted',
+                'you need to agree', 'access request',
+            )
+            if any(hint in reason_lower for hint in gated_hints):
+                logger.error(
+                    "GATED MODEL: You have a valid token but haven't accepted "
+                    "this model's license on huggingface.co. Visit the model "
+                    "page and click 'Agree and access' to enable downloads."
+                )
+                return 'auth_gated_model_not_accepted'
             return 'auth_http_403'
-        if 'username/password authentication failed' in reason_lower:
-            return 'auth_http_401'
         return ''
 
     def _is_invalid_existing_file(self, dest_path: Path, source_url: str) -> bool:
@@ -742,6 +772,9 @@ class DownloadManager:
 
         # Configure environment for maximum download speed
         env = os.environ.copy()
+        # Ensure HF_TOKEN is in subprocess env (may have been set only at init time)
+        if self.hf_token:
+            env['HF_TOKEN'] = self.hf_token
         # hf_xet (v1.0+): high-performance mode
         env['HF_XET_HIGH_PERFORMANCE'] = '1'
         env['HF_XET_NUM_CONCURRENT_RANGE_GETS'] = os.environ.get('HF_XET_NUM_CONCURRENT_RANGE_GETS', '32')

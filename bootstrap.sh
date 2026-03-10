@@ -207,7 +207,7 @@ export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
 export PIP_ROOT_USER_ACTION=ignore
 export HF_HOME="/workspace/.hf"
-export HUGGINGFACE_HUB_CACHE="$HF_HOME"
+export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
 # TRANSFORMERS_CACHE is deprecated in Transformers v5+; prefer HF_HOME only
 unset TRANSFORMERS_CACHE || true
 export TMPDIR="/workspace/.tmp"
@@ -390,6 +390,27 @@ run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptool
 # HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps)
 run_with_progress "Instalando huggingface_hub[cli] + hf_xet no venv Arrakis" \
     "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
+
+# Store HF token so hf_xet backend and gated model downloads work correctly.
+# hf auth login caches the token at $HF_HOME/token, which hf_xet reads directly
+# (it does NOT rely on the HF_TOKEN env var for auth in all code paths).
+HF_TOKEN="${HF_TOKEN:-}"
+if [ -n "$HF_TOKEN" ]; then
+    HF_CLI="$ARRAKIS_VENV_DIR/bin/hf"
+    if [ -x "$HF_CLI" ]; then
+        "$HF_CLI" auth login --token "$HF_TOKEN" --add-to-git-credential 2>/dev/null || true
+        log_success "HuggingFace token stored via hf auth login (gated models enabled)"
+    else
+        # Fallback: write token file directly
+        mkdir -p "$HF_HOME"
+        printf '%s' "$HF_TOKEN" > "$HF_HOME/token"
+        chmod 600 "$HF_HOME/token"
+        log_success "HuggingFace token stored at $HF_HOME/token (gated models enabled)"
+    fi
+else
+    log_warn "HF_TOKEN not set — gated model downloads will fail. Set HF_TOKEN in your environment."
+fi
+
 run_with_progress "Instalando requirements do Arrakis" \
     "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade -r "$ARRAKIS_DIR/requirements.txt"
 log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
