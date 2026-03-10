@@ -39,15 +39,25 @@ COMFY_PYTHON = Path(os.environ.get('COMFY_PYTHON', str(VENV_DIR / 'bin' / 'pytho
 COMFY_CLI = os.environ.get('COMFY_CLI', str(VENV_DIR / 'bin' / 'comfy'))
 
 # Ports
-WEB_PORT = int(os.environ.get('WEB_PORT', '8090'))
-COMFY_PORT = int(os.environ.get('COMFY_PORT', '8818'))
+def _safe_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        logging.warning(f"Invalid integer for env var {name}={raw!r}, using default {default}")
+        return default
+
+WEB_PORT = _safe_int_env('WEB_PORT', 8090)
+COMFY_PORT = _safe_int_env('COMFY_PORT', 8818)
 DEFAULT_TORCH_INDEX_URL = os.environ.get('TORCH_INDEX_URL', 'https://download.pytorch.org/whl/cu128')
 SAGEATTENTION_INSTALLER_URL = os.environ.get(
     'SAGEATTENTION_INSTALLER_URL',
     'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
 )
-SAGEATTENTION_INSTALL_ATTEMPTS = int(os.environ.get('SAGEATTENTION_INSTALL_ATTEMPTS', '3'))
-SAGEATTENTION_RETRY_DELAY_SECONDS = int(os.environ.get('SAGEATTENTION_RETRY_DELAY_SECONDS', '8'))
+SAGEATTENTION_INSTALL_ATTEMPTS = _safe_int_env('SAGEATTENTION_INSTALL_ATTEMPTS', 3)
+SAGEATTENTION_RETRY_DELAY_SECONDS = _safe_int_env('SAGEATTENTION_RETRY_DELAY_SECONDS', 8)
 
 # GitHub token for private repositories (GITHUB_TOKEN or GH_TOKEN)
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', '')
@@ -68,6 +78,13 @@ def _inject_github_token(url: str) -> str:
     if GITHUB_TOKEN and 'github.com' in url and url.startswith('https://'):
         return url.replace('https://', f'https://{GITHUB_TOKEN}@', 1)
     return url
+
+
+def _sanitize_git_output(text: str) -> str:
+    """Remove GitHub token from git command output to prevent leaking credentials."""
+    if GITHUB_TOKEN and GITHUB_TOKEN in text:
+        return text.replace(GITHUB_TOKEN, '***')
+    return text
 
 
 def should_ignore_preset_file(preset_file: Path) -> bool:
@@ -407,8 +424,8 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
 
         if verify_import:
             if not _verify_python_import(verify_import):
-                logger_msg = logger.warning if allow_failure else logger.error
-                logger_msg(f"Package installed but import failed for '{verify_import}' in {description}")
+                log_fn = logger.warning if allow_failure else logger.error
+                log_fn(f"Package installed but import failed for '{verify_import}' in {description}")
                 if not allow_failure:
                     return False
 
@@ -440,11 +457,13 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     collected_flags = []  # Preset-specific ComfyUI flags
     pip_commands = []
     use_sage_attention = False
+    processed_presets = []
 
     for preset_name in preset_names:
         if preset_name not in preset_map:
             logger.error(f"Preset not found: {preset_name}")
             continue
+        processed_presets.append(preset_name)
 
         preset = preset_map[preset_name]
 
@@ -523,17 +542,27 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
 
         download_success = True
         nodes_result = {"success": True, "failed": []}
-        if download_future is not None:
-            download_success = bool(download_future.result())
-        if nodes_future is not None:
-            nodes_result = nodes_future.result()
-            if not isinstance(nodes_result, dict):
-                nodes_result = {"success": bool(nodes_result), "failed": []}
+        try:
+            if download_future is not None:
+                download_success = bool(download_future.result())
+        except Exception as e:
+            logger.error(f"Download task raised an exception: {e}")
+            download_success = False
+        try:
+            if nodes_future is not None:
+                nodes_result = nodes_future.result()
+                if not isinstance(nodes_result, dict):
+                    nodes_result = {"success": bool(nodes_result), "failed": []}
+        except Exception as e:
+            logger.error(f"Nodes install task raised an exception: {e}")
+            nodes_result = {"success": False, "failed": []}
 
     downloader_failures = []
-    if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
-        downloader_failures = _active_downloader.get_failure_report()
-    _active_downloader = None
+    try:
+        if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
+            downloader_failures = _active_downloader.get_failure_report()
+    finally:
+        _active_downloader = None
 
     # Download errors are non-blocking (continue install/start); node errors remain blocking.
     if not download_success:
@@ -566,8 +595,8 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             "Continuing installation..."
         )
 
-    # 4. Mark presets as installed
-    for preset_name in preset_names:
+    # 4. Mark presets as installed (only those actually found in preset_map)
+    for preset_name in processed_presets:
         state.add_preset(preset_name)
 
     all_ok = download_success and nodes_result["success"]
@@ -658,9 +687,9 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
                     f"Clone failed for {node_name} (attempt {attempt}/2, exit {clone.returncode})"
                 )
                 if clone.stderr:
-                    logger.warning(f"[{node_name} stderr] {clone.stderr.strip()}")
+                    logger.warning(f"[{node_name} stderr] {_sanitize_git_output(clone.stderr.strip())}")
                 if clone.stdout:
-                    logger.warning(f"[{node_name} stdout] {clone.stdout.strip()}")
+                    logger.warning(f"[{node_name} stdout] {_sanitize_git_output(clone.stdout.strip())}")
                 if attempt == 1:
                     time.sleep(2)
 
