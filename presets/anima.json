@@ -1,0 +1,30 @@
+{
+  "name": "Anima",
+  "description": "Anima checkpoint preset with bf16 and fp8 variants, using community-tested nodes for edit/inpaint/acceleration.",
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://civitai.com/api/download/models/2653283?type=Model&format=SafeTensor&size=full&fp=bf16",
+      "dir": "checkpoints",
+      "filename": ""
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2722478?type=Model&format=SafeTensor&size=pruned&fp=fp8",
+      "dir": "checkpoints",
+      "filename": ""
+    }
+  ],
+  "nodes": [
+    "https://github.com/lrzjason/ComfyUI-EditUtils",
+    "https://github.com/scraed/LanPaint",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/drozbay/res4lyf",
+    "https://github.com/sipherxyz/comfyui-art-venture",
+    "https://github.com/philipy1219/ComfyUI-TaylorSeer",
+    "https://github.com/city96/ComfyUI-GGUF",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/yolain/ComfyUI-Easy-Use"
+  ]
+}
