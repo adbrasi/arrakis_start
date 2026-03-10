@@ -41,7 +41,7 @@ class DownloadManager:
     def __init__(self, models_dir: Path, progress_callback: Optional[Callable] = None):
         self.models_dir = Path(models_dir)
         self.civitai_token, self.civitai_token_source = self._load_civitai_token()
-        self.hf_token = os.environ.get('HF_TOKEN', '')
+        self.hf_token = os.environ.get('HF_TOKEN', '').strip()
         self.progress_callback = progress_callback
         self._cancelled = False
         self.failures: List[Dict[str, str]] = []
@@ -53,22 +53,11 @@ class DownloadManager:
             logger.info(f"Download speed limit: {self.speed_limit}")
         else:
             logger.info("Download speed limit: unlimited")
-        logger.info(f"HF token present: {bool(self.hf_token)}")
-        # Auto-store token on disk so hf_xet backend can read it for gated models
+        logger.info(f"HF token: {self._token_tail(self.hf_token)}")
+        # Auto-store token on disk so hf_xet backend and hf CLI read it for gated models.
+        # Always overwrite: the env var is the source of truth (user may rotate tokens).
         if self.hf_token:
-            hf_home = Path(os.environ.get('HF_HOME', Path.home() / '.cache' / 'huggingface'))
-            token_file = hf_home / 'token'
-            if not token_file.exists():
-                try:
-                    hf_home.mkdir(parents=True, exist_ok=True)
-                    token_file.write_text(self.hf_token)
-                    token_file.chmod(0o600)
-                    logger.info(f"HF token auto-stored at {token_file} (enables gated model downloads)")
-                except Exception as e:
-                    logger.warning(
-                        f"Could not store HF token at {token_file}: {e}. "
-                        f"Gated models may fail with hf_xet."
-                    )
+            self._ensure_hf_token_stored()
         logger.info(f"Civitai token present: {bool(self.civitai_token)} (source: {self.civitai_token_source})")
 
         # aria2 tunables (override via environment if needed)
@@ -150,7 +139,44 @@ class DownloadManager:
     def _token_tail(self, token: str) -> str:
         if not token:
             return "missing"
-        return f"...{token[-6:]}"
+        return f"...{token[-6:]}" if len(token) > 6 else "(short/invalid)"
+
+    def _ensure_hf_token_stored(self):
+        """Store HF_TOKEN to disk so hf CLI and hf_xet can read it for gated models.
+
+        huggingface_hub reads the token from $HF_HOME/token (controlled by
+        HF_TOKEN_PATH env var).  The env var HF_TOKEN takes precedence at runtime,
+        but hf_xet and some CLI code paths read the file directly.
+        """
+        hf_home = Path(os.environ.get('HF_HOME', Path.home() / '.cache' / 'huggingface'))
+        token_file = hf_home / 'token'
+
+        needs_write = True
+        if token_file.exists():
+            try:
+                stored = token_file.read_text().strip()
+                needs_write = stored != self.hf_token
+                if needs_write:
+                    logger.info(
+                        f"Stored HF token ({self._token_tail(stored)}) differs from "
+                        f"env HF_TOKEN ({self._token_tail(self.hf_token)}), updating"
+                    )
+            except Exception:
+                needs_write = True
+
+        if needs_write:
+            try:
+                hf_home.mkdir(parents=True, exist_ok=True)
+                token_file.write_text(self.hf_token)
+                token_file.chmod(0o600)
+                logger.info(f"HF token stored at {token_file}")
+            except Exception as e:
+                logger.warning(
+                    f"Could not store HF token at {token_file}: {e}. "
+                    f"Gated models may fail with hf_xet."
+                )
+        else:
+            logger.info(f"HF token on disk matches env ({token_file})")
     
     def _record_failure(self, item: Dict, reason: str, stage: str):
         """Track a failed download item with context."""

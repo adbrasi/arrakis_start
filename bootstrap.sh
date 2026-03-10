@@ -398,14 +398,28 @@ HF_TOKEN="${HF_TOKEN:-}"
 if [ -n "$HF_TOKEN" ]; then
     HF_CLI="$ARRAKIS_VENV_DIR/bin/hf"
     if [ -x "$HF_CLI" ]; then
-        "$HF_CLI" auth login --token "$HF_TOKEN" --add-to-git-credential 2>/dev/null || true
-        log_success "HuggingFace token stored via hf auth login (gated models enabled)"
+        if "$HF_CLI" auth login --token "$HF_TOKEN" --add-to-git-credential 2>&1; then
+            log_success "HuggingFace token stored via hf auth login (gated models enabled)"
+        else
+            log_warn "hf auth login failed, writing token file directly as fallback"
+            mkdir -p "$HF_HOME"
+            printf '%s' "$HF_TOKEN" > "$HF_HOME/token"
+            chmod 600 "$HF_HOME/token"
+            log_success "HuggingFace token stored at $HF_HOME/token (fallback)"
+        fi
     else
-        # Fallback: write token file directly
+        # hf CLI not available yet — write token file directly
         mkdir -p "$HF_HOME"
         printf '%s' "$HF_TOKEN" > "$HF_HOME/token"
         chmod 600 "$HF_HOME/token"
         log_success "HuggingFace token stored at $HF_HOME/token (gated models enabled)"
+    fi
+    # Verify token is actually stored
+    if [ -f "$HF_HOME/token" ]; then
+        STORED_TAIL=$(tail -c 6 "$HF_HOME/token")
+        log_info "HF token stored OK (tail: ...${STORED_TAIL})"
+    else
+        log_error "HF token file NOT found at $HF_HOME/token after login — gated models will fail!"
     fi
 else
     log_warn "HF_TOKEN not set — gated model downloads will fail. Set HF_TOKEN in your environment."
