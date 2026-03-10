@@ -54,15 +54,21 @@ class DownloadManager:
         else:
             logger.info("Download speed limit: unlimited")
         logger.info(f"HF token present: {bool(self.hf_token)}")
-        # Warn if token is in env but not stored — hf_xet may not pick it up
+        # Auto-store token on disk so hf_xet backend can read it for gated models
         if self.hf_token:
             hf_home = Path(os.environ.get('HF_HOME', Path.home() / '.cache' / 'huggingface'))
             token_file = hf_home / 'token'
             if not token_file.exists():
-                logger.warning(
-                    f"HF_TOKEN is set but no stored token found at {token_file}. "
-                    f"Gated models may fail with hf_xet. Run: hf auth login --token $HF_TOKEN"
-                )
+                try:
+                    hf_home.mkdir(parents=True, exist_ok=True)
+                    token_file.write_text(self.hf_token)
+                    token_file.chmod(0o600)
+                    logger.info(f"HF token auto-stored at {token_file} (enables gated model downloads)")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not store HF token at {token_file}: {e}. "
+                        f"Gated models may fail with hf_xet."
+                    )
         logger.info(f"Civitai token present: {bool(self.civitai_token)} (source: {self.civitai_token_source})")
 
         # aria2 tunables (override via environment if needed)
