@@ -33,11 +33,19 @@ class StateManager:
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+                # Merge with defaults so new keys are always present
+                defaults = self._default_state()
+                defaults.update(loaded)
+                return defaults
             except Exception as e:
                 logger.error(f"Failed to load state: {e}")
 
-        # Default state
+        return self._default_state()
+
+    @staticmethod
+    def _default_state() -> Dict:
+        """Return a fresh default state dict."""
         return {
             "installed_presets": [],
             "installed_models": {},  # {filename: {dir, url, size, installed_at}}
@@ -191,18 +199,7 @@ class StateManager:
     def reset_state(self):
         """Reset state to defaults"""
         with self._lock:
-            self.state = {
-                "installed_presets": [],
-                "installed_models": {},
-                "installed_nodes": [],
-                "comfyui_status": "stopped",
-                "comfyui_pid": None,
-                "comfyui_flags": [],
-                "comfyui_port": 8818,
-                "runtime_stack": "unknown",
-                "last_install": None,
-                "version": "2.0"
-            }
+            self.state = self._default_state()
             self._save_state()
             logger.info("State reset to defaults")
 

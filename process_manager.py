@@ -196,8 +196,40 @@ class ProcessManager:
         if flags:
             all_flags.extend(flags)
         
-        # Deduplicate while preserving order (later values override)
-        flags = list(dict.fromkeys(all_flags))
+        # Deduplicate while preserving order (later values override).
+        # Flags starting with '--' followed by a non-'--' token form a pair.
+        seen: Dict[str, int] = {}
+        deduped: List[str] = []
+        i = 0
+        while i < len(all_flags):
+            token = all_flags[i]
+            if token.startswith('--'):
+                # Check if next token is a value (not another flag)
+                has_value = (i + 1 < len(all_flags) and not all_flags[i + 1].startswith('--'))
+                if token in seen:
+                    # Remove previous occurrence (and its value if any)
+                    prev = seen[token]
+                    prev_has_value = (prev + 1 < len(deduped) and not deduped[prev + 1].startswith('--'))
+                    if prev_has_value:
+                        del deduped[prev:prev + 2]
+                    else:
+                        del deduped[prev:prev + 1]
+                    # Recompute indices for remaining entries
+                    seen.clear()
+                    for j, t in enumerate(deduped):
+                        if t.startswith('--'):
+                            seen[t] = j
+                seen[token] = len(deduped)
+                deduped.append(token)
+                if has_value:
+                    deduped.append(all_flags[i + 1])
+                    i += 2
+                else:
+                    i += 1
+            else:
+                deduped.append(token)
+                i += 1
+        flags = deduped
         
         logger.info(f"Starting ComfyUI on port {port} with flags: {flags}")
         
@@ -341,12 +373,18 @@ class ProcessManager:
         else:
             logger.info("No running ComfyUI process detected during stop check")
 
-        self.state_manager.set_comfyui_status(
-            status="stopped",
-            pid=None,
-            port=port,
-            clear_pid=True
-        )
+        if ok:
+            self.state_manager.set_comfyui_status(
+                status="stopped",
+                pid=None,
+                port=port,
+                clear_pid=True
+            )
+        else:
+            self.state_manager.set_comfyui_status(
+                status="error",
+                port=port,
+            )
         return ok
 
     def stop(self, timeout: int = 10) -> bool:
@@ -359,19 +397,24 @@ class ProcessManager:
         """Check if a listening process owns this port."""
         return self._find_port_owner_pid(port) is not None
     
-    def restart(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:
+    def restart(self, flags: Optional[List[str]] = None, port: Optional[int] = None) -> bool:
         """Restart ComfyUI with optional new flags"""
         logger.info("Restarting ComfyUI...")
-        
+
+        # Preserve current port when none is explicitly provided
+        if port is None:
+            status = self.state_manager.get_comfyui_status()
+            port = status.get('port', 8818)
+
         # Stop if running
         if self.is_running():
             if not self.stop():
                 logger.error("Failed to stop ComfyUI for restart")
                 return False
-        
+
         # Wait a bit
         time.sleep(2)
-        
+
         # Start with new flags
         return self.start(flags=flags, port=port)
     
