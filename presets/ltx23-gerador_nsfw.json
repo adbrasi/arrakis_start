@@ -6,9 +6,9 @@
   "comfyui_flags": [],
   "models": [
     {
-      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-dev.safetensors",
+      "url": "https://huggingface.co/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors",
       "dir": "checkpoints",
-      "filename": "ltx-2.3-22b-dev.safetensors"
+      "filename": "ltx-2.3-22b-dev-fp8.safetensors"
     },
     {
       "url": "https://huggingface.co/Lightricks/LTX-2-19b-IC-LoRA-Detailer/resolve/main/ltx-2-19b-ic-lora-detailer.safetensors",
@@ -56,9 +56,9 @@
       "filename": "LTX2_audio_vae_bf16.safetensors"
     },
     {
-      "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/taeltx_2.safetensors",
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
       "dir": "vae_approx",
-      "filename": "taeltx_2.safetensors"
+      "filename": "taeltx2_3.safetensors"
     },
     {
       "url": "https://huggingface.co/adbrasi/looper_ltxV2/resolve/main/looper_ltxV2_step_18000.safetensors",
@@ -69,6 +69,16 @@
       "url": "https://civitai.com/api/download/models/2599977?type=Model&format=SafeTensor",
       "dir": "loras",
       "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/looperV3-base/resolve/main/looperV3-base-step00033750.comfy.safetensors",
+      "dir": "loras",
+      "filename": "looperV3-base-step00033750.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/looperV3-base/resolve/main/looperV3-base-step00024000.comfy.safetensors",
+      "dir": "loras",
+      "filename": "looperV3-base-step00024000.comfy.safetensors"
     }
   ],
   "nodes": [
