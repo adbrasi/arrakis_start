@@ -45,5 +45,7 @@
       "filename": "Qwen-Edit-2509-Multiple-angles.safetensors"
     }
   ],
-  "nodes": ["https://github.com/city96/ComfyUI-GGUF"]
+  "nodes": [
+    "https://github.com/city96/ComfyUI-GGUF"
+  ]
 }
