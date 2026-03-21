@@ -40,6 +40,11 @@
     "https://github.com/scraed/LanPaint",
     "https://github.com/philipy1219/ComfyUI-TaylorSeer",
     "https://github.com/city96/ComfyUI-GGUF",
-    "https://github.com/yolain/ComfyUI-Easy-Use"
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
+    "https://github.com/filliptm/ComfyUI_Fill-Nodes",
+    "https://github.com/evanspearman/ComfyMath",
+    "https://github.com/cubiq/ComfyUI_essentials",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes"
   ]
 }
