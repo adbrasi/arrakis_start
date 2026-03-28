@@ -244,6 +244,16 @@ class ProcessManager:
 
             # Ensure runtime env for Blackwell + SageAttention stability.
             env = os.environ.copy()
+
+            # Force comfy-cli launch to use the workspace venv Python.
+            # Without this, cloud templates (VastAI/Runpod) may have /venv/main
+            # on PATH, causing comfy-cli to spawn ComfyUI with the wrong Python.
+            # This ensures pip-installed deps (cv2, gguf, pywt, etc.) are visible
+            # at runtime and the correct PyTorch build (cu128 nightly) is used.
+            venv_bin = str(VENV_DIR / 'bin')
+            env['VIRTUAL_ENV'] = str(VENV_DIR)
+            env['PATH'] = f"{venv_bin}:{env.get('PATH', '')}"
+
             env.setdefault('NVCC_APPEND_FLAGS', '--threads 8')
             env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
             env.setdefault('MAX_JOBS', '32')

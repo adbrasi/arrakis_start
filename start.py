@@ -64,9 +64,20 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', 
 
 
 def _comfy_python() -> str:
-    """Return ComfyUI runtime python executable."""
+    """Return ComfyUI runtime python executable.
+
+    Checks the configured COMFY_PYTHON first, then probes common cloud-template
+    locations (/venv/main, etc.) in case comfy-cli targets a different venv.
+    """
     if COMFY_PYTHON.exists():
         return str(COMFY_PYTHON)
+
+    # Cloud template fallbacks (VastAI / Runpod pre-built images)
+    for alt in (Path('/venv/main/bin/python'), Path('/venv/comfy/bin/python')):
+        if alt.exists():
+            logger.info(f"Using template runtime Python: {alt}")
+            return str(alt)
+
     logger.warning(
         f"ComfyUI python not found at {COMFY_PYTHON}; falling back to current interpreter"
     )
@@ -636,6 +647,47 @@ def _run_pip_install_streaming(cmd: List[str], node_name: str, heartbeat_interva
     return proc.returncode, last_line
 
 
+def _configure_manager_security():
+    """Configure ComfyUI-Manager security for cloud deployment.
+
+    Sets security_level=weak and network_mode=personal_cloud so that
+    the Manager UI is fully functional on VastAI/Runpod instances
+    (listening on 0.0.0.0).
+    """
+    import configparser
+
+    config_dir = COMFY_DIR / 'user' / '__manager'
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / 'config.ini'
+
+    config = configparser.ConfigParser()
+    if config_path.exists():
+        config.read(str(config_path))
+
+    if 'default' not in config:
+        config['default'] = {}
+
+    config['default']['security_level'] = 'weak'
+    config['default']['network_mode'] = 'personal_cloud'
+
+    with open(config_path, 'w') as f:
+        config.write(f)
+
+    logger.info("✓ Manager security configured (security_level=weak, network_mode=personal_cloud)")
+
+
+def _is_manager_pip_installed() -> bool:
+    """Check if ComfyUI-Manager v4+ is installed as a pip package."""
+    try:
+        result = subprocess.run(
+            [_comfy_python(), '-c', 'import comfyui_manager; print("ok")'],
+            capture_output=True, text=True, timeout=15
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
     """Clone/update custom nodes with resilience - continues on failure.
 
@@ -649,11 +701,21 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
     node_urls = list(dict.fromkeys(node_urls))
     failed_nodes = []
 
+    # Always configure Manager security (covers both pip and git installs)
+    if any('ComfyUI-Manager' in u for u in node_urls):
+        _configure_manager_security()
+
     for idx, url in enumerate(node_urls, 1):
         node_name = url.rstrip('/').split('/')[-1]
         dest = cn_dir / node_name
 
         try:
+            # ComfyUI-Manager v4+: if already pip-installed, skip git clone
+            if node_name == 'ComfyUI-Manager' and _is_manager_pip_installed():
+                logger.info(f"✓ ComfyUI-Manager v4+ detected as pip package (skipping git clone)")
+                state.add_node(url)
+                continue
+
             if (dest / '.git').exists():
                 logger.info(f"✓ Already installed: {node_name} (skipping)")
                 state.add_node(url)
@@ -741,9 +803,6 @@ def start_comfyui():
     """Start ComfyUI server"""
     logger.info(f"Starting ComfyUI on port {COMFY_PORT}")
 
-    # Activate venv and run comfy
-    activate_script = VENV_DIR / 'bin' / 'activate'
-
     cmd = [
         COMFY_CLI,
         '--workspace', str(COMFY_DIR),
@@ -755,8 +814,13 @@ def start_comfyui():
         '--front-end-version', 'Comfy-Org/ComfyUI_frontend@latest'
     ]
 
-    # Run in subprocess
-    subprocess.Popen(cmd, cwd=str(COMFY_DIR))
+    # Ensure workspace venv is used (same logic as process_manager.py)
+    env = os.environ.copy()
+    venv_bin = str(VENV_DIR / 'bin')
+    env['VIRTUAL_ENV'] = str(VENV_DIR)
+    env['PATH'] = f"{venv_bin}:{env.get('PATH', '')}"
+
+    subprocess.Popen(cmd, cwd=str(COMFY_DIR), env=env)
     logger.info(f"ComfyUI started at http://0.0.0.0:{COMFY_PORT}")
 
 

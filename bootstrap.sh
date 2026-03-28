@@ -316,6 +316,21 @@ else
     log_warn "ComfyUI requirements.txt not found, skipping dependency sync"
 fi
 
+# Install ComfyUI-Manager v4+ pip package into workspace venv.
+# comfy-cli v1.7+ installs the Manager as a pip package (comfyui_manager) rather
+# than cloning it into custom_nodes/.  We ensure it lives in OUR venv so the
+# runtime Python can find it.
+if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
+    if ! "$COMFY_PYTHON" -c 'import comfyui_manager' 2>/dev/null; then
+        log_info "Installing ComfyUI-Manager pip package into workspace venv..."
+        run_with_progress "Instalando comfyui-manager pip" \
+            "$COMFY_PYTHON" -m pip install --progress-bar on -r "$COMFY_DIR/manager_requirements.txt"
+        log_success "ComfyUI-Manager pip package installed"
+    else
+        log_info "ComfyUI-Manager pip package already present in workspace venv"
+    fi
+fi
+
 # Keep PyTorch nightly cu128 in ComfyUI runtime (Blackwell/RTX 50xx compatibility)
 if torch_runtime_is_ready; then
     log_info "PyTorch nightly cu128 já está correto no runtime; pulando reinstall"
@@ -442,4 +457,9 @@ log_info "========================================="
 cd "$ARRAKIS_DIR"
 export COMFY_PYTHON="$COMFY_PYTHON"
 export COMFY_CLI="$COMFY_CLI"
+# Ensure the workspace venv is the active virtualenv for all child processes.
+# Without this, cloud templates may have /venv/main on PATH and comfy-cli launch
+# would pick up the wrong Python (with stale PyTorch / missing node deps).
+export VIRTUAL_ENV="$COMFY_VENV_DIR"
+export PATH="$COMFY_VENV_DIR/bin:$PATH"
 exec "$ARRAKIS_PYTHON" start.py --web-only
