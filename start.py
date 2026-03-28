@@ -653,6 +653,10 @@ def _configure_manager_security():
     Sets security_level=weak and network_mode=personal_cloud so that
     the Manager UI is fully functional on VastAI/Runpod instances
     (listening on 0.0.0.0).
+
+    Uses RawConfigParser to avoid Python's DEFAULT-section magic that
+    would write ``[DEFAULT]`` instead of the ``[default]`` header the
+    Manager actually expects.
     """
     import configparser
 
@@ -660,15 +664,15 @@ def _configure_manager_security():
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / 'config.ini'
 
-    config = configparser.ConfigParser()
+    config = configparser.RawConfigParser(default_section='__unused__')
     if config_path.exists():
         config.read(str(config_path))
 
-    if 'default' not in config:
-        config['default'] = {}
+    if not config.has_section('default'):
+        config.add_section('default')
 
-    config['default']['security_level'] = 'weak'
-    config['default']['network_mode'] = 'personal_cloud'
+    config.set('default', 'security_level', 'weak')
+    config.set('default', 'network_mode', 'personal_cloud')
 
     with open(config_path, 'w') as f:
         config.write(f)
@@ -683,7 +687,7 @@ def _is_manager_pip_installed() -> bool:
             [_comfy_python(), '-c', 'import comfyui_manager; print("ok")'],
             capture_output=True, text=True, timeout=15
         )
-        return result.returncode == 0
+        return result.returncode == 0 and result.stdout.strip() == 'ok'
     except Exception:
         return False
 
