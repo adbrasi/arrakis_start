@@ -5,13 +5,18 @@
   "comfyui_flags": [],
   "models": [
     {
-      "url": "https://civitai.com/api/download/models/2653283?type=Model&format=SafeTensor&size=full&fp=bf16",
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-preview2.safetensors",
       "dir": "checkpoints",
       "filename": ""
     },
     {
-      "url": "https://civitai.com/api/download/models/2722478?type=Model&format=SafeTensor&size=pruned&fp=fp8",
-      "dir": "checkpoints",
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+      "dir": "text_encoders",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "dir": "vae",
       "filename": ""
     }
   ],
