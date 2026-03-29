@@ -57,7 +57,7 @@
     },
     {
       "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
-      "dir": "vae_approx",
+      "dir": "vae",
       "filename": "taeltx2_3.safetensors"
     },
     {
