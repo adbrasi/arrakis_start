@@ -41,7 +41,7 @@ class DownloadManager:
     def __init__(self, models_dir: Path, progress_callback: Optional[Callable] = None):
         self.models_dir = Path(models_dir)
         self.civitai_token, self.civitai_token_source = self._load_civitai_token()
-        self.hf_token = os.environ.get('HF_TOKEN', '').strip()
+        self.hf_token = self._load_hf_token()
         self.progress_callback = progress_callback
         self._cancelled = False
         self.failures: List[Dict[str, str]] = []
@@ -132,6 +132,24 @@ class DownloadManager:
         
         return '', f'file:{token_file} (unusable)'
     
+    def _load_hf_token(self) -> str:
+        """Load HuggingFace token from multiple well-known env vars.
+
+        Tries the same variants that huggingface_hub itself recognises,
+        so users can set any of them and downloads will authenticate.
+        """
+        for var in (
+            'HF_TOKEN',
+            'HUGGINGFACE_HUB_TOKEN',
+            'HUGGINGFACE_TOKEN',
+            'HUGGINGFACEHUB_API_TOKEN',
+        ):
+            value = os.environ.get(var, '').strip()
+            if value:
+                logger.debug(f"HF token loaded from env var {var}")
+                return value
+        return ''
+
     def get_failure_report(self) -> List[Dict[str, str]]:
         """Return detailed failures for installer summary."""
         return list(self.failures)
@@ -844,8 +862,10 @@ class DownloadManager:
             download_start_ts = time.monotonic()
             last_log_ts = time.monotonic()
             last_activity_ts = time.monotonic()
+            last_progress_ts = time.monotonic()
             heartbeat_interval = 20  # warn if silent for this many seconds
             had_progress = False  # track if we ever saw tqdm progress
+            stall_warned = False
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
@@ -892,6 +912,10 @@ class DownloadManager:
                         )
                         last_logged_pct = percent
                         last_log_ts = now
+
+                    # Reset stall tracking on real progress
+                    last_progress_ts = now
+                    stall_warned = False
                 else:
                     # Non-progress lines: promote important ones to info, skip bar fragments
                     if not stripped.startswith('|') and '%|' not in stripped:
@@ -909,6 +933,31 @@ class DownloadManager:
                             f"({elapsed:.0f}s sem atualização de progresso)"
                         )
                         last_log_ts = now
+
+                # Stall timeout: kill HF CLI if no progress for too long
+                now = time.monotonic()
+                stall_elapsed = now - last_progress_ts
+                if self.aria2_stall_timeout_seconds > 0 and process.poll() is None:
+                    stall_warn_seconds = max(30, self.aria2_stall_timeout_seconds // 4)
+                    if not stall_warned and stall_elapsed > stall_warn_seconds:
+                        logger.warning(
+                            f"  ⚠ {filename}: sem progresso há {stall_elapsed:.0f}s "
+                            f"(timeout em {self.aria2_stall_timeout_seconds}s)"
+                        )
+                        stall_warned = True
+                    if stall_elapsed > self.aria2_stall_timeout_seconds:
+                        logger.error(
+                            f"HF CLI stall timeout para {filename or url} "
+                            f"(sem progresso por {self.aria2_stall_timeout_seconds}s), encerrando"
+                        )
+                        process.kill()
+                        process.wait()
+                        with self._process_lock:
+                            self.current_process = None
+                        reason = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
+                        if tail:
+                            reason = f"{reason} | tail: {' || '.join(tail)}"
+                        return False, reason
 
             process.wait()
             with self._process_lock:
@@ -1007,15 +1056,38 @@ class DownloadManager:
             os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
             os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
+            # Run hf_hub_download in a thread with timeout to prevent infinite hangs
             dl_start = time.monotonic()
-            downloaded_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=file_path,
-                revision=branch,
-                local_dir=str(dest_dir),
-                token=self.hf_token or None
-            )
-            downloaded = Path(downloaded_path)
+            dl_timeout = max(300, self.aria2_stall_timeout_seconds * 3)
+            result_holder = {'path': None, 'error': None}
+
+            def _do_download():
+                try:
+                    result_holder['path'] = hf_hub_download(
+                        repo_id=repo_id,
+                        filename=file_path,
+                        revision=branch,
+                        local_dir=str(dest_dir),
+                        token=self.hf_token or None
+                    )
+                except Exception as exc:
+                    result_holder['error'] = exc
+
+            dl_thread = threading.Thread(target=_do_download, daemon=True)
+            dl_thread.start()
+            dl_thread.join(timeout=dl_timeout)
+
+            if dl_thread.is_alive():
+                logger.error(
+                    f"hf_hub_download timeout para {repo_id}/{file_path} "
+                    f"(>{dl_timeout}s), abortando"
+                )
+                return False, f"hf_hub_python_timeout_{dl_timeout}s"
+
+            if result_holder['error'] is not None:
+                raise result_holder['error']
+
+            downloaded = Path(result_holder['path'])
             target = dest_dir / filename
             if downloaded.resolve() != target.resolve():
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -1259,6 +1331,9 @@ class DownloadManager:
             tail = deque(maxlen=12)
             last_logged_pct = -10
             last_log_ts = time.monotonic()
+            last_progress_ts = time.monotonic()
+            last_percent = 0.0
+            stall_warned = False
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
@@ -1282,6 +1357,12 @@ class DownloadManager:
                         logger.info(f"  ↓ {dest_path.name}: {percent:.0f}% @ {speed} ETA {eta}")
                         last_logged_pct = percent
                         last_log_ts = now
+
+                    # Track forward progress
+                    if percent > (last_percent + 0.01):
+                        last_percent = percent
+                        last_progress_ts = now
+                        stall_warned = False
                 else:
                     # Promote important wget lines to info
                     line_lower = stripped.lower()
@@ -1289,7 +1370,32 @@ class DownloadManager:
                         logger.info(f"  [wget] {stripped}")
                     elif stripped and not stripped.startswith('%'):
                         logger.debug(f"  [wget] {stripped}")
-            
+
+                # Stall timeout for wget
+                now = time.monotonic()
+                stall_elapsed = now - last_progress_ts
+                if self.aria2_stall_timeout_seconds > 0 and process.poll() is None:
+                    stall_warn_seconds = max(30, self.aria2_stall_timeout_seconds // 4)
+                    if not stall_warned and stall_elapsed > stall_warn_seconds:
+                        logger.warning(
+                            f"  ⚠ {dest_path.name}: sem progresso há {stall_elapsed:.0f}s "
+                            f"(timeout em {self.aria2_stall_timeout_seconds}s)"
+                        )
+                        stall_warned = True
+                    if stall_elapsed > self.aria2_stall_timeout_seconds:
+                        logger.error(
+                            f"wget stall timeout para {dest_path.name} "
+                            f"(sem progresso por {self.aria2_stall_timeout_seconds}s), encerrando"
+                        )
+                        process.kill()
+                        process.wait()
+                        with self._process_lock:
+                            self.current_process = None
+                        reason = f"wget_stall_timeout_{self.aria2_stall_timeout_seconds}s"
+                        if tail:
+                            reason = f"{reason} | tail: {' || '.join(tail)}"
+                        return False, reason
+
             process.wait()
             with self._process_lock:
                 self.current_process = None
