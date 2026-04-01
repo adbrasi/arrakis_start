@@ -54,6 +54,11 @@ class DownloadManager:
         else:
             logger.info("Download speed limit: unlimited")
         logger.info(f"HF token: {self._token_tail(self.hf_token)}")
+        if not self.hf_token:
+            logger.warning(
+                "HF_TOKEN not set — gated model downloads will fail. "
+                "Set the HF_TOKEN environment variable with your HuggingFace token."
+            )
         # Auto-store token on disk so hf_xet backend and hf CLI read it for gated models.
         # Always overwrite: the env var is the source of truth (user may rotate tokens).
         if self.hf_token:
@@ -133,20 +138,17 @@ class DownloadManager:
         return '', f'file:{token_file} (unusable)'
     
     def _load_hf_token(self) -> str:
-        """Load HuggingFace token from multiple well-known env vars.
+        """Load HuggingFace token from env vars.
 
-        Tries the same variants that huggingface_hub itself recognises,
-        so users can set any of them and downloads will authenticate.
+        HF_TOKEN is the official env var (used by huggingface_hub, hf_xet,
+        and the hf CLI).  HUGGING_FACE_HUB_TOKEN is the deprecated alias
+        still recognised by the library.  We check both but HF_TOKEN wins.
         """
-        for var in (
-            'HF_TOKEN',
-            'HUGGINGFACE_HUB_TOKEN',
-            'HUGGINGFACE_TOKEN',
-            'HUGGINGFACEHUB_API_TOKEN',
-        ):
+        for var in ('HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN'):
             value = os.environ.get(var, '').strip()
             if value:
-                logger.debug(f"HF token loaded from env var {var}")
+                if var != 'HF_TOKEN':
+                    logger.info(f"HF token loaded from deprecated {var} — consider using HF_TOKEN instead")
                 return value
         return ''
 
@@ -671,6 +673,7 @@ class DownloadManager:
         """Download a single file"""
         url = self._sanitize_source_url(url)
         is_civitai_source = 'civitai.com' in url
+        hf_auth_failure = ''
 
         # Create target directory
         dest_dir = self.models_dir / target_dir
@@ -709,7 +712,7 @@ class DownloadManager:
             logger.error(reason)
             return False, reason, 'precheck'
 
-        # HuggingFace priority: always try HF CLI first for HF URLs (token optional).
+        # HuggingFace priority: try HF CLI first (supports hf_xet for max speed).
         if 'huggingface.co' in url and self.hf_cli_path:
             result, reason = self._download_hf_direct(url, dest_dir, filename)
             self._record_attempt(url, 'hf-cli', result, reason)
@@ -721,12 +724,19 @@ class DownloadManager:
             if hub_ok:
                 return True, 'ok', 'hf-hub-python'
 
-            # Fail fast on deterministic auth errors (retry won't fix).
-            # Use 'auth' stage (not 'precheck') so per-repo access errors
-            # (e.g. gated repos returning 403) don't abort the entire install.
-            auth_failure = self._classify_hf_auth_error(f"{reason} || {hub_reason}")
-            if auth_failure:
-                return False, auth_failure, 'auth'
+            # Classify auth errors but DO NOT fail-fast yet — aria2c with
+            # Authorization header can succeed where hf CLI / hf_hub fail
+            # (e.g. token format issues, hf_xet JWT negotiation bugs).
+            hf_auth_failure = self._classify_hf_auth_error(f"{reason} || {hub_reason}")
+            if hf_auth_failure:
+                if 'gated_model_not_accepted' in hf_auth_failure:
+                    # Gated model not accepted: aria2c won't help either,
+                    # the user needs to accept the license on huggingface.co.
+                    return False, hf_auth_failure, 'auth'
+                logger.warning(
+                    f"HF CLI + Python API falharam com auth error ({hf_auth_failure}), "
+                    f"tentando aria2c/wget como fallback..."
+                )
 
         # Resolve Civitai URL with authenticated redirect handling
         if is_civitai_source:
@@ -780,6 +790,10 @@ class DownloadManager:
             self._record_attempt(url, 'wget-fallback', fallback_ok, fallback_reason)
             if fallback_ok:
                 return True, 'ok', 'wget-fallback'
+            # If HF CLI had an auth error and aria2c/wget also failed,
+            # report as auth (non-retryable) to avoid pointless retries.
+            if hf_auth_failure:
+                return False, hf_auth_failure, 'auth'
             return False, fallback_reason or reason, 'aria2c->wget'
         else:
             ok, reason = self._download_wget(
@@ -790,6 +804,8 @@ class DownloadManager:
             self._record_attempt(url, 'wget', ok, reason)
             if ok:
                 return True, 'ok', 'wget'
+            if hf_auth_failure:
+                return False, hf_auth_failure, 'auth'
             return False, reason, 'wget'
     
     def _add_civitai_token(self, url: str) -> str:
