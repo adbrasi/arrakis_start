@@ -233,7 +233,32 @@ fi
 # 1. Install system dependencies
 log_info "[1/4] Installing system dependencies..."
 
-run_with_progress "Atualizando indices do APT" apt-get update -qq
+# Fix conflicting APT sources from template images (e.g. VastAI templates
+# that ship with duplicate MEGA repo entries using different Signed-By keys).
+# This causes "Conflicting values set for option Signed-By" and makes
+# apt-get update fail with exit 100, aborting the entire bootstrap.
+if ! apt-get update -qq 2>/dev/null; then
+    log_warn "apt-get update falhou — verificando sources conflitantes..."
+    # Remove duplicate/conflicting MEGA repo entries
+    conflicting_sources=()
+    while IFS= read -r f; do
+        conflicting_sources+=("$f")
+    done < <(grep -rl 'mega\.nz' /etc/apt/sources.list.d/ 2>/dev/null || true)
+
+    if [ ${#conflicting_sources[@]} -gt 0 ]; then
+        log_warn "Removendo ${#conflicting_sources[@]} source(s) conflitante(s) do MEGA:"
+        for src in "${conflicting_sources[@]}"; do
+            log_warn "  → $src"
+            rm -f "$src"
+        done
+    fi
+
+    # Also check for other common conflicts: duplicate Signed-By for any repo
+    # Try again after cleanup
+    run_with_progress "Atualizando indices do APT (apos limpeza)" apt-get update -qq
+else
+    log_success "APT indices atualizados"
+fi
 run_with_progress "Instalando dependencias de sistema" apt-get install -y -qq --no-install-recommends \
     python3-venv \
     python3-pip \
