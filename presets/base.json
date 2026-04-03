@@ -2,7 +2,7 @@
   "name": "Base",
   "description": "Core models and nodes needed for all workflows",
   "use_sage_attention": false,
-  "comfyui_flags": [],
+  "comfyui_flags": ["--enable-manager-legacy-ui"],
   "models": [],
   "nodes": [
     "https://github.com/ltdrdata/ComfyUI-Manager"
