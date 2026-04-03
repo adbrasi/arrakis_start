@@ -33,6 +33,21 @@
       "url": "https://huggingface.co/DeverStyle/Flux.2-Klein-Loras/resolve/main/dever_arcane_flux2_klein_9b.safetensors",
       "dir": "loras",
       "filename": "dever_arcane_flux2_klein_9b.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/next_scene_lora_v1/resolve/main/next_scene_lora_v1-step00004000.safetensors",
+      "dir": "loras",
+      "filename": "next_scene_lora_v1-step00004000.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/loven3drender/resolve/main/loven3drender.safetensors",
+      "dir": "loras",
+      "filename": "loven3drender.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/paste_pose_first/resolve/main/paste_pose_first-step00001250.safetensors",
+      "dir": "loras",
+      "filename": "paste_pose_first-step00001250.safetensors"
     }
   ],
   "nodes": [
