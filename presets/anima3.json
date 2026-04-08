@@ -1,0 +1,37 @@
+{
+  "name": "Anima Preview 3",
+  "description": "Anima Preview 3 checkpoint preset with community-tested nodes for edit/inpaint/acceleration.",
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-preview3-base.safetensors?download=true",
+      "dir": "checkpoints",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+      "dir": "text_encoders",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "dir": "vae",
+      "filename": ""
+    }
+  ],
+  "nodes": [
+    "https://github.com/lrzjason/ComfyUI-EditUtils",
+    "https://github.com/ClownsharkBatwing/RES4LYF",
+    "https://github.com/scraed/LanPaint",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/sipherxyz/comfyui-art-venture",
+    "https://github.com/philipy1219/ComfyUI-TaylorSeer",
+    "https://github.com/city96/ComfyUI-GGUF",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/adbrasi/comfyui-ksampler-batch"
+  ],
+  "workflow": "animaV2.json"
+}
