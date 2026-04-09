@@ -6,7 +6,7 @@
   "models": [
     {
       "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-preview3-base.safetensors?download=true",
-      "dir": "checkpoints",
+      "dir": "diffusion_models",
       "filename": ""
     },
     {
