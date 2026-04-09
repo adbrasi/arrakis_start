@@ -32,7 +32,12 @@
     "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
     "https://github.com/yolain/ComfyUI-Easy-Use",
     "https://github.com/adbrasi/comfyui-ksampler-batch",
-    "https://github.com/ltdrdata/was-node-suite-comfyui"
+    "https://github.com/ltdrdata/was-node-suite-comfyui",
+    "https://github.com/ForeignGods/ComfyUI-Mana-Nodes",
+    "https://github.com/Munkyfoot/ComfyUI-TextOverlay",
+    "https://github.com/kimara-ai/ComfyUI-Kimara-AI-Advanced-Watermarks",
+    "https://github.com/omar92/ComfyUI-QualityOfLifeSuit_Omar92",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public"
   ],
   "workflow": "animaV2.json"
 }
