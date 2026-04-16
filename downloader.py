@@ -90,13 +90,18 @@ class DownloadManager:
             self._ensure_hf_token_stored()
         logger.info(f"Civitai token present: {bool(self.civitai_token)} (source: {self.civitai_token_source})")
 
-        # aria2 tunables (override via environment if needed)
+        # aria2 tunables (override via environment if needed).
+        # HuggingFace goes through an LFS bridge with aggressive rate-limiting;
+        # 8 connections is a safer default than the 16 used for direct CDNs
+        # (Civitai and arbitrary URLs). Both are configurable via env.
         self.aria2_connections = os.environ.get('ARIA2_CONNECTIONS', '16')
+        self.aria2_hf_connections = os.environ.get('ARIA2_HF_CONNECTIONS', '8')
         self.aria2_splits = os.environ.get('ARIA2_SPLITS', self.aria2_connections)
         self.aria2_min_split_size = os.environ.get('ARIA2_MIN_SPLIT_SIZE', '1M')
         self.aria2_stall_timeout_seconds = int(os.environ.get('ARIA2_STALL_TIMEOUT_SECONDS', '120'))
         logger.info(
-            f"aria2 settings: connections={self.aria2_connections}, "
+            f"aria2 settings: connections={self.aria2_connections} "
+            f"(HF={self.aria2_hf_connections}), "
             f"splits={self.aria2_splits}, min_split={self.aria2_min_split_size}"
         )
         logger.info(f"aria2 stall timeout: {self.aria2_stall_timeout_seconds}s")
@@ -1163,13 +1168,19 @@ class DownloadManager:
         """Download using aria2c (parallel, resumable) with visible progress"""
         # For Civitai-origin downloads, always honor content-disposition.
         use_content_disposition = prefer_content_disposition or ('civitai.com' in url)
-        
+
+        # HF uses an LFS bridge with stricter rate limits; use fewer connections
+        # per file to avoid 429 responses. Civitai/direct CDNs tolerate 16.
+        is_hf = 'huggingface.co' in url
+        connections = self.aria2_hf_connections if is_hf else self.aria2_connections
+        splits = connections if is_hf else self.aria2_splits
+
         cmd = [
             'aria2c',
             '-c',  # Continue download
-            '-x', self.aria2_connections,  # connections per server
-            '-s', self.aria2_splits,  # split parts
-            f'--max-connection-per-server={self.aria2_connections}',
+            '-x', connections,  # connections per server
+            '-s', splits,  # split parts
+            f'--max-connection-per-server={connections}',
             f'--min-split-size={self.aria2_min_split_size}',
             '--file-allocation=none',
             '--console-log-level=notice',
