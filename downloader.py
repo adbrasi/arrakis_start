@@ -30,6 +30,31 @@ HTTP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ArrakisStart/2.0"
 # Force unbuffered output for real-time progress
 os.environ['PYTHONUNBUFFERED'] = '1'
 
+# Minimum RAM (GB) to safely enable HF_XET_HIGH_PERFORMANCE.
+# HF docs: HP mode allocates multi-GB buffers (up to 64GB) and is intended
+# for machines with at least 64GB RAM. Below that, it can degrade performance.
+HF_XET_HP_MIN_RAM_GB = int(os.environ.get('HF_XET_HP_MIN_RAM_GB', '48'))
+
+
+def _should_enable_hf_xet_hp() -> bool:
+    """Return True when HF_XET_HIGH_PERFORMANCE can be safely enabled.
+
+    Honors an explicit override via HF_XET_HIGH_PERFORMANCE env var: '0' disables,
+    any other truthy value forces-enable. Without an override, we probe RAM via
+    psutil and only enable HP mode when total memory >= HF_XET_HP_MIN_RAM_GB.
+    """
+    override = os.environ.get('HF_XET_HIGH_PERFORMANCE')
+    if override is not None:
+        return override.strip() not in ('0', '', 'false', 'False')
+
+    try:
+        import psutil
+        total_gb = psutil.virtual_memory().total / (1024 ** 3)
+        return total_gb >= HF_XET_HP_MIN_RAM_GB
+    except Exception:
+        # If psutil isn't available, stay on the safe side.
+        return False
+
 # Get venv paths for huggingface-cli
 COMFY_BASE = Path(os.environ.get('COMFY_BASE', '/workspace/comfy'))
 COMFY_VENV_BIN = COMFY_BASE / '.venv' / 'bin'
@@ -841,11 +866,13 @@ class DownloadManager:
         # Ensure HF_TOKEN is in subprocess env (may have been set only at init time)
         if self.hf_token:
             env['HF_TOKEN'] = self.hf_token
-        # hf_xet (v1.0+): high-performance mode
-        env['HF_XET_HIGH_PERFORMANCE'] = '1'
+        # hf_xet (v1.0+): high-performance mode — only when we have enough RAM
+        # (HF docs require ≥64GB RAM for HP mode; it allocates multi-GB buffers).
+        if _should_enable_hf_xet_hp():
+            env['HF_XET_HIGH_PERFORMANCE'] = '1'
         env['HF_XET_NUM_CONCURRENT_RANGE_GETS'] = os.environ.get('HF_XET_NUM_CONCURRENT_RANGE_GETS', '32')
-        # hf_transfer (legacy): enable if installed (ignored on v1.0+ but safe)
-        env['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+        # HF_HUB_ENABLE_HF_TRANSFER is deprecated by HuggingFace: hf_transfer was
+        # replaced by hf_xet and the variable is ignored when hf_xet is active.
         env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '120')
         # Ensure tqdm doesn't get disabled
         env.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
@@ -1062,14 +1089,14 @@ class DownloadManager:
         # Save original env values to restore later
         _saved_env = {
             'HF_XET_HIGH_PERFORMANCE': os.environ.get('HF_XET_HIGH_PERFORMANCE'),
-            'HF_HUB_ENABLE_HF_TRANSFER': os.environ.get('HF_HUB_ENABLE_HF_TRANSFER'),
             'HF_HUB_DISABLE_PROGRESS_BARS': os.environ.get('HF_HUB_DISABLE_PROGRESS_BARS'),
         }
         try:
             from huggingface_hub import hf_hub_download
-            # Ensure fast backend + progress bars are enabled
-            os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
-            os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+            # Ensure fast backend + progress bars are enabled.
+            # HP mode requires ≥64GB RAM; avoid enabling it on small VMs.
+            if _should_enable_hf_xet_hp():
+                os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
             os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
             # Run hf_hub_download in a thread with timeout to prevent infinite hangs
