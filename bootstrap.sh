@@ -184,8 +184,18 @@ for module_name in required:
 
 import torch
 cuda_version = (getattr(torch.version, "cuda", None) or "").strip()
-if not cuda_version.startswith("12.8"):
-    raise SystemExit(2)
+# Accept CUDA 12.8+ and any CUDA 13.x.
+# - 12.8 is the minimum for Blackwell sm_120 support in stable PyTorch
+# - 13.x is the new stable default on PyPI (PyTorch 2.11+)
+# - A stricter pin can be set via TORCH_CUDA_PIN_PREFIX env var
+import os
+pin = os.environ.get("TORCH_CUDA_PIN_PREFIX", "").strip()
+if pin:
+    if not cuda_version.startswith(pin):
+        raise SystemExit(2)
+else:
+    if not (cuda_version.startswith("12.8") or cuda_version.startswith("13.")):
+        raise SystemExit(2)
 PY
 }
 
