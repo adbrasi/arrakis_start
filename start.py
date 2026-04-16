@@ -92,9 +92,22 @@ def _inject_github_token(url: str) -> str:
 
 
 def _sanitize_git_output(text: str) -> str:
-    """Remove GitHub token from git command output to prevent leaking credentials."""
-    if GITHUB_TOKEN and GITHUB_TOKEN in text:
-        return text.replace(GITHUB_TOKEN, '***')
+    """Remove credentials from command output before logging.
+
+    Covers GitHub, HuggingFace and Civitai tokens — any of these can leak
+    through clone URLs, error messages, or tqdm progress lines.
+    """
+    if not text:
+        return text
+    for token in (
+        GITHUB_TOKEN,
+        os.environ.get('HF_TOKEN', ''),
+        os.environ.get('HUGGING_FACE_HUB_TOKEN', ''),
+        os.environ.get('CIVITAI_TOKEN', ''),
+        os.environ.get('CIVITAI_API_KEY', ''),
+    ):
+        if token and token in text:
+            text = text.replace(token, '***')
     return text
 
 
