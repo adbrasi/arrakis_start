@@ -255,12 +255,16 @@ class ProcessManager:
             env['PATH'] = f"{venv_bin}:{env.get('PATH', '')}"
 
             env.setdefault('NVCC_APPEND_FLAGS', '--threads 8')
-            env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+            # PyTorch 2.9+ renamed PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF.
+            # Set both so old and new torch builds work without warnings.
+            alloc_conf = env.get('PYTORCH_ALLOC_CONF') or env.get('PYTORCH_CUDA_ALLOC_CONF') or 'expandable_segments:True'
+            env['PYTORCH_ALLOC_CONF'] = alloc_conf
+            env['PYTORCH_CUDA_ALLOC_CONF'] = alloc_conf
             env.setdefault('MAX_JOBS', '32')
             logger.info(
                 "ComfyUI env: "
                 f"NVCC_APPEND_FLAGS={env.get('NVCC_APPEND_FLAGS')} "
-                f"PYTORCH_CUDA_ALLOC_CONF={env.get('PYTORCH_CUDA_ALLOC_CONF')} "
+                f"PYTORCH_ALLOC_CONF={env.get('PYTORCH_ALLOC_CONF')} "
                 f"MAX_JOBS={env.get('MAX_JOBS')}"
             )
             

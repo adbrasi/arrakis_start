@@ -216,7 +216,10 @@ export MAX_JOBS="${MAX_JOBS:-32}"
 export HF_HUB_ENABLE_HF_TRANSFER=1
 export HF_TRANSFER_CONCURRENCY="${HF_TRANSFER_CONCURRENCY:-16}"
 export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:---threads 8}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+# PyTorch 2.9+ renamed PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF (backend-agnostic).
+# Export both so old and new torch builds work without warnings.
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-$PYTORCH_ALLOC_CONF}"
 # Create directories
 mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
 
