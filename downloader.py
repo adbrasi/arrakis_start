@@ -573,21 +573,17 @@ class DownloadManager:
                 self.has_hf_xet = True
                 logger.info("✓ hf_xet auto-installed successfully — XET backend now active")
             else:
+                # hf_transfer is deprecated by HuggingFace in favor of hf_xet;
+                # no useful fallback is available anymore. Surface a clear error
+                # so the user can fix the env (likely network/mirror issue).
                 logger.error(
                     f"Failed to auto-install hf_xet (exit {install_result.returncode}): "
                     f"{install_result.stderr.strip()}"
                 )
-                # Try hf_transfer as legacy fallback
-                if not has_transfer:
-                    logger.info("Attempting hf_transfer as fallback...")
-                    transfer_result = subprocess.run(
-                        [pip_path, 'install', '-q', 'hf_transfer'],
-                        capture_output=True, text=True, timeout=120
-                    )
-                    if transfer_result.returncode == 0:
-                        logger.info("✓ hf_transfer installed as fallback (slower than XET but faster than default)")
-                    else:
-                        logger.warning("Could not install hf_transfer either — downloads will use default HTTP")
+                logger.error(
+                    "HuggingFace downloads will use slow default HTTP backend. "
+                    "Install manually with: pip install --upgrade hf_xet"
+                )
         except Exception as e:
             logger.error(f"Auto-install failed: {e}")
     
