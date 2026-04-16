@@ -318,12 +318,24 @@ else
     log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
 fi
 
-# Configure hf_xet for MAXIMUM download speed (100x+ faster than default)
-# HF_XET_HIGH_PERFORMANCE: saturates network/CPU for fastest downloads
-# HF_XET_NUM_CONCURRENT_RANGE_GETS: increases parallel chunk reads (24-32 for fast SSD)
-export HF_XET_HIGH_PERFORMANCE=1
-export HF_XET_NUM_CONCURRENT_RANGE_GETS=32
-export HF_HUB_DOWNLOAD_TIMEOUT=60
+# Configure hf_xet for MAXIMUM download speed.
+# HF_XET_HIGH_PERFORMANCE: saturates network/CPU; HF docs warn it allocates
+#   multi-GB buffers and should only be used with >=64GB RAM. Below that it
+#   can degrade performance. We auto-detect via total MemTotal.
+# HF_XET_NUM_CONCURRENT_RANGE_GETS: parallel chunk reads (default oficial: 16)
+HF_XET_HP_MIN_RAM_GB="${HF_XET_HP_MIN_RAM_GB:-48}"
+if [ -z "${HF_XET_HIGH_PERFORMANCE:-}" ]; then
+    mem_total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    mem_total_gb=$((mem_total_kb / 1024 / 1024))
+    if [ "$mem_total_gb" -ge "$HF_XET_HP_MIN_RAM_GB" ]; then
+        export HF_XET_HIGH_PERFORMANCE=1
+        log_info "HF_XET_HIGH_PERFORMANCE=1 ativado (RAM=${mem_total_gb}GB >= ${HF_XET_HP_MIN_RAM_GB}GB)"
+    else
+        log_info "HF_XET_HIGH_PERFORMANCE desativado (RAM=${mem_total_gb}GB < ${HF_XET_HP_MIN_RAM_GB}GB); usando adaptive concurrency"
+    fi
+fi
+export HF_XET_NUM_CONCURRENT_RANGE_GETS="${HF_XET_NUM_CONCURRENT_RANGE_GETS:-32}"
+export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-60}"
 
 log_success "ComfyUI Python environment ready"
 
