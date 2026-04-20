@@ -1,6 +1,6 @@
 {
-  "name": "Anima Preview 3 Full",
-  "description": "Anima Preview 3 com LoRAs, detectores (bbox/segm) e stack completo de custom nodes para edit/inpaint/detailer.",
+  "name": "Anima 3 Studio",
+  "description": "Anima 3 Studio — Preview 3 com LoRAs, detectores (bbox/segm) e stack completo de custom nodes para edit/inpaint/detailer.",
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
@@ -63,6 +63,31 @@
       "url": "https://huggingface.co/adbrasi/testedownload/resolve/main/99coins_anime_girl_face_m_seg.pt",
       "dir": "ultralytics/bbox",
       "filename": "99coins_anime_girl_face_m_seg.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/Uglymaleface-best.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "Uglymaleface-best.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/adetailerFootYolov8x_v20.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "adetailerFootYolov8x_v20.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/barCensorDetection_yolo26.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "barCensorDetection_yolo26.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/footShoeDetailer_v04Seg.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "footShoeDetailer_v04Seg.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/pussyPubesAnusDetector_v10.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "pussyPubesAnusDetector_v10.pt"
     }
   ],
   "nodes": [
