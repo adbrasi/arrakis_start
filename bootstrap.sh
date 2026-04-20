@@ -437,9 +437,11 @@ if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
     fi
 fi
 
-# Keep PyTorch nightly cu128 in ComfyUI runtime (Blackwell/RTX 50xx compatibility)
+# Ensure a Blackwell-compatible PyTorch (CUDA 12.8+/13.x) is available in the
+# ComfyUI runtime. When the template already ships a newer torch (e.g. cu13
+# wheels from PyPI), torch_runtime_is_ready accepts it and we skip reinstall.
 if torch_runtime_is_ready; then
-    log_info "PyTorch nightly cu128 já está correto no runtime; pulando reinstall"
+    log_info "PyTorch compatível (CUDA 12.8+/13.x) já presente no runtime; pulando reinstall"
 else
     log_info "PyTorch ausente/incompatível; instalando nightly cu128 no runtime..."
     run_with_progress "Instalando PyTorch nightly cu128 (pode demorar)" \
@@ -450,7 +452,7 @@ else
     if torch_runtime_is_ready; then
         log_success "PyTorch nightly cu128 installed"
     else
-        log_error "PyTorch install completed but validation failed (torch/torchvision/torchaudio + CUDA 12.8)"
+        log_error "PyTorch install completed but validation failed (torch/torchvision/torchaudio + CUDA 12.8+/13.x)"
         exit 1
     fi
 fi
@@ -508,9 +510,11 @@ fi
 
 run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptools)" \
     pip_install_into "$ARRAKIS_PYTHON" --upgrade pip wheel setuptools
-# HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps)
-run_with_progress "Instalando huggingface_hub[cli] + hf_xet no venv Arrakis" \
-    pip_install_into "$ARRAKIS_PYTHON" --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
+# HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps).
+# Since huggingface_hub>=1.0 the `hf` CLI is bundled by default and the [cli]
+# extra was removed — installing it would emit a pointless warning.
+run_with_progress "Instalando huggingface_hub + hf_xet no venv Arrakis" \
+    pip_install_into "$ARRAKIS_PYTHON" --upgrade "huggingface_hub>=1.3.0,<2.0" hf_xet
 
 # Store HF token so hf_xet backend and gated model downloads work correctly.
 # hf auth login caches the token at $HF_HOME/token, which hf_xet reads directly
