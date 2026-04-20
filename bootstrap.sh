@@ -89,6 +89,58 @@ mark_requirements_synced() {
     requirements_hash "$req_file" > "$marker_file"
 }
 
+# Install uv if not present. uv is a Rust-based pip replacement that is 5-10x
+# faster than pip for resolving and installing Python packages. Using the
+# standalone installer avoids a chicken-and-egg with pip itself.
+ensure_uv_installed() {
+    if command -v uv >/dev/null 2>&1; then
+        return 0
+    fi
+    log_info "Installing uv (fast Python package installer)..."
+    if curl -LsSf --retry 5 --retry-delay 2 --connect-timeout 15 --max-time 60 \
+        https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null 2>&1; then
+        if command -v uv >/dev/null 2>&1; then
+            log_success "uv instalado ($(uv --version 2>/dev/null || echo unknown))"
+            return 0
+        fi
+    fi
+    log_warn "Falha ao instalar uv — seguindo com pip padrão (mais lento)"
+    return 1
+}
+
+# Install Python packages into a specific interpreter. Uses `uv pip install`
+# when available (major speedup), otherwise falls back to `<python> -m pip install`.
+# Drops pip-only flags (--progress-bar) when using uv.
+pip_install_into() {
+    local python_bin="$1"
+    shift
+
+    if command -v uv >/dev/null 2>&1; then
+        local filtered=()
+        local skip_next=0
+        local arg
+        for arg in "$@"; do
+            if [ "$skip_next" = "1" ]; then
+                skip_next=0
+                continue
+            fi
+            case "$arg" in
+                --progress-bar)
+                    skip_next=1
+                    ;;
+                --progress-bar=*)
+                    ;;
+                *)
+                    filtered+=("$arg")
+                    ;;
+            esac
+        done
+        uv pip install --python "$python_bin" "${filtered[@]}"
+    else
+        "$python_bin" -m pip install "$@"
+    fi
+}
+
 stop_template_comfy_processes() {
     local pattern="$1"
     if pgrep -f "$pattern" >/dev/null 2>&1; then
@@ -293,6 +345,10 @@ fi
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
+# Install uv — speeds up every subsequent pip-like operation by ~5-10x.
+# Safe to call even if uv is already present; it is a no-op in that case.
+ensure_uv_installed || true
+
 log_success "System dependencies installed"
 
 # 2. Setup ComfyUI Python environment
@@ -309,11 +365,11 @@ fi
 
 if [ "$COMFY_VENV_CREATED" -eq 1 ]; then
     run_with_progress "Instalando tooling base do venv ComfyUI (pip/wheel/setuptools/comfy-cli)" \
-        "$COMFY_PYTHON" -m pip install --progress-bar on --upgrade pip wheel setuptools comfy-cli
+        pip_install_into "$COMFY_PYTHON" --upgrade pip wheel setuptools comfy-cli
 elif [ ! -x "$COMFY_CLI" ]; then
     log_warn "comfy-cli não encontrado no venv; instalando..."
     run_with_progress "Instalando comfy-cli no venv ComfyUI" \
-        "$COMFY_PYTHON" -m pip install --progress-bar on --upgrade comfy-cli
+        pip_install_into "$COMFY_PYTHON" --upgrade comfy-cli
 else
     log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
 fi
@@ -356,7 +412,7 @@ if [ -f "$COMFY_DIR/requirements.txt" ]; then
     if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
         log_info "Syncing ComfyUI core requirements..."
         run_with_progress "Instalando dependencias core do ComfyUI" \
-            "$COMFY_PYTHON" -m pip install --progress-bar on --upgrade -r "$COMFY_DIR/requirements.txt"
+            pip_install_into "$COMFY_PYTHON" --upgrade -r "$COMFY_DIR/requirements.txt"
         mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
         log_success "ComfyUI core requirements synced"
     else
@@ -374,7 +430,7 @@ if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
     if ! "$COMFY_PYTHON" -c 'import comfyui_manager' 2>/dev/null; then
         log_info "Installing ComfyUI-Manager pip package into workspace venv..."
         run_with_progress "Instalando comfyui-manager pip" \
-            "$COMFY_PYTHON" -m pip install --progress-bar on -r "$COMFY_DIR/manager_requirements.txt"
+            pip_install_into "$COMFY_PYTHON" -r "$COMFY_DIR/manager_requirements.txt"
         log_success "ComfyUI-Manager pip package installed"
     else
         log_info "ComfyUI-Manager pip package already present in workspace venv"
@@ -387,7 +443,7 @@ if torch_runtime_is_ready; then
 else
     log_info "PyTorch ausente/incompatível; instalando nightly cu128 no runtime..."
     run_with_progress "Instalando PyTorch nightly cu128 (pode demorar)" \
-        "$COMFY_PYTHON" -m pip install --pre --upgrade --force-reinstall \
+        pip_install_into "$COMFY_PYTHON" --pre --upgrade --force-reinstall \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/nightly/cu128
 
@@ -451,10 +507,10 @@ else
 fi
 
 run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptools)" \
-    "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade pip wheel setuptools
+    pip_install_into "$ARRAKIS_PYTHON" --upgrade pip wheel setuptools
 # HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps)
 run_with_progress "Instalando huggingface_hub[cli] + hf_xet no venv Arrakis" \
-    "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
+    pip_install_into "$ARRAKIS_PYTHON" --upgrade "huggingface_hub[cli]>=1.3.0,<2.0" hf_xet
 
 # Store HF token so hf_xet backend and gated model downloads work correctly.
 # hf auth login caches the token at $HF_HOME/token, which hf_xet reads directly
@@ -491,7 +547,7 @@ else
 fi
 
 run_with_progress "Instalando requirements do Arrakis" \
-    "$ARRAKIS_PYTHON" -m pip install --progress-bar on --upgrade -r "$ARRAKIS_DIR/requirements.txt"
+    pip_install_into "$ARRAKIS_PYTHON" --upgrade -r "$ARRAKIS_DIR/requirements.txt"
 log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
 
 log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
