@@ -165,7 +165,24 @@ class ProcessManager:
     def start(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:
         """Start ComfyUI with optional flags + preset-specific flags"""
         if self.is_running():
-            logger.warning("ComfyUI is already running")
+            status = self.state_manager.get_comfyui_status()
+            running_pid = status.get('pid')
+            running_port = status.get('port', port)
+            running_flags = status.get('flags') or []
+            running_cmdline = ''
+            try:
+                if running_pid:
+                    running_cmdline = ' '.join(psutil.Process(running_pid).cmdline())
+            except Exception:
+                pass
+            logger.warning(
+                f"ComfyUI is already running (pid={running_pid}, port={running_port}); "
+                f"refusing to launch a second instance. Use restart() to apply new flags."
+            )
+            if running_flags:
+                logger.warning(f"  → current flags: {running_flags}")
+            if running_cmdline:
+                logger.warning(f"  → cmdline: {running_cmdline}")
             return False
 
         if self._is_port_in_use(port):

@@ -245,18 +245,24 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     logger.info(f"Installing presets: {preset_names}")
                     success = install_presets(preset_names, include_base=True)
 
-                    # STEP 3: Restart ComfyUI with new preset flags (+ optional extra flags from UI)
+                    # STEP 3: Restart ComfyUI with new preset flags (+ optional extra flags from UI).
+                    # Use restart() instead of start() so that any stray ComfyUI instance
+                    # (e.g. one that came back up during the long install window) is
+                    # replaced with a fresh launch carrying the freshly-saved preset flags.
                     if success:
                         print("\n" + "="*60)
                         print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
                         print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
                         print("="*60 + "\n")
-                        logger.info("Installation complete, starting ComfyUI with preset flags...")
-                        started = pm.start(flags=extra_flags if extra_flags else None)
+                        logger.info("Installation complete, (re)starting ComfyUI with preset flags...")
+                        started = pm.restart(flags=extra_flags if extra_flags else None)
                         if started:
                             logger.info("✓ ComfyUI started successfully")
                         else:
-                            logger.error("ComfyUI failed to start after installation")
+                            logger.error(
+                                "ComfyUI failed to start after installation — "
+                                "check logs above for startup timeout or port conflict"
+                            )
                     else:
                         print("\n" + "="*60)
                         print("\033[1;31m❌ ERRO NA INSTALAÇÃO ❌\033[0m")
