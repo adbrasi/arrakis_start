@@ -55,6 +55,11 @@
       "filename": "Eyeful_v2-Individual.pt"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/Eyeful_v2-Paired.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "Eyeful_v2-Paired.pt"
+    },
+    {
       "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/ntd11_anime_nsfw_segm_v5-variant1.pt",
       "dir": "ultralytics/bbox",
       "filename": "ntd11_anime_nsfw_segm_v5-variant1.pt"
