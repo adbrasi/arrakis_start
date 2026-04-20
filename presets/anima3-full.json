@@ -1,0 +1,107 @@
+{
+  "name": "Anima Preview 3 Full",
+  "description": "Anima Preview 3 com LoRAs, detectores (bbox/segm) e stack completo de custom nodes para edit/inpaint/detailer.",
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-preview3-base.safetensors?download=true",
+      "dir": "diffusion_models",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
+      "dir": "text_encoders",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "dir": "vae",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/ani_ic_lora_v2_next_scene_v2_s1950_r64.safetensors?download=true",
+      "dir": "loras",
+      "filename": "ani_ic_lora_v2_next_scene_v2_s1950_r64.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/ani_ic_lora_v2_next_scene_v2_s900_r64.safetensors?download=true",
+      "dir": "loras",
+      "filename": "ani_ic_lora_v2_next_scene_v2_s900_r64.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/ani_ominicontrol_rule34_tile_s750.safetensors?download=true",
+      "dir": "loras",
+      "filename": "ani_ominicontrol_rule34_tile_s750.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/PitHandDetailer-v2-Test-v9c.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "PitHandDetailer-v2-Test-v9c.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/footDetectionForAdetailer_bbox.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "footDetectionForAdetailer_bbox.pt"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/pussy_yolo11s_bbox_best.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "pussy_yolo11s_bbox_best.pt"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/Eyeful_v2-Individual.pt",
+      "dir": "ultralytics/bbox",
+      "filename": "Eyeful_v2-Individual.pt"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/ntd11_anime_nsfw_segm_v5-variant1.pt",
+      "dir": "ultralytics/bbox",
+      "filename": "ntd11_anime_nsfw_segm_v5-variant1.pt"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/testedownload/resolve/main/99coins_anime_girl_face_m_seg.pt",
+      "dir": "ultralytics/bbox",
+      "filename": "99coins_anime_girl_face_m_seg.pt"
+    }
+  ],
+  "nodes": [
+    "https://github.com/lrzjason/ComfyUI-EditUtils",
+    "https://github.com/ClownsharkBatwing/RES4LYF",
+    "https://github.com/scraed/LanPaint",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/sipherxyz/comfyui-art-venture",
+    "https://github.com/philipy1219/ComfyUI-TaylorSeer",
+    "https://github.com/city96/ComfyUI-GGUF",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/adbrasi/comfyui-ksampler-batch",
+    "https://github.com/ltdrdata/was-node-suite-comfyui",
+    "https://github.com/ForeignGods/ComfyUI-Mana-Nodes",
+    "https://github.com/Munkyfoot/ComfyUI-TextOverlay",
+    "https://github.com/kimara-ai/ComfyUI-Kimara-AI-Advanced-Watermarks",
+    "https://github.com/omar92/ComfyUI-QualityOfLifeSuit_Omar92",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/adbrasi/ComfyI2I",
+    "https://github.com/adbrasi/prompta_generita_lite",
+    "https://github.com/adbrasi/ComfyUI-ControlAnima",
+    "https://github.com/adbrasi/comfy_control_nimanima",
+    "https://github.com/adbrasi/rule_picker",
+    "https://github.com/adbrasi/adfit-test-node",
+    "https://github.com/adbrasi/import_itera",
+    "https://github.com/adbrasi/comfyui-media-collector",
+    "https://github.com/adbrasi/comfyui-hf-ultimate-uploader",
+    "https://github.com/adbrasi/booru-helper-mini",
+    "https://github.com/chflame163/ComfyUI_LayerStyle",
+    "https://github.com/adbrasi/cezarsave34",
+    "https://github.com/1038lab/ComfyUI-RMBG",
+    "https://github.com/Acly/comfyui-inpaint-nodes",
+    "https://github.com/chrisgoringe/cg-image-filter",
+    "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+    "https://github.com/ltdrdata/ComfyUI-Inspire-Pack",
+    "https://github.com/ltdrdata/ComfyUI-Impact-Subpack"
+  ],
+  "workflow": "animaV2.json"
+}
