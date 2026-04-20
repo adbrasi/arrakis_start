@@ -35,6 +35,21 @@
       "filename": "ani_ominicontrol_rule34_tile_s750.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/anima_ominicontrol_rule34_depth_s2000.safetensors?download=true",
+      "dir": "loras",
+      "filename": "anima_ominicontrol_rule34_depth_s2000.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/depth_ic_lora.safetensors?download=true",
+      "dir": "loras",
+      "filename": "depth_ic_lora.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/anima_ominicontrol_rule34_pose_s2500_r64_512_b24.safetensors?download=true",
+      "dir": "loras",
+      "filename": "anima_ominicontrol_rule34_pose_s2500_r64_512_b24.safetensors"
+    },
+    {
       "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/PitHandDetailer-v2-Test-v9c.pt?download=true",
       "dir": "ultralytics/bbox",
       "filename": "PitHandDetailer-v2-Test-v9c.pt"
