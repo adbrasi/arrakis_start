@@ -1,6 +1,6 @@
 {
-  "name": "Anima Preview 3",
-  "description": "Anima Preview 3 checkpoint preset with community-tested nodes for edit/inpaint/acceleration.",
+  "name": "Anima 3 - simples",
+  "description": "Anima 3 - simples: checkpoint Preview 3 com nodes essenciais para edit/inpaint/acceleration (sem LoRAs/detectores do Studio).",
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
