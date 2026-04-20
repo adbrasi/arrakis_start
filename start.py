@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 
 # Import state manager
@@ -824,46 +824,54 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
             continue
         to_clone.append(url)
 
-    clone_results: List[Tuple[str, str, Path, bool, Optional[str]]] = []
-    if to_clone:
-        workers = max(1, min(NODES_CLONE_WORKERS, len(to_clone)))
-        logger.info(f"Cloning {len(to_clone)} custom nodes (parallel workers={workers})...")
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(_clone_node, url, cn_dir) for url in to_clone]
-            for fut in futures:
-                try:
-                    clone_results.append(fut.result())
-                except Exception as e:
-                    logger.error(f"Clone task raised an exception: {e}")
+    if not to_clone:
+        return {"success": len(failed_nodes) == 0, "failed": failed_nodes}
 
-    # Sequential requirements install (pip is not concurrent-safe inside
-    # the same env — concurrent writes to .dist-info can corrupt packages).
-    for url, node_name, dest, clone_ok, skip_reason in clone_results:
-        if skip_reason == 'already_installed':
-            logger.info(f"✓ Already installed: {node_name} (skipping)")
-            state.add_node(url)
-            continue
+    workers = max(1, min(NODES_CLONE_WORKERS, len(to_clone)))
+    logger.info(
+        f"Cloning {len(to_clone)} custom nodes (parallel workers={workers}); "
+        "requirements install as clones complete"
+    )
 
-        if not clone_ok:
-            logger.error(f"Failed to clone node {node_name} after retries: {url}")
-            failed_nodes.append(node_name)
-            continue
+    # Pipeline: submit clones to a pool and consume completions as they arrive
+    # in the main thread so `pip install -r requirements.txt` can start for a
+    # finished node while other nodes are still cloning. Pip itself stays
+    # sequential (single-threaded here) because concurrent writes into the
+    # same venv can corrupt dist-info.
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_clone_node, url, cn_dir) for url in to_clone]
+        for fut in as_completed(futures):
+            try:
+                url, node_name, dest, clone_ok, skip_reason = fut.result()
+            except Exception as e:
+                logger.error(f"Clone task raised an exception: {e}")
+                continue
 
-        req_file = dest / 'requirements.txt'
-        if req_file.exists():
-            logger.info(f"Installing requirements for {node_name}...")
-            retcode, last_line = _run_pip_install_streaming(
-                [_comfy_python(), '-m', 'pip', 'install', '-r', str(req_file)],
-                node_name,
-            )
-            if retcode != 0:
-                logger.warning(
-                    f"Requirements install failed for {node_name} (exit {retcode}), continuing"
+            if skip_reason == 'already_installed':
+                logger.info(f"✓ Already installed: {node_name} (skipping)")
+                state.add_node(url)
+                continue
+
+            if not clone_ok:
+                logger.error(f"Failed to clone node {node_name} after retries: {url}")
+                failed_nodes.append(node_name)
+                continue
+
+            req_file = dest / 'requirements.txt'
+            if req_file.exists():
+                logger.info(f"Installing requirements for {node_name}...")
+                retcode, last_line = _run_pip_install_streaming(
+                    [_comfy_python(), '-m', 'pip', 'install', '-r', str(req_file)],
+                    node_name,
                 )
-                if last_line:
-                    logger.warning(f"[{node_name} pip last] {last_line}")
+                if retcode != 0:
+                    logger.warning(
+                        f"Requirements install failed for {node_name} (exit {retcode}), continuing"
+                    )
+                    if last_line:
+                        logger.warning(f"[{node_name} pip last] {last_line}")
 
-        state.add_node(url)
+            state.add_node(url)
 
     if failed_nodes:
         logger.warning(f"Nodes that failed to install: {', '.join(failed_nodes)}")
