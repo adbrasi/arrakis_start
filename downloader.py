@@ -114,8 +114,19 @@ class DownloadManager:
         # Find HuggingFace CLI (check venv first, then system)
         # New CLI command is `hf`, fallback to `huggingface-cli` for compatibility
         self.hf_cli_path, self._hf_cli_pip = self._find_hf_cli()
-        self.current_process = None
+        # Track all live download subprocesses so cancel() can kill them all
+        # and download_all() can safely run multiple downloads in parallel.
+        self._active_procs: "set[subprocess.Popen]" = set()
         self._process_lock = threading.Lock()
+        self._failures_lock = threading.Lock()
+
+        # Parallel downloads: defaults to 3 concurrent files. Each aria2c call
+        # still uses its own 16-connection pool, so total connections can reach
+        # ~48 per CDN. Tune via DOWNLOAD_PARALLELISM env var.
+        self.parallel_downloads = max(
+            1, int(os.environ.get('DOWNLOAD_PARALLELISM', '3'))
+        )
+        logger.info(f"Parallel downloads: {self.parallel_downloads}")
 
         # Ensure hf_xet is installed in the same env as the HF CLI
         self._ensure_hf_xet()
@@ -184,7 +195,8 @@ class DownloadManager:
 
     def get_failure_report(self) -> List[Dict[str, str]]:
         """Return detailed failures for installer summary."""
-        return list(self.failures)
+        with self._failures_lock:
+            return list(self.failures)
     
     def _token_tail(self, token: str) -> str:
         if not token:
@@ -229,23 +241,27 @@ class DownloadManager:
             logger.info(f"HF token on disk matches env ({token_file})")
     
     def _record_failure(self, item: Dict, reason: str, stage: str):
-        """Track a failed download item with context."""
-        self.failures.append({
+        """Track a failed download item with context (thread-safe)."""
+        entry = {
             'filename': item.get('filename') or self._extract_filename(item.get('url', '')),
             'dir': item.get('dir', ''),
             'url': item.get('url', ''),
             'stage': stage,
             'reason': reason
-        })
-    
+        }
+        with self._failures_lock:
+            self.failures.append(entry)
+
     def _record_attempt(self, url: str, method: str, ok: bool, reason: str = ''):
-        """Keep lightweight attempt logs for debugging."""
-        self.attempt_logs.append({
+        """Keep lightweight attempt logs for debugging (thread-safe)."""
+        entry = {
             'url': url,
             'method': method,
             'ok': str(ok),
             'reason': reason
-        })
+        }
+        with self._failures_lock:
+            self.attempt_logs.append(entry)
     
     def _is_retryable_failure(self, stage: str, reason: str) -> bool:
         """Return False for deterministic/precheck errors that retries cannot fix."""
@@ -592,16 +608,30 @@ class DownloadManager:
         except Exception as e:
             logger.error(f"Auto-install failed: {e}")
     
+    def _register_process(self, process: subprocess.Popen) -> None:
+        """Track a live subprocess so cancel() can kill it later."""
+        with self._process_lock:
+            self._active_procs.add(process)
+
+    def _unregister_process(self, process: Optional[subprocess.Popen]) -> None:
+        """Stop tracking a subprocess (called after wait/kill)."""
+        if process is None:
+            return
+        with self._process_lock:
+            self._active_procs.discard(process)
+
     def cancel(self):
-        """Cancel ongoing downloads immediately"""
+        """Cancel ongoing downloads immediately (kills every live subprocess)."""
         self._cancelled = True
         with self._process_lock:
-            if self.current_process:
-                logger.warning("Killing active download process...")
-                try:
-                    self.current_process.kill()
-                except Exception as e:
-                    logger.error(f"Failed to kill process: {e}")
+            active = list(self._active_procs)
+            self._active_procs.clear()
+        for proc in active:
+            logger.warning("Killing active download process...")
+            try:
+                proc.kill()
+            except Exception as e:
+                logger.error(f"Failed to kill process: {e}")
         logger.info("Download cancelled by user")
     
     def _report_progress(self, message: str, current: int = 0, total: int = 0):
@@ -617,78 +647,116 @@ class DownloadManager:
         sys.stdout.flush()
         sys.stderr.flush()
     
+    def _download_one_with_retry(self, item: Dict, label: str) -> bool:
+        """Download a single item with retry logic. Returns True on success.
+
+        Designed to run inside a ThreadPoolExecutor worker. All shared state
+        access (failures list, active processes) is protected by locks.
+        """
+        url = item.get('url', '')
+        target_dir = item.get('dir', '')
+        filename = item.get('filename', '')
+
+        domain = urlparse(url).netloc or url[:40]
+        self._report_progress(
+            f"{label} Baixando: {filename or 'arquivo'} ({domain})"
+        )
+
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            if self._cancelled:
+                return False
+
+            ok, reason, stage = self._download_file(url, target_dir, filename)
+            if ok:
+                return True
+
+            retryable = self._is_retryable_failure(stage, reason)
+            if attempt < max_retries and retryable:
+                logger.warning(
+                    f"Download failed ({filename or url}) [{stage}: {reason}], "
+                    f"retrying ({attempt}/{max_retries})..."
+                )
+                continue
+
+            if not retryable:
+                logger.error(
+                    f"Non-retryable failure ({filename or url}) [{stage}: {reason}]"
+                )
+            else:
+                logger.error(
+                    f"Failed to download after {max_retries} attempts: {filename or url}"
+                )
+            self._record_failure(
+                {'url': url, 'dir': target_dir, 'filename': filename},
+                reason=reason,
+                stage=stage
+            )
+            return False
+
+        return False
+
     def download_all(self, downloads: List[Dict]) -> bool:
-        """Download all files in the list"""
-        total = len(downloads)
+        """Download all files in the list, running up to parallel_downloads at once."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Filter invalid items early
+        valid_downloads = [d for d in downloads if d.get('url')]
+        skipped = len(downloads) - len(valid_downloads)
+        if skipped:
+            logger.warning(f"Skipped {skipped} item(s) with no URL")
+
+        total = len(valid_downloads)
         self._cancelled = False
         self.failures = []
         self.attempt_logs = []
-        self._report_progress(f"Starting download of {total} files", 0, total)
-        
-        success_count = 0
-        for i, item in enumerate(downloads, 1):
-            # Check for cancellation
-            if self._cancelled:
-                self._report_progress("Download cancelled", i, total)
-                return False
-            
-            url = item.get('url', '')
-            target_dir = item.get('dir', '')
-            filename = item.get('filename', '')
-            
-            if not url:
-                logger.warning(f"[{i}/{total}] Skipping item with no URL")
-                continue
-            
-            if self._cancelled:
-                self._report_progress("Download cancelled", i, total)
-                return False
-            
-            domain = urlparse(url).netloc or url[:40]
-            self._report_progress(
-                f"[{i}/{total}] Baixando: {filename or 'arquivo'} ({domain})", i, total
-            )
 
-            # Retry logic: up to 3 attempts
-            max_retries = 3
-            for attempt in range(1, max_retries + 1):
-                if self._cancelled:
-                    return False
-                    
-                ok, reason, stage = self._download_file(url, target_dir, filename)
-                if ok:
-                    success_count += 1
-                    break
-                else:
-                    retryable = self._is_retryable_failure(stage, reason)
-                    if attempt < max_retries:
-                        if retryable:
-                            logger.warning(
-                                f"Download failed ({filename or url}) [{stage}: {reason}], "
-                                f"retrying ({attempt}/{max_retries})..."
-                            )
-                        else:
-                            logger.error(
-                                f"Non-retryable failure ({filename or url}) [{stage}: {reason}]"
-                            )
-                            self._record_failure(
-                                {'url': url, 'dir': target_dir, 'filename': filename},
-                                reason=reason,
-                                stage=stage
-                            )
-                            break
-                    else:
-                        logger.error(f"Failed to download after {max_retries} attempts: {filename or url}")
-                        self._record_failure(
-                            {'url': url, 'dir': target_dir, 'filename': filename},
-                            reason=reason,
-                            stage=stage
-                        )
-        
-        self._report_progress(f"Downloaded {success_count}/{total} files successfully", total, total)
+        if total == 0:
+            self._report_progress("No downloads requested", 0, 0)
+            return True
+
+        workers = max(1, min(self.parallel_downloads, total))
+        self._report_progress(
+            f"Starting download of {total} files (parallel={workers})", 0, total
+        )
+
+        success_count = 0
+        completed = 0
+        success_lock = threading.Lock()
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dl') as executor:
+            future_to_idx = {}
+            for idx, item in enumerate(valid_downloads, 1):
+                label = f"[{idx}/{total}]"
+                future = executor.submit(self._download_one_with_retry, item, label)
+                future_to_idx[future] = idx
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    ok = future.result()
+                except Exception as e:
+                    logger.error(f"[{idx}/{total}] Download task raised: {e}")
+                    ok = False
+                with success_lock:
+                    if ok:
+                        success_count += 1
+                    completed += 1
+                    done = completed
+                self._report_progress(
+                    f"Progress: {done}/{total} concluded (ok={success_count})",
+                    done,
+                    total
+                )
+
+        self._report_progress(
+            f"Downloaded {success_count}/{total} files successfully", total, total
+        )
         if self.failures:
             logger.error("Download failure summary:")
-            for idx, failure in enumerate(self.failures, 1):
+            with self._failures_lock:
+                failures_snapshot = list(self.failures)
+            for idx, failure in enumerate(failures_snapshot, 1):
                 logger.error(
                     f"[{idx}] file={failure['filename']} dir={failure['dir']} "
                     f"stage={failure['stage']} reason={failure['reason']} url={failure['url']}"
@@ -889,6 +957,7 @@ class DownloadManager:
         if self.hf_token:
             cmd.extend(['--token', self.hf_token])
 
+        process: Optional[subprocess.Popen] = None
         try:
             # Use binary mode + unbuffered so we can split on \r (tqdm progress)
             process = subprocess.Popen(
@@ -898,8 +967,7 @@ class DownloadManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             )
-            with self._process_lock:
-                self.current_process = process
+            self._register_process(process)
 
             tail = deque(maxlen=12)
             last_logged_pct = -10  # log every ~10% change
@@ -996,16 +1064,14 @@ class DownloadManager:
                         )
                         process.kill()
                         process.wait()
-                        with self._process_lock:
-                            self.current_process = None
+                        self._unregister_process(process)
                         reason = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
                         if tail:
                             reason = f"{reason} | tail: {' || '.join(tail)}"
                         return False, reason
 
             process.wait()
-            with self._process_lock:
-                self.current_process = None
+            self._unregister_process(process)
 
             if process.returncode == 0:
                 # `hf download --local-dir` preserves subfolders from repo paths (e.g., VAE/file.safetensors).
@@ -1062,14 +1128,13 @@ class DownloadManager:
                 return False, reason
 
         except Exception as e:
-            with self._process_lock:
-                if self.current_process is not None:
-                    try:
-                        self.current_process.kill()
-                        self.current_process.wait()
-                    except Exception:
-                        pass
-                self.current_process = None
+            if process is not None:
+                try:
+                    process.kill()
+                    process.wait()
+                except Exception:
+                    pass
+            self._unregister_process(process)
             logger.error(f"HF download failed: {e}")
             return False, str(e)
     
@@ -1211,9 +1276,10 @@ class DownloadManager:
             cmd.append('--auto-file-renaming=false')
         else:
             cmd.extend(['--out', filename])
-        
+
         cmd.append(url)
-        
+
+        process: Optional[subprocess.Popen] = None
         try:
             # Use binary mode + unbuffered for CR-aware progress reading
             process = subprocess.Popen(
@@ -1222,8 +1288,7 @@ class DownloadManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             )
-            with self._process_lock:
-                self.current_process = process
+            self._register_process(process)
 
             tail = deque(maxlen=12)
             last_progress_ts = time.monotonic()
@@ -1300,16 +1365,14 @@ class DownloadManager:
                         )
                         process.kill()
                         process.wait()
-                        with self._process_lock:
-                            self.current_process = None
+                        self._unregister_process(process)
                         reason = f"aria2c_stall_timeout_{self.aria2_stall_timeout_seconds}s"
                         if tail:
                             reason = f"{reason} | tail: {' || '.join(tail)}"
                         return False, reason
 
             process.wait()
-            with self._process_lock:
-                self.current_process = None
+            self._unregister_process(process)
 
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {filename}")
@@ -1322,14 +1385,13 @@ class DownloadManager:
                 return False, reason
 
         except Exception as e:
-            with self._process_lock:
-                if self.current_process is not None:
-                    try:
-                        self.current_process.kill()
-                        self.current_process.wait()
-                    except Exception:
-                        pass
-                self.current_process = None
+            if process is not None:
+                try:
+                    process.kill()
+                    process.wait()
+                except Exception:
+                    pass
+            self._unregister_process(process)
             logger.error(f"aria2c error: {e}")
             return False, str(e)
     
@@ -1364,9 +1426,10 @@ class DownloadManager:
             cmd.extend(['-O', str(dest_path)])
         else:
             cmd.extend(['-P', str(dest_path.parent)])
-        
+
         cmd.append(url)
-        
+
+        process: Optional[subprocess.Popen] = None
         try:
             # Use binary mode + unbuffered for CR-aware progress reading
             process = subprocess.Popen(
@@ -1375,8 +1438,7 @@ class DownloadManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             )
-            with self._process_lock:
-                self.current_process = process
+            self._register_process(process)
 
             tail = deque(maxlen=12)
             last_logged_pct = -10
@@ -1439,16 +1501,14 @@ class DownloadManager:
                         )
                         process.kill()
                         process.wait()
-                        with self._process_lock:
-                            self.current_process = None
+                        self._unregister_process(process)
                         reason = f"wget_stall_timeout_{self.aria2_stall_timeout_seconds}s"
                         if tail:
                             reason = f"{reason} | tail: {' || '.join(tail)}"
                         return False, reason
 
             process.wait()
-            with self._process_lock:
-                self.current_process = None
+            self._unregister_process(process)
 
             if process.returncode == 0:
                 logger.info(f"✓ Downloaded: {dest_path.name}")
@@ -1461,14 +1521,13 @@ class DownloadManager:
                 return False, reason
 
         except Exception as e:
-            with self._process_lock:
-                if self.current_process is not None:
-                    try:
-                        self.current_process.kill()
-                        self.current_process.wait()
-                    except Exception:
-                        pass
-                self.current_process = None
+            if process is not None:
+                try:
+                    process.kill()
+                    process.wait()
+                except Exception:
+                    pass
+            self._unregister_process(process)
             logger.error(f"wget error: {e}")
             return False, str(e)
     
