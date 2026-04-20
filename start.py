@@ -10,6 +10,7 @@ import json
 import subprocess
 import logging
 import shlex
+import threading
 import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -58,6 +59,12 @@ SAGEATTENTION_INSTALLER_URL = os.environ.get(
 )
 SAGEATTENTION_INSTALL_ATTEMPTS = _safe_int_env('SAGEATTENTION_INSTALL_ATTEMPTS', 3)
 SAGEATTENTION_RETRY_DELAY_SECONDS = _safe_int_env('SAGEATTENTION_RETRY_DELAY_SECONDS', 8)
+
+# Parallel git clone workers for custom nodes. Clones are IO/network-bound and
+# safe to run concurrently; pip requirements install stays sequential because
+# pip is not concurrent-safe inside the same environment.
+NODES_CLONE_WORKERS = _safe_int_env('NODES_CLONE_WORKERS', 6)
+NODE_PIP_TIMEOUT_SECONDS = _safe_int_env('NODE_PIP_TIMEOUT_SECONDS', 600)
 
 # GitHub token for private repositories (GITHUB_TOKEN or GH_TOKEN)
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GH_TOKEN', '')
@@ -631,12 +638,41 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     return True
 
 
-def _run_pip_install_streaming(cmd: List[str], node_name: str, heartbeat_interval: int = 20):
-    """Run pip install with streaming output and heartbeat logging."""
+def _run_pip_install_streaming(
+    cmd: List[str],
+    node_name: str,
+    heartbeat_interval: int = 20,
+    timeout_sec: int = NODE_PIP_TIMEOUT_SECONDS,
+):
+    """Run pip install with streaming output, heartbeat, and hard timeout.
+
+    A watchdog thread kills the process if it runs longer than timeout_sec
+    even when it produces no output (e.g. stuck on a slow wheel download).
+    Returns (returncode, last_line); returncode=-1 signals a timeout kill.
+    """
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1
     )
+
+    cancel_watchdog = threading.Event()
+    timed_out = {'value': False}
+
+    def _watchdog():
+        if not cancel_watchdog.wait(timeout=timeout_sec):
+            if proc.poll() is None:
+                timed_out['value'] = True
+                logger.error(
+                    f"[{node_name} pip] timeout after {timeout_sec}s — killing process"
+                )
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
+
     last_log_ts = time.time()
     last_line = ""
     try:
@@ -656,8 +692,12 @@ def _run_pip_install_streaming(cmd: List[str], node_name: str, heartbeat_interva
                 last_log_ts = now
     except Exception as e:
         logger.warning(f"[{node_name} pip] stream read error: {e}")
-    proc.wait()
-    return proc.returncode, last_line
+    finally:
+        cancel_watchdog.set()
+        proc.wait()
+
+    returncode = -1 if timed_out['value'] else proc.returncode
+    return returncode, last_line
 
 
 def _configure_manager_security():
@@ -705,8 +745,60 @@ def _is_manager_pip_installed() -> bool:
         return False
 
 
+def _clone_node(url: str, cn_dir: Path) -> Tuple[str, str, Path, bool, Optional[str]]:
+    """Clone a single custom node with retry. Returns (url, node_name, dest,
+    clone_ok, skip_reason). skip_reason is set when no clone was needed."""
+    node_name = url.rstrip('/').split('/')[-1]
+    dest = cn_dir / node_name
+
+    if (dest / '.git').exists():
+        return (url, node_name, dest, True, 'already_installed')
+
+    if dest.exists():
+        backup = cn_dir / f"{node_name}.backup-{int(time.time())}"
+        logger.warning(
+            f"Node directory exists without git metadata: {dest}. "
+            f"Renaming to {backup.name} and retrying clone."
+        )
+        try:
+            dest.rename(backup)
+        except Exception as e:
+            logger.error(f"Could not rename stale node dir {dest}: {e}")
+            return (url, node_name, dest, False, None)
+
+    logger.info(f"Cloning: {node_name}")
+    clone_url = _inject_github_token(url)
+    if clone_url != url:
+        logger.info(f"Using authenticated URL for: {node_name}")
+
+    for attempt in range(1, 3):
+        clone = subprocess.run(
+            ['git', 'clone', '--depth', '1', clone_url, str(dest)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if clone.returncode == 0:
+            return (url, node_name, dest, True, None)
+
+        logger.warning(
+            f"Clone failed for {node_name} (attempt {attempt}/2, exit {clone.returncode})"
+        )
+        if clone.stderr:
+            logger.warning(f"[{node_name} stderr] {_sanitize_git_output(clone.stderr.strip())}")
+        if clone.stdout:
+            logger.warning(f"[{node_name} stdout] {_sanitize_git_output(clone.stdout.strip())}")
+        if attempt == 1:
+            time.sleep(2)
+
+    return (url, node_name, dest, False, None)
+
+
 def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
     """Clone/update custom nodes with resilience - continues on failure.
+
+    Clones run in parallel (IO/network-bound, safe). Requirements install
+    stays sequential because pip can corrupt an env under concurrent writes.
 
     Returns dict with 'success' (bool), 'failed' (list of failed node names).
     """
@@ -716,89 +808,62 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
 
     # Deduplicate while preserving order
     node_urls = list(dict.fromkeys(node_urls))
-    failed_nodes = []
+    failed_nodes: List[str] = []
 
     # Always configure Manager security (covers both pip and git installs)
     if any('ComfyUI-Manager' in u for u in node_urls):
         _configure_manager_security()
 
-    for idx, url in enumerate(node_urls, 1):
+    # Partition into: manager-via-pip, already-installed, and needs-clone.
+    to_clone: List[str] = []
+    for url in node_urls:
         node_name = url.rstrip('/').split('/')[-1]
-        dest = cn_dir / node_name
-
-        try:
-            # ComfyUI-Manager v4+: if already pip-installed, skip git clone
-            if node_name == 'ComfyUI-Manager' and _is_manager_pip_installed():
-                logger.info(f"✓ ComfyUI-Manager v4+ detected as pip package (skipping git clone)")
-                state.add_node(url)
-                continue
-
-            if (dest / '.git').exists():
-                logger.info(f"✓ Already installed: {node_name} (skipping)")
-                state.add_node(url)
-                continue
-
-            if dest.exists():
-                backup = cn_dir / f"{node_name}.backup-{int(time.time())}"
-                logger.warning(
-                    f"Node directory exists without git metadata: {dest}. "
-                    f"Renaming to {backup.name} and retrying clone."
-                )
-                dest.rename(backup)
-
-            logger.info(f"[{idx}/{len(node_urls)}] Cloning: {node_name}")
-            clone_url = _inject_github_token(url)
-            if clone_url != url:
-                logger.info(f"Using authenticated URL for: {node_name}")
-            clone_ok = False
-            for attempt in range(1, 3):
-                clone = subprocess.run(
-                    ['git', 'clone', '--depth', '1', clone_url, str(dest)],
-                    check=False,
-                    capture_output=True,
-                    text=True
-                )
-                if clone.returncode == 0:
-                    clone_ok = True
-                    break
-
-                logger.warning(
-                    f"Clone failed for {node_name} (attempt {attempt}/2, exit {clone.returncode})"
-                )
-                if clone.stderr:
-                    logger.warning(f"[{node_name} stderr] {_sanitize_git_output(clone.stderr.strip())}")
-                if clone.stdout:
-                    logger.warning(f"[{node_name} stdout] {_sanitize_git_output(clone.stdout.strip())}")
-                if attempt == 1:
-                    time.sleep(2)
-
-            if not clone_ok:
-                logger.error(f"Failed to clone node {node_name} after retries: {url}")
-                failed_nodes.append(node_name)
-                continue
-
-            # Install requirements with streaming output
-            req_file = dest / 'requirements.txt'
-            if req_file.exists():
-                logger.info(f"Installing requirements for {node_name}...")
-                retcode, last_line = _run_pip_install_streaming(
-                    [_comfy_python(), '-m', 'pip', 'install', '-r', str(req_file)],
-                    node_name
-                )
-                if retcode != 0:
-                    logger.warning(
-                        f"Requirements install failed for {node_name} (exit {retcode}), continuing"
-                    )
-                    if last_line:
-                        logger.warning(f"[{node_name} pip last] {last_line}")
-
-            # Track as installed
+        if node_name == 'ComfyUI-Manager' and _is_manager_pip_installed():
+            logger.info("✓ ComfyUI-Manager v4+ detected as pip package (skipping git clone)")
             state.add_node(url)
+            continue
+        to_clone.append(url)
 
-        except Exception as e:
-            logger.error(f"Failed to install {node_name}: {e}")
+    clone_results: List[Tuple[str, str, Path, bool, Optional[str]]] = []
+    if to_clone:
+        workers = max(1, min(NODES_CLONE_WORKERS, len(to_clone)))
+        logger.info(f"Cloning {len(to_clone)} custom nodes (parallel workers={workers})...")
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_clone_node, url, cn_dir) for url in to_clone]
+            for fut in futures:
+                try:
+                    clone_results.append(fut.result())
+                except Exception as e:
+                    logger.error(f"Clone task raised an exception: {e}")
+
+    # Sequential requirements install (pip is not concurrent-safe inside
+    # the same env — concurrent writes to .dist-info can corrupt packages).
+    for url, node_name, dest, clone_ok, skip_reason in clone_results:
+        if skip_reason == 'already_installed':
+            logger.info(f"✓ Already installed: {node_name} (skipping)")
+            state.add_node(url)
+            continue
+
+        if not clone_ok:
+            logger.error(f"Failed to clone node {node_name} after retries: {url}")
             failed_nodes.append(node_name)
             continue
+
+        req_file = dest / 'requirements.txt'
+        if req_file.exists():
+            logger.info(f"Installing requirements for {node_name}...")
+            retcode, last_line = _run_pip_install_streaming(
+                [_comfy_python(), '-m', 'pip', 'install', '-r', str(req_file)],
+                node_name,
+            )
+            if retcode != 0:
+                logger.warning(
+                    f"Requirements install failed for {node_name} (exit {retcode}), continuing"
+                )
+                if last_line:
+                    logger.warning(f"[{node_name} pip last] {last_line}")
+
+        state.add_node(url)
 
     if failed_nodes:
         logger.warning(f"Nodes that failed to install: {', '.join(failed_nodes)}")
