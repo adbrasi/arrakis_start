@@ -9,6 +9,11 @@
       "url": "https://civitai.com/api/download/models/2320393?type=Model&format=SafeTensor&size=pruned&fp=fp16",
       "dir": "checkpoints",
       "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/xinsir/controlnet-union-sdxl-1.0/resolve/main/diffusion_pytorch_model_promax.safetensors",
+      "dir": "controlnet",
+      "filename": "controlnet_union_sdxl_promax.safetensors"
     }
   ],
   "nodes": [
