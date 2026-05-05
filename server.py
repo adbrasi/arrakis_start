@@ -50,6 +50,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
         """Handle POST requests"""
         if self.path == '/api/install':
             self._handle_install()
+        elif self.path == '/api/uninstall':
+            self._handle_uninstall()
         elif self.path == '/api/restart':
             self._handle_restart()
         elif self.path == '/api/shutdown':
@@ -286,6 +288,41 @@ class PresetHandler(SimpleHTTPRequestHandler):
         
         except Exception as e:
             logger.error(f"Installation error: {e}")
+            self.send_error(500, str(e))
+
+    def _handle_uninstall(self):
+        """Handle preset uninstall request — deletes models specific to a preset"""
+        try:
+            cl = self.headers.get('Content-Length')
+            if not cl:
+                self.send_error(411, 'Content-Length required')
+                return
+            content_length = int(cl)
+            if content_length > 1024 * 1024:
+                self.send_error(413, 'Request body too large')
+                return
+            body = self.rfile.read(content_length)
+            data = json.loads(body.decode())
+
+            preset_name = (data.get('preset') or '').strip()
+            if not preset_name:
+                self.send_error(400, 'Missing "preset" field')
+                return
+
+            logger.info(f"Uninstall request: {preset_name}")
+
+            from start import uninstall_preset
+            result = uninstall_preset(preset_name)
+
+            status_code = 200 if result.get('success') else 400
+            self.send_response(status_code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+
+        except Exception as e:
+            logger.error(f"Uninstall error: {e}")
             self.send_error(500, str(e))
 
     def _handle_shutdown(self):

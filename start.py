@@ -638,6 +638,126 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     return True
 
 
+def uninstall_preset(preset_name: str) -> Dict[str, Any]:
+    """Remove model files belonging exclusively to a preset.
+
+    Models shared with other still-installed presets are kept. Custom nodes
+    are NOT touched (they are typically small and frequently shared).
+
+    Returns a dict with: success, preset, deleted (list), shared_kept,
+    civitai_skipped, missing, errors, bytes_freed.
+    """
+    state = get_state_manager()
+
+    if preset_name.lower() == 'base':
+        return {"success": False, "error": "Preset 'Base' não pode ser removido"}
+
+    if not state.is_preset_installed(preset_name):
+        return {"success": False, "error": f"Preset '{preset_name}' não está instalado"}
+
+    all_presets = load_presets()
+    preset_map = {p.get('name', p['_filename']): p for p in all_presets}
+
+    target = preset_map.get(preset_name)
+    if not target:
+        # Preset file disappeared — still allow cleaning state, but no files to remove
+        state.remove_preset(preset_name)
+        return {
+            "success": True, "preset": preset_name,
+            "deleted": [], "shared_kept": 0, "civitai_skipped": 0,
+            "missing": 0, "errors": [], "bytes_freed": 0,
+            "warning": "Arquivo do preset não encontrado; apenas estado foi limpo"
+        }
+
+    # (dir, filename) pairs that must be kept because other installed presets use them
+    other_installed = [
+        n for n in state.get_installed_presets()
+        if n != preset_name and n in preset_map
+    ]
+    keep_files = set()
+    for other_name in other_installed:
+        for m in preset_map[other_name].get('models', []):
+            d = m.get('dir', '')
+            f = (m.get('filename') or '').strip()
+            if f:
+                keep_files.add((d, f))
+
+    models_root = MODELS_DIR.resolve()
+    deleted: List[Dict[str, Any]] = []
+    shared_kept = 0
+    civitai_skipped = 0
+    missing = 0
+    errors: List[Dict[str, str]] = []
+    bytes_freed = 0
+
+    for m in target.get('models', []):
+        d = m.get('dir', '') or ''
+        f = (m.get('filename') or '').strip()
+        url = (m.get('url') or '').strip()
+
+        if not f:
+            # Civitai/empty filename: filename was resolved at runtime, can't
+            # identify reliably here. Skip with a notice.
+            civitai_skipped += 1
+            logger.warning(f"Pulando arquivo sem nome definido (Civitai?): {url}")
+            continue
+
+        if (d, f) in keep_files:
+            shared_kept += 1
+            logger.info(f"Mantendo (compartilhado com outro preset): {d}/{f}")
+            continue
+
+        try:
+            target_path = (MODELS_DIR / d / f).resolve()
+        except Exception as e:
+            errors.append({"file": f, "error": f"resolve_failed: {e}"})
+            continue
+
+        # Path traversal safety
+        try:
+            target_path.relative_to(models_root)
+        except ValueError:
+            errors.append({"file": f, "error": "path_outside_models_dir"})
+            logger.error(f"Recusado: caminho fora de {models_root}: {target_path}")
+            continue
+
+        if not target_path.exists():
+            missing += 1
+            state.remove_model(f)
+            continue
+
+        try:
+            size = target_path.stat().st_size
+            target_path.unlink()
+            bytes_freed += size
+            deleted.append({"dir": d, "filename": f, "size": size})
+            state.remove_model(f)
+            logger.info(f"Removido: {d}/{f} ({size} bytes)")
+        except Exception as e:
+            errors.append({"file": f, "error": str(e)})
+            logger.error(f"Falha ao remover {target_path}: {e}")
+
+    state.remove_preset(preset_name)
+
+    logger.info(
+        f"Uninstall '{preset_name}': {len(deleted)} removidos, "
+        f"{shared_kept} mantidos (compartilhados), {missing} ausentes, "
+        f"{civitai_skipped} sem filename, {len(errors)} erros, "
+        f"{bytes_freed} bytes liberados"
+    )
+
+    return {
+        "success": True,
+        "preset": preset_name,
+        "deleted": deleted,
+        "shared_kept": shared_kept,
+        "civitai_skipped": civitai_skipped,
+        "missing": missing,
+        "errors": errors,
+        "bytes_freed": bytes_freed,
+    }
+
+
 def _run_pip_install_streaming(
     cmd: List[str],
     node_name: str,

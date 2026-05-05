@@ -99,6 +99,16 @@ class StateManager:
         with self._lock:
             return list(self.state["installed_presets"])
 
+    def remove_preset(self, preset_name: str) -> bool:
+        """Remove preset from installed list. Returns True if it was present."""
+        with self._lock:
+            if preset_name in self.state["installed_presets"]:
+                self.state["installed_presets"].remove(preset_name)
+                self._save_state()
+                logger.info(f"Removed preset from state: {preset_name}")
+                return True
+            return False
+
     # Model tracking
     def add_model(self, filename: str, model_dir: str, url: str, size: int = 0):
         """Track installed model"""
@@ -120,6 +130,15 @@ class StateManager:
         """Get all installed models"""
         with self._lock:
             return dict(self.state["installed_models"])
+
+    def remove_model(self, filename: str) -> bool:
+        """Remove model entry from installed_models. Returns True if it was present."""
+        with self._lock:
+            if filename in self.state["installed_models"]:
+                del self.state["installed_models"][filename]
+                self._save_state()
+                return True
+            return False
 
     # Node tracking
     def add_node(self, node_url: str):

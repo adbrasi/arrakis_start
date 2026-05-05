@@ -238,12 +238,51 @@ section {
 }
 
 .installed-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
     background: var(--bg-tertiary);
     color: var(--success);
-    padding: 0.375rem 0.75rem;
+    padding: 0.25rem 0.375rem 0.25rem 0.75rem;
     border-radius: 8px;
     font-size: 0.8125rem;
     font-weight: 500;
+}
+
+.installed-label {
+    line-height: 1.2;
+}
+
+.btn-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    line-height: 1;
+    transition: all 0.15s ease;
+}
+
+.btn-remove:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error);
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+.btn-remove:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-remove.removing {
+    color: var(--warning);
 }
 
 .loading-text {

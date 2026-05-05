@@ -132,7 +132,22 @@ async function loadPresets() {
             installed.forEach(name => {
                 const item = document.createElement('div');
                 item.className = 'installed-item';
-                item.textContent = '\u2713 ' + name;
+
+                const label = document.createElement('span');
+                label.className = 'installed-label';
+                label.textContent = '\u2713 ' + name;
+                item.appendChild(label);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'btn-remove';
+                removeBtn.title = 'Remover modelos deste preset';
+                removeBtn.innerHTML = '\u2715';
+                removeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    removePreset(name, removeBtn);
+                });
+                item.appendChild(removeBtn);
+
                 installedList.appendChild(item);
             });
         }
@@ -264,6 +279,75 @@ function updateStartButton() {
     } else if (!isInstalling) {
         startBtn.disabled = true;
         startBtn.textContent = 'Iniciar com Presets Selecionados';
+    }
+}
+
+// ============================================
+// Remove Preset
+// ============================================
+function formatBytes(bytes) {
+    if (!bytes || bytes < 1024) return `${bytes || 0} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let size = bytes / 1024;
+    let i = 0;
+    while (size >= 1024 && i < units.length - 1) {
+        size /= 1024;
+        i++;
+    }
+    return `${size.toFixed(2)} ${units[i]}`;
+}
+
+async function removePreset(presetName, btn) {
+    if (isInstalling) {
+        showToast('Aguarde a instalação terminar antes de remover.', 'error');
+        return;
+    }
+    const ok = confirm(
+        `Remover modelos do preset "${presetName}"?\n\n` +
+        `- Apenas modelos exclusivos serão apagados (compartilhados com outros presets ficam).\n` +
+        `- Custom nodes não serão removidos.\n` +
+        `- Modelos sem nome fixo (ex.: Civitai) podem ficar no disco e precisam ser removidos manualmente.`
+    );
+    if (!ok) return;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.classList.add('removing');
+    }
+
+    try {
+        const response = await fetch('/api/uninstall', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ preset: presetName })
+        });
+
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok || !result.success) {
+            const msg = result.error || `Falha ao remover (HTTP ${response.status})`;
+            showToast(msg, 'error');
+            return;
+        }
+
+        const parts = [
+            `${result.deleted?.length || 0} arquivo(s) removido(s)`,
+            `${formatBytes(result.bytes_freed || 0)} liberados`
+        ];
+        if (result.shared_kept) parts.push(`${result.shared_kept} mantido(s) por compartilhamento`);
+        if (result.civitai_skipped) parts.push(`${result.civitai_skipped} sem nome (Civitai)`);
+        if (result.errors?.length) parts.push(`${result.errors.length} erro(s)`);
+        showToast(`✓ ${presetName}: ` + parts.join(' • '), 'success');
+
+        await loadPresets();
+    } catch (error) {
+        console.error('Erro ao remover preset:', error);
+        showToast('Falha ao remover preset (rede/servidor).', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('removing');
+        }
     }
 }
 
