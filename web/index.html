@@ -68,6 +68,27 @@
     <!-- Toast Notification Container -->
     <div id="toast-container" class="toast-container"></div>
 
+    <!-- Floating manage button -->
+    <button id="manage-fab" class="manage-fab" type="button"
+        title="Gerenciar presets instalados" aria-label="Gerenciar presets instalados">
+        <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+            <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+        </svg>
+    </button>
+
+    <!-- Manage popup (installed presets with delete) -->
+    <aside id="manage-popup" class="manage-popup" hidden role="dialog" aria-labelledby="manage-popup-title">
+        <header class="manage-header">
+            <h4 id="manage-popup-title">Presets instalados</h4>
+            <button id="manage-close" class="manage-close" type="button" aria-label="Fechar">✕</button>
+        </header>
+        <div id="manage-list" class="manage-list">
+            <p class="empty-text">Nenhum preset instalado ainda.</p>
+        </div>
+        <p class="manage-footnote">Apaga só os modelos do preset. Compartilhados ficam. Custom nodes não são removidos.</p>
+    </aside>
+
     <script src="app.js"></script>
 </body>
 

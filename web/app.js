@@ -123,7 +123,7 @@ async function loadPresets() {
             return;
         }
 
-        // Update installed presets list
+        // Update installed presets list (chips only \u2014 delete UX lives in the popup)
         const installed = data.presets.filter(p => p.installed).map(p => p.name);
         if (installed.length === 0) {
             installedList.innerHTML = '<p class="empty-text">Nenhum preset instalado ainda</p>';
@@ -132,27 +132,11 @@ async function loadPresets() {
             installed.forEach(name => {
                 const item = document.createElement('div');
                 item.className = 'installed-item';
-
-                const label = document.createElement('span');
-                label.className = 'installed-label';
-                label.textContent = '\u2713 ' + name;
-                item.appendChild(label);
-
-                const removeBtn = document.createElement('button');
-                removeBtn.className = 'btn-remove';
-                removeBtn.type = 'button';
-                removeBtn.title = `Remover modelos do preset ${name}`;
-                removeBtn.setAttribute('aria-label', `Remover modelos do preset ${name}`);
-                removeBtn.innerHTML = '\u2715';
-                removeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    removePreset(name, removeBtn);
-                });
-                item.appendChild(removeBtn);
-
+                item.textContent = '\u2713 ' + name;
                 installedList.appendChild(item);
             });
         }
+        renderManageList(installed);
 
         // Render preset cards
         container.innerHTML = '';
@@ -283,6 +267,64 @@ function updateStartButton() {
         startBtn.textContent = 'Iniciar com Presets Selecionados';
     }
 }
+
+// ============================================
+// Manage Popup (delete installed presets)
+// ============================================
+function renderManageList(installedNames) {
+    const list = document.getElementById('manage-list');
+    if (!list) return;
+
+    if (!installedNames || installedNames.length === 0) {
+        list.innerHTML = '<p class="empty-text">Nenhum preset instalado ainda.</p>';
+        return;
+    }
+
+    list.innerHTML = '';
+    installedNames.forEach(name => {
+        const row = document.createElement('div');
+        row.className = 'manage-row';
+
+        const label = document.createElement('span');
+        label.className = 'row-label';
+        label.title = name;
+        label.textContent = name;
+
+        const del = document.createElement('button');
+        del.className = 'row-delete';
+        del.type = 'button';
+        del.textContent = 'Deletar';
+        del.setAttribute('aria-label', `Deletar modelos do preset ${name}`);
+        del.addEventListener('click', () => removePreset(name, del));
+
+        row.appendChild(label);
+        row.appendChild(del);
+        list.appendChild(row);
+    });
+}
+
+function toggleManagePopup(force) {
+    const popup = document.getElementById('manage-popup');
+    if (!popup) return;
+    const willOpen = typeof force === 'boolean' ? force : popup.hasAttribute('hidden');
+    if (willOpen) {
+        popup.removeAttribute('hidden');
+    } else {
+        popup.setAttribute('hidden', '');
+    }
+}
+
+// Close popup when clicking outside (or pressing Esc)
+document.addEventListener('click', (e) => {
+    const popup = document.getElementById('manage-popup');
+    const fab = document.getElementById('manage-fab');
+    if (!popup || popup.hasAttribute('hidden')) return;
+    if (popup.contains(e.target) || fab.contains(e.target)) return;
+    toggleManagePopup(false);
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') toggleManagePopup(false);
+});
 
 // ============================================
 // Remove Preset
@@ -444,4 +486,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('start-btn').addEventListener('click', startWithPresets);
     document.getElementById('restart-btn').addEventListener('click', restartComfyUI);
     document.getElementById('shutdown-btn').addEventListener('click', shutdownArrakis);
+    document.getElementById('manage-fab').addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleManagePopup();
+    });
+    document.getElementById('manage-close').addEventListener('click', () => toggleManagePopup(false));
 });
