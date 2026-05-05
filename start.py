@@ -697,9 +697,12 @@ def uninstall_preset(preset_name: str) -> Dict[str, Any]:
 
         if not f:
             # Civitai/empty filename: filename was resolved at runtime, can't
-            # identify reliably here. Skip with a notice.
+            # identify reliably here. Skip with a notice. Sanitize the URL
+            # because Civitai download links may carry tokens as query params.
             civitai_skipped += 1
-            logger.warning(f"Pulando arquivo sem nome definido (Civitai?): {url}")
+            logger.warning(
+                f"Pulando arquivo sem nome definido (Civitai?): {_sanitize_git_output(url)}"
+            )
             continue
 
         if (d, f) in keep_files:

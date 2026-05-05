@@ -140,7 +140,9 @@ async function loadPresets() {
 
                 const removeBtn = document.createElement('button');
                 removeBtn.className = 'btn-remove';
-                removeBtn.title = 'Remover modelos deste preset';
+                removeBtn.type = 'button';
+                removeBtn.title = `Remover modelos do preset ${name}`;
+                removeBtn.setAttribute('aria-label', `Remover modelos do preset ${name}`);
                 removeBtn.innerHTML = '\u2715';
                 removeBtn.addEventListener('click', (e) => {
                     e.stopPropagation();

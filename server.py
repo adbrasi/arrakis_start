@@ -311,7 +311,21 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
             logger.info(f"Uninstall request: {preset_name}")
 
-            from start import uninstall_preset
+            from start import uninstall_preset, get_active_downloader
+
+            # Block while an installation is in progress: a parallel uninstall
+            # could delete a file the downloader just wrote (or is writing).
+            if get_active_downloader() is not None:
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'success': False,
+                    'error': 'Instalação em andamento — aguarde a conclusão antes de remover.'
+                }).encode())
+                return
+
             result = uninstall_preset(preset_name)
 
             status_code = 200 if result.get('success') else 400
