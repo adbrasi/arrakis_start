@@ -253,18 +253,34 @@ gpu_is_present() {
     command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
 }
 
+detect_driver_max_cuda() {
+    # Max CUDA runtime version the installed driver supports, as printed in the
+    # nvidia-smi header ("CUDA Version: 12.8"). Empty when it can't be read
+    # (no nvidia-smi, MIG, "N/A", etc.). This is the driver capability, NOT the
+    # toolkit a wheel was built against.
+    command -v nvidia-smi >/dev/null 2>&1 || return 0
+    nvidia-smi 2>/dev/null \
+        | grep -oE 'CUDA Version:[[:space:]]*[0-9]+\.[0-9]+' \
+        | grep -oE '[0-9]+\.[0-9]+' \
+        | head -1
+}
+
 torch_runtime_is_ready() {
-    # GPU presence is detected in bash and handed to the probe so that a torch
-    # build which cannot INITIALISE CUDA on the *current driver* is treated as
-    # NOT ready and gets reinstalled. Checking torch.version.cuda alone is not
-    # enough: it only reports the wheel's CUDA toolkit, never whether the driver
-    # can run it. A CUDA 13 wheel on a driver capped at CUDA 12.8 (e.g. RunPod
-    # comfyui-base) passes the version check but crashes ComfyUI at startup with
-    # "RuntimeError: The NVIDIA driver on your system is too old".
+    # Decide whether the installed torch can drive THIS host's GPU. We compare the
+    # wheel's CUDA toolkit against the driver's max supported CUDA — a wheel only
+    # fails to initialise when its toolkit is NEWER than the driver supports (e.g.
+    # a CUDA 13 wheel on a CUDA 12.8 driver, as on RunPod comfyui-base). This
+    # version comparison is deterministic and, unlike torch.cuda.is_available(),
+    # does NOT produce false negatives from CUDA_VISIBLE_DEVICES, a not-yet-warm
+    # GPU, MIG, etc. is_available() is only used as a fallback when the driver's
+    # max CUDA can't be read.
     local gpu_present=0
     if gpu_is_present; then gpu_present=1; fi
+    local driver_max
+    driver_max="$(detect_driver_max_cuda)"
 
-    ARRAKIS_GPU_PRESENT="$gpu_present" "$COMFY_PYTHON" - <<'PY' >/dev/null 2>&1
+    ARRAKIS_GPU_PRESENT="$gpu_present" ARRAKIS_DRIVER_MAX_CUDA="$driver_max" \
+        "$COMFY_PYTHON" - <<'PY' >/dev/null 2>&1
 import importlib
 import os
 
@@ -278,7 +294,6 @@ for module_name in required:
 import torch
 cuda_version = (getattr(torch.version, "cuda", None) or "").strip()
 # Floor: CUDA 12.8 is the minimum for Blackwell sm_120 in stable PyTorch.
-# 13.x is accepted ONLY if the driver can actually run it (checked below).
 # A stricter pin can be set via TORCH_CUDA_PIN_PREFIX env var.
 pin = os.environ.get("TORCH_CUDA_PIN_PREFIX", "").strip()
 if pin:
@@ -288,11 +303,24 @@ else:
     if not (cuda_version.startswith("12.8") or cuda_version.startswith("13.")):
         raise SystemExit(2)
 
-# Driver-compatibility gate. torch.cuda.is_available() returns False (with a
-# "driver too old" UserWarning) when the wheel's CUDA toolkit is newer than the
-# installed driver supports. This is the exact code path ComfyUI hits and dies
-# on at startup, so we mirror it here.
-if os.environ.get("ARRAKIS_GPU_PRESENT") == "1" and not torch.cuda.is_available():
+
+def _ver(value):
+    try:
+        return tuple(int(part) for part in value.split(".")[:2])
+    except Exception:
+        return None
+
+
+driver_max = os.environ.get("ARRAKIS_DRIVER_MAX_CUDA", "").strip()
+gpu_present = os.environ.get("ARRAKIS_GPU_PRESENT") == "1"
+build, drv = _ver(cuda_version), _ver(driver_max)
+
+# Reject ONLY when the wheel's CUDA toolkit is strictly newer than the driver
+# supports. When the driver's max CUDA is unknown, fall back to the runtime probe.
+if build and drv:
+    if build > drv:
+        raise SystemExit(3)
+elif gpu_present and not torch.cuda.is_available():
     raise SystemExit(3)
 PY
 }
@@ -510,10 +538,11 @@ if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
 fi
 
 # Ensure a PyTorch build that THIS driver can actually run is present in the
-# ComfyUI runtime. torch_runtime_is_ready accepts a pre-shipped torch only when
-# it both meets the CUDA 12.8 floor (Blackwell sm_120) AND can initialise CUDA on
-# the current driver — so a cu13 wheel on a CUDA 12.8-only host is rejected and
-# replaced with the universally-compatible cu128 build below.
+# ComfyUI runtime. torch_runtime_is_ready only reinstalls when the wheel's CUDA
+# toolkit is strictly newer than the driver supports (e.g. a cu13 wheel on a
+# CUDA 12.8-only host), so a perfectly good torch is never thrown away.
+_driver_max_cuda="$(detect_driver_max_cuda)"
+log_info "Driver CUDA máx.: ${_driver_max_cuda:-desconhecido} | torch build: $("$COMFY_PYTHON" -c 'import torch;print(getattr(torch.version,"cuda","?") or "cpu")' 2>/dev/null || echo 'ausente')"
 if torch_runtime_is_ready; then
     log_info "PyTorch compatível com o driver atual já presente no runtime; pulando reinstall"
 else
@@ -523,11 +552,17 @@ else
         torch torchvision torchaudio \
         --index-url "$TORCH_INDEX_URL"
 
+    # Validation is advisory, NOT fatal: never abort the whole bootstrap over it.
+    # If torch still doesn't validate (e.g. a driver capped below CUDA 12.8, or a
+    # transient probe miss), warn with an actionable hint and let ComfyUI start —
+    # it will surface the real error itself if there genuinely is one.
     if torch_runtime_is_ready; then
         log_success "PyTorch cu128 instalado e compatível com o driver"
     else
-        log_error "Reinstalação do PyTorch concluída mas validação falhou (torch/torchvision/torchaudio + CUDA utilizável no driver atual)"
-        exit 1
+        log_warn "PyTorch reinstalado, mas a validação ainda não confirma CUDA utilizável."
+        log_warn "Seguindo mesmo assim — o ComfyUI vai iniciar e reportar o erro real se houver."
+        log_warn "Se esta GPU exige um CUDA diferente de 12.8 (driver máx.: ${_driver_max_cuda:-desconhecido}),"
+        log_warn "  defina TORCH_INDEX_URL para o índice correto, ex.: https://download.pytorch.org/whl/cu126"
     fi
 fi
 

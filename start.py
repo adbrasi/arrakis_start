@@ -9,6 +9,7 @@ import sys
 import json
 import subprocess
 import logging
+import re
 import shlex
 import shutil
 import threading
@@ -213,6 +214,62 @@ def _gpu_present() -> bool:
         return False
 
 
+def _version_pair(value: Optional[str]) -> Optional[Tuple[int, int]]:
+    """Parse 'X.Y[.Z]' into a (major, minor) tuple, or None if unparseable."""
+    if not value:
+        return None
+    try:
+        parts = value.strip().split('.')
+        return (int(parts[0]), int(parts[1]))
+    except (IndexError, ValueError):
+        return None
+
+
+def _driver_max_cuda() -> Optional[str]:
+    """Max CUDA version the installed driver supports (nvidia-smi header)."""
+    if not shutil.which('nvidia-smi'):
+        return None
+    try:
+        out = subprocess.run(['nvidia-smi'], check=False, capture_output=True, text=True)
+        if out.returncode != 0:
+            return None
+        match = re.search(r'CUDA Version:\s*([0-9]+\.[0-9]+)', out.stdout)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def _torch_build_cuda() -> Optional[str]:
+    """CUDA toolkit the installed torch wheel was built against (e.g. '12.8')."""
+    py = _comfy_python()
+    try:
+        probe = subprocess.run(
+            [py, '-c', 'import torch; print(getattr(torch.version, "cuda", "") or "")'],
+            check=False, capture_output=True, text=True
+        )
+        value = probe.stdout.strip()
+        return value or None
+    except Exception:
+        return None
+
+
+def _torch_incompatible_with_driver() -> bool:
+    """True when the installed torch wheel cannot drive this host's GPU.
+
+    Prefers a deterministic version comparison — a wheel only fails to initialise
+    when its CUDA toolkit is strictly NEWER than the driver supports. This avoids
+    the false negatives of torch.cuda.is_available() (CUDA_VISIBLE_DEVICES, a
+    not-yet-warm GPU, MIG, ...). Falls back to the runtime probe only when the
+    driver's max CUDA can't be read.
+    """
+    build = _version_pair(_torch_build_cuda())
+    driver = _version_pair(_driver_max_cuda())
+    if build and driver:
+        return build > driver
+    # Couldn't compare versions — fall back to the runtime probe.
+    return not _cuda_available()
+
+
 def _ensure_torch_driver_compatible() -> None:
     """Repair a torch build that cannot run on the current GPU driver.
 
@@ -220,19 +277,20 @@ def _ensure_torch_driver_compatible() -> None:
     or an unpinned `torch` upgrade to pull a CUDA 13 wheel into the venv. That
     wheel needs a driver supporting CUDA >= 13.0; on a 12.8-capped driver ComfyUI
     dies at startup with "RuntimeError: The NVIDIA driver on your system is too
-    old". We detect it (GPU present but torch.cuda unusable) and reinstall a
-    universally-compatible cu128 build. No-op when CUDA already works or no GPU
-    is present (CPU box / build env), so the common path pays only one cheap probe.
+    old". We detect it and reinstall a compatible cu128 build. Advisory only —
+    never raises — so a stubborn validation never blocks ComfyUI from starting.
+    No-op when torch already matches the driver or no GPU is present.
     """
     if not _gpu_present():
         return
-    if _cuda_available():
+    if not _torch_incompatible_with_driver():
         return
 
+    driver_max = _driver_max_cuda() or 'desconhecido'
     logger.warning(
-        "GPU detected but torch.cuda is unusable — likely a CUDA 13 torch build "
-        "on a driver that only supports CUDA 12.8. Reinstalling a compatible "
-        f"build from {DEFAULT_TORCH_INDEX_URL}"
+        f"torch build (CUDA {_torch_build_cuda() or '?'}) é mais novo que o driver "
+        f"suporta (CUDA máx.: {driver_max}). Reinstalando build compatível de "
+        f"{DEFAULT_TORCH_INDEX_URL}"
     )
     cmd = [
         _comfy_python(), '-m', 'pip', 'install', '--upgrade', '--force-reinstall',
@@ -241,12 +299,16 @@ def _ensure_torch_driver_compatible() -> None:
     ]
     code, _ = _run_streaming_command(cmd, 'PyTorch cu128 driver-compat repair', log_prefix='torch')
     if code != 0:
-        logger.error("PyTorch driver-compat reinstall failed; ComfyUI may not start")
+        logger.warning("PyTorch driver-compat reinstall returned non-zero; continuing anyway")
         return
-    if _cuda_available():
-        logger.info("✓ torch.cuda usable after cu128 reinstall")
+    if _torch_incompatible_with_driver():
+        logger.warning(
+            "torch ainda não bate com o driver após reinstalar cu128 — seguindo assim. "
+            f"Se a GPU exige CUDA != 12.8 (driver máx.: {driver_max}), defina TORCH_INDEX_URL "
+            "(ex.: https://download.pytorch.org/whl/cu126)."
+        )
     else:
-        logger.error("torch.cuda still unusable after cu128 reinstall — check driver/GPU")
+        logger.info("✓ torch compatível com o driver após reinstalar cu128")
 
 
 def _normalize_pip_command(command: Any) -> List[str]:
