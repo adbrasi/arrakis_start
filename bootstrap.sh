@@ -151,6 +151,32 @@ stop_template_comfy_processes() {
     fi
 }
 
+stop_listeners_on_port() {
+    # Stop whatever is LISTENING on a TCP port. Used for template ComfyUIs that
+    # launch as a bare `python main.py --port 8188` (e.g. RunPod comfyui-base),
+    # which the path-based pkill patterns above cannot match. Killing by port is
+    # deterministic and never touches our own ComfyUI (different port).
+    local port="$1"
+    local pids=""
+
+    if command -v fuser >/dev/null 2>&1; then
+        pids="$(fuser -n tcp "$port" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)"
+    fi
+    if [ -z "$pids" ] && command -v ss >/dev/null 2>&1; then
+        pids="$(ss -lptnH "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
+    fi
+    if [ -z "$pids" ] && command -v lsof >/dev/null 2>&1; then
+        pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    fi
+
+    if [ -n "$pids" ]; then
+        log_warn "Stopping template ComfyUI listening on port $port (pids: $(echo $pids | tr '\n' ' '))"
+        for pid in $pids; do kill -TERM "$pid" >/dev/null 2>&1 || true; done
+        sleep 2
+        for pid in $pids; do kill -KILL "$pid" >/dev/null 2>&1 || true; done
+    fi
+}
+
 template_comfy_is_still_running() {
     local template_dir="$1"
     pgrep -f "$template_dir/main.py" >/dev/null 2>&1 && return 0
@@ -282,6 +308,16 @@ COMFY_CLI="$COMFY_VENV_DIR/bin/comfy"
 ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
 COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
 TEMPLATE_COMFY_DIR="${TEMPLATE_COMFY_DIR:-/workspace/ComfyUI}"
+# Extra template ComfyUI install dirs to clean. Newer images keep ComfyUI
+# elsewhere — e.g. RunPod comfyui-base ships it at /workspace/runpod-slim/ComfyUI
+# and launches `python main.py --port 8188` directly (no supervisor).
+TEMPLATE_COMFY_EXTRA_DIRS="${TEMPLATE_COMFY_EXTRA_DIRS:-/workspace/runpod-slim/ComfyUI}"
+# Ports a template ComfyUI may be listening on. We stop these by port (never our
+# own $COMFY_PORT) so the template instance does not keep competing for VRAM.
+TEMPLATE_COMFY_PORTS="${TEMPLATE_COMFY_PORTS:-8188}"
+# Our own ComfyUI port (mirrors start.py default). Used only to avoid self-kill
+# in the template-port cleanup above.
+COMFY_PORT="${COMFY_PORT:-8818}"
 TEMPLATE_COMFY_SUPERVISOR_CONF="${TEMPLATE_COMFY_SUPERVISOR_CONF:-/etc/supervisor/conf.d/comfyui.conf}"
 DISABLE_TEMPLATE_COMFY="${DISABLE_TEMPLATE_COMFY:-1}"
 # Torch wheel index for the standard (non-Sage) runtime. cu128 (CUDA 12.8) is the
@@ -315,7 +351,18 @@ log_info " Arrakis Start - ComfyUI Deployment"
 log_info "========================================="
 
 if [ "$DISABLE_TEMPLATE_COMFY" = "1" ]; then
-    cleanup_template_comfyui "$TEMPLATE_COMFY_DIR" "$COMFY_DIR" "$TEMPLATE_COMFY_SUPERVISOR_CONF"
+    # Stop template ComfyUI by port first (handles bare `python main.py --port
+    # 8188` from RunPod comfyui-base). Skip our own port so we never self-kill.
+    for tport in $TEMPLATE_COMFY_PORTS; do
+        if [ "$tport" != "$COMFY_PORT" ]; then
+            stop_listeners_on_port "$tport"
+        fi
+    done
+    # Clean every known template ComfyUI dir: old VastAI (/workspace/ComfyUI) and
+    # new RunPod (/workspace/runpod-slim/ComfyUI). Each call no-ops if absent.
+    for tdir in "$TEMPLATE_COMFY_DIR" $TEMPLATE_COMFY_EXTRA_DIRS; do
+        cleanup_template_comfyui "$tdir" "$COMFY_DIR" "$TEMPLATE_COMFY_SUPERVISOR_CONF"
+    done
 else
     log_warn "DISABLE_TEMPLATE_COMFY=0, skipping template ComfyUI cleanup"
 fi

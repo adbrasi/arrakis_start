@@ -73,6 +73,7 @@ When both workflow keys are present, the local `workflow` file wins. The web UI 
 | `HF_XET_HIGH_PERFORMANCE` | Toggle HF Xet high-perf mode; auto-disabled below `HF_XET_HP_MIN_RAM_GB` (default 48). |
 | `TORCH_INDEX_URL` | Torch wheel index (default: CUDA 12.8 build). |
 | `DISABLE_TEMPLATE_COMFY` / `TEMPLATE_COMFY_DIR` | Bootstrap cleanup of pre-existing template ComfyUI at `/workspace/ComfyUI` (enabled by default). |
+| `TEMPLATE_COMFY_EXTRA_DIRS` / `TEMPLATE_COMFY_PORTS` | Extra template ComfyUI dirs/ports to clean. Defaults cover RunPod comfyui-base (`/workspace/runpod-slim/ComfyUI`, port `8188`). Template instances are stopped by port so they stop competing for VRAM. |
 
 ## Conventions
 
