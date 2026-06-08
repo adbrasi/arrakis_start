@@ -193,7 +193,18 @@ class ProcessManager:
             )
             self.state_manager.set_comfyui_status(status="error", port=port)
             return False
-        
+
+        # Guard against a CUDA 13 torch wheel on a CUDA 12.8-only driver. This
+        # covers the "Start" button path where the venv may have been left with
+        # an incompatible torch by a previous run (no install step in between).
+        # Deferred import keeps process_manager free of a circular dependency on
+        # start.py (which imports this module at load time).
+        try:
+            from start import _ensure_torch_driver_compatible
+            _ensure_torch_driver_compatible()
+        except Exception as exc:
+            logger.warning(f"torch driver-compat guard skipped: {exc}")
+
         # Default flags
         default_flags = [
             '--listen', '0.0.0.0',
@@ -266,7 +277,7 @@ class ProcessManager:
             # Without this, cloud templates (VastAI/Runpod) may have /venv/main
             # on PATH, causing comfy-cli to spawn ComfyUI with the wrong Python.
             # This ensures pip-installed deps (cv2, gguf, pywt, etc.) are visible
-            # at runtime and the correct PyTorch build (cu128 nightly) is used.
+            # at runtime and the correct PyTorch build (stable cu128) is used.
             venv_bin = str(VENV_DIR / 'bin')
             env['VIRTUAL_ENV'] = str(VENV_DIR)
             env['PATH'] = f"{venv_bin}:{env.get('PATH', '')}"

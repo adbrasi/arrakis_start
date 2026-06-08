@@ -222,10 +222,25 @@ cleanup_template_comfyui() {
     log_success "Template ComfyUI cleanup attempt completed"
 }
 
+gpu_is_present() {
+    # True when an NVIDIA GPU is actually visible on this host.
+    command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
+}
+
 torch_runtime_is_ready() {
-    "$COMFY_PYTHON" - <<'PY' >/dev/null 2>&1
+    # GPU presence is detected in bash and handed to the probe so that a torch
+    # build which cannot INITIALISE CUDA on the *current driver* is treated as
+    # NOT ready and gets reinstalled. Checking torch.version.cuda alone is not
+    # enough: it only reports the wheel's CUDA toolkit, never whether the driver
+    # can run it. A CUDA 13 wheel on a driver capped at CUDA 12.8 (e.g. RunPod
+    # comfyui-base) passes the version check but crashes ComfyUI at startup with
+    # "RuntimeError: The NVIDIA driver on your system is too old".
+    local gpu_present=0
+    if gpu_is_present; then gpu_present=1; fi
+
+    ARRAKIS_GPU_PRESENT="$gpu_present" "$COMFY_PYTHON" - <<'PY' >/dev/null 2>&1
 import importlib
-import sys
+import os
 
 required = ("torch", "torchvision", "torchaudio")
 for module_name in required:
@@ -236,11 +251,9 @@ for module_name in required:
 
 import torch
 cuda_version = (getattr(torch.version, "cuda", None) or "").strip()
-# Accept CUDA 12.8+ and any CUDA 13.x.
-# - 12.8 is the minimum for Blackwell sm_120 support in stable PyTorch
-# - 13.x is the new stable default on PyPI (PyTorch 2.11+)
-# - A stricter pin can be set via TORCH_CUDA_PIN_PREFIX env var
-import os
+# Floor: CUDA 12.8 is the minimum for Blackwell sm_120 in stable PyTorch.
+# 13.x is accepted ONLY if the driver can actually run it (checked below).
+# A stricter pin can be set via TORCH_CUDA_PIN_PREFIX env var.
 pin = os.environ.get("TORCH_CUDA_PIN_PREFIX", "").strip()
 if pin:
     if not cuda_version.startswith(pin):
@@ -248,6 +261,13 @@ if pin:
 else:
     if not (cuda_version.startswith("12.8") or cuda_version.startswith("13.")):
         raise SystemExit(2)
+
+# Driver-compatibility gate. torch.cuda.is_available() returns False (with a
+# "driver too old" UserWarning) when the wheel's CUDA toolkit is newer than the
+# installed driver supports. This is the exact code path ComfyUI hits and dies
+# on at startup, so we mirror it here.
+if os.environ.get("ARRAKIS_GPU_PRESENT") == "1" and not torch.cuda.is_available():
+    raise SystemExit(3)
 PY
 }
 
@@ -264,6 +284,11 @@ COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
 TEMPLATE_COMFY_DIR="${TEMPLATE_COMFY_DIR:-/workspace/ComfyUI}"
 TEMPLATE_COMFY_SUPERVISOR_CONF="${TEMPLATE_COMFY_SUPERVISOR_CONF:-/etc/supervisor/conf.d/comfyui.conf}"
 DISABLE_TEMPLATE_COMFY="${DISABLE_TEMPLATE_COMFY:-1}"
+# Torch wheel index for the standard (non-Sage) runtime. cu128 (CUDA 12.8) is the
+# universal sweet spot: it ships Blackwell sm_120 kernels AND runs on any driver
+# that supports CUDA >= 12.8, including newer 13.x drivers (forward compatibility).
+# A CUDA 13 wheel, by contrast, REQUIRES a 13.x driver and dies on 12.8-only hosts.
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 
 export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
@@ -437,22 +462,24 @@ if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
     fi
 fi
 
-# Ensure a Blackwell-compatible PyTorch (CUDA 12.8+/13.x) is available in the
-# ComfyUI runtime. When the template already ships a newer torch (e.g. cu13
-# wheels from PyPI), torch_runtime_is_ready accepts it and we skip reinstall.
+# Ensure a PyTorch build that THIS driver can actually run is present in the
+# ComfyUI runtime. torch_runtime_is_ready accepts a pre-shipped torch only when
+# it both meets the CUDA 12.8 floor (Blackwell sm_120) AND can initialise CUDA on
+# the current driver — so a cu13 wheel on a CUDA 12.8-only host is rejected and
+# replaced with the universally-compatible cu128 build below.
 if torch_runtime_is_ready; then
-    log_info "PyTorch compatível (CUDA 12.8+/13.x) já presente no runtime; pulando reinstall"
+    log_info "PyTorch compatível com o driver atual já presente no runtime; pulando reinstall"
 else
-    log_info "PyTorch ausente/incompatível; instalando nightly cu128 no runtime..."
-    run_with_progress "Instalando PyTorch nightly cu128 (pode demorar)" \
-        pip_install_into "$COMFY_PYTHON" --pre --upgrade --force-reinstall \
+    log_info "PyTorch ausente/incompatível com o driver; instalando cu128 estável ($TORCH_INDEX_URL)..."
+    run_with_progress "Instalando PyTorch cu128 (CUDA 12.8, compatível com o driver)" \
+        pip_install_into "$COMFY_PYTHON" --upgrade --force-reinstall \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/nightly/cu128
+        --index-url "$TORCH_INDEX_URL"
 
     if torch_runtime_is_ready; then
-        log_success "PyTorch nightly cu128 installed"
+        log_success "PyTorch cu128 instalado e compatível com o driver"
     else
-        log_error "PyTorch install completed but validation failed (torch/torchvision/torchaudio + CUDA 12.8+/13.x)"
+        log_error "Reinstalação do PyTorch concluída mas validação falhou (torch/torchvision/torchaudio + CUDA utilizável no driver atual)"
         exit 1
     fi
 fi

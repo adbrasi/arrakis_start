@@ -10,6 +10,7 @@ import json
 import subprocess
 import logging
 import shlex
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -194,6 +195,58 @@ def _cuda_available() -> bool:
         return probe.returncode == 0 and probe.stdout.strip() == '1'
     except Exception:
         return False
+
+
+def _gpu_present() -> bool:
+    """True when an NVIDIA GPU is actually visible on this host (nvidia-smi)."""
+    if not shutil.which('nvidia-smi'):
+        return False
+    try:
+        probe = subprocess.run(
+            ['nvidia-smi', '-L'],
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        return probe.returncode == 0 and 'GPU' in probe.stdout
+    except Exception:
+        return False
+
+
+def _ensure_torch_driver_compatible() -> None:
+    """Repair a torch build that cannot run on the current GPU driver.
+
+    Some cloud images (e.g. RunPod comfyui-base, CUDA 12.8 only) cause comfy-cli
+    or an unpinned `torch` upgrade to pull a CUDA 13 wheel into the venv. That
+    wheel needs a driver supporting CUDA >= 13.0; on a 12.8-capped driver ComfyUI
+    dies at startup with "RuntimeError: The NVIDIA driver on your system is too
+    old". We detect it (GPU present but torch.cuda unusable) and reinstall a
+    universally-compatible cu128 build. No-op when CUDA already works or no GPU
+    is present (CPU box / build env), so the common path pays only one cheap probe.
+    """
+    if not _gpu_present():
+        return
+    if _cuda_available():
+        return
+
+    logger.warning(
+        "GPU detected but torch.cuda is unusable — likely a CUDA 13 torch build "
+        "on a driver that only supports CUDA 12.8. Reinstalling a compatible "
+        f"build from {DEFAULT_TORCH_INDEX_URL}"
+    )
+    cmd = [
+        _comfy_python(), '-m', 'pip', 'install', '--upgrade', '--force-reinstall',
+        'torch', 'torchvision', 'torchaudio',
+        '--index-url', DEFAULT_TORCH_INDEX_URL,
+    ]
+    code, _ = _run_streaming_command(cmd, 'PyTorch cu128 driver-compat repair', log_prefix='torch')
+    if code != 0:
+        logger.error("PyTorch driver-compat reinstall failed; ComfyUI may not start")
+        return
+    if _cuda_available():
+        logger.info("✓ torch.cuda usable after cu128 reinstall")
+    else:
+        logger.error("torch.cuda still unusable after cu128 reinstall — check driver/GPU")
 
 
 def _normalize_pip_command(command: Any) -> List[str]:
@@ -626,7 +679,12 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             "Continuing installation..."
         )
 
-    # 4. Mark presets as installed (only those actually found in preset_map)
+    # 4. Ensure the installed torch can actually drive this GPU. Custom-node
+    # requirements or comfy-cli may have pulled a CUDA 13 wheel that crashes on a
+    # CUDA 12.8-only driver; repair to cu128 before ComfyUI is (re)started.
+    _ensure_torch_driver_compatible()
+
+    # 5. Mark presets as installed (only those actually found in preset_map)
     for preset_name in processed_presets:
         state.add_preset(preset_name)
 
@@ -1015,6 +1073,10 @@ def start_web_server():
 def start_comfyui():
     """Start ComfyUI server"""
     logger.info(f"Starting ComfyUI on port {COMFY_PORT}")
+
+    # Guard against a CUDA 13 torch wheel on a CUDA 12.8-only driver (e.g. when
+    # starting an already-installed venv without re-running bootstrap).
+    _ensure_torch_driver_compatible()
 
     cmd = [
         COMFY_CLI,
