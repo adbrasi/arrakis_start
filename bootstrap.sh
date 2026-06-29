@@ -156,37 +156,46 @@ prefetch_torch_via_aria2c() {
     [ "${PREFETCH_TORCH:-1}" = "1" ] || return 1
     command -v aria2c >/dev/null 2>&1 || return 1
     local wheel_dir="${TORCH_WHEEL_DIR:-/workspace/.cache/torch-wheels}"
-    local report="$TMPDIR/torch-report.json"
     mkdir -p "$wheel_dir" || return 1
     rm -f "$wheel_dir"/torch-*.whl "$wheel_dir"/torchvision-*.whl "$wheel_dir"/torchaudio-*.whl
 
     log_info "Pré-baixando torch via aria2c (16 conexões) de $TORCH_INDEX_URL..."
 
-    # 1) Resolve wheel URLs WITHOUT downloading the big files (pip fetches only wheel
-    #    metadata via HTTP range requests). Bounded so it can't hang on a bad index.
-    if ! timeout 150 "$COMFY_PYTHON" -m pip install --dry-run --quiet \
-            --report "$report" \
-            torch torchvision torchaudio --index-url "$TORCH_INDEX_URL" >/dev/null 2>&1; then
-        log_warn "Prefetch torch: resolução de URLs falhou/expirou; usando o download padrão do comfy-cli"
-        return 1
-    fi
-
-    # 2) Extract the torch/torchvision/torchaudio wheel URLs from the pip report.
+    # 1) Resolve the exact wheel URLs by parsing the PyTorch simple-index pages
+    #    (~85 KB each → fast even on a throttled CDN, unlike pip's resolver which can
+    #    try to pull whole wheels for metadata and time out). Picks the highest
+    #    cp312/x86_64/linux wheel for torch/torchvision/torchaudio — the index's
+    #    latest-of-each is the compatible combo pip would resolve anyway.
     local urls
-    urls="$("$COMFY_PYTHON" - "$report" <<'PY'
-import json, sys
-try:
-    data = json.load(open(sys.argv[1]))
-except Exception:
+    urls="$(timeout 90 "$COMFY_PYTHON" - "$TORCH_INDEX_URL" <<'PY'
+import re, sys, urllib.request
+base = sys.argv[1].rstrip('/')
+def ver_key(fn, pkg):
+    m = re.match(re.escape(pkg) + r'-([0-9]+(?:\.[0-9]+)*)', fn)
+    return tuple(int(x) for x in m.group(1).split('.')) if m else ()
+def best(pkg):
+    try:
+        req = urllib.request.Request(f"{base}/{pkg}/", headers={"User-Agent": "arrakis-prefetch"})
+        html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    bv, burl = (), None
+    for h in re.findall(r'href="([^"]+)"', html):
+        u = h.split("#", 1)[0]; fn = u.rsplit("/", 1)[-1]
+        if not (fn.startswith(pkg + "-") and "cp312-cp312" in fn and "x86_64" in fn
+                and "linux" in fn and fn.endswith(".whl")):
+            continue
+        full = u if u.startswith("http") else ("https://download.pytorch.org" + u if u.startswith("/") else f"{base}/{pkg}/{u}")
+        v = ver_key(fn, pkg)
+        if v >= bv:
+            bv, burl = v, full
+    return burl
+urls = [best(p) for p in ("torch", "torchvision", "torchaudio")]
+if any(u is None for u in urls):
     sys.exit(1)
-want = {"torch", "torchvision", "torchaudio"}
-for item in data.get("install", []):
-    name = (item.get("metadata", {}).get("name") or "").lower()
-    url = item.get("download_info", {}).get("url", "")
-    if name in want and url.endswith(".whl"):
-        print(url)
+print("\n".join(urls))
 PY
-)" || return 1
+)" || { log_warn "Prefetch torch: resolução de URLs falhou; usando o download padrão do comfy-cli"; return 1; }
     [ -n "$urls" ] || return 1
 
     # 3) Fetch each wheel with 16 parallel streams (defeats the per-connection throttle).
