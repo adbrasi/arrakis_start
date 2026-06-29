@@ -348,11 +348,19 @@ TEMPLATE_COMFY_PORTS="${TEMPLATE_COMFY_PORTS:-8188}"
 COMFY_PORT="${COMFY_PORT:-8818}"
 TEMPLATE_COMFY_SUPERVISOR_CONF="${TEMPLATE_COMFY_SUPERVISOR_CONF:-/etc/supervisor/conf.d/comfyui.conf}"
 DISABLE_TEMPLATE_COMFY="${DISABLE_TEMPLATE_COMFY:-1}"
-# Torch wheel index for the standard (non-Sage) runtime. cu128 (CUDA 12.8) is the
-# universal sweet spot: it ships Blackwell sm_120 kernels AND runs on any driver
-# that supports CUDA >= 12.8, including newer 13.x drivers (forward compatibility).
-# A CUDA 13 wheel, by contrast, REQUIRES a 13.x driver and dies on 12.8-only hosts.
-TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+# Torch wheel index for the standard (non-Sage) runtime, DERIVED FROM THE DRIVER.
+# A torch wheel only fails when its CUDA toolkit is NEWER than the driver supports,
+# so we pick the newest build the driver can actually run: cu130 on CUDA 13.x drivers
+# (unlocks Blackwell NVFP4 + FlashAttention-4), cu128 on CUDA 12.8 drivers (still
+# ships sm_120 kernels and runs on any R570+ host). comfy-cli's own install
+# auto-detects the same way; this var only governs the fallback torch repair below
+# when an incompatible wheel slips in. Override by exporting TORCH_INDEX_URL.
+if [ -z "${TORCH_INDEX_URL:-}" ]; then
+    case "$(detect_driver_max_cuda)" in
+        13.*|14.*) TORCH_INDEX_URL="https://download.pytorch.org/whl/cu130" ;;
+        *)         TORCH_INDEX_URL="https://download.pytorch.org/whl/cu128" ;;
+    esac
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 export GIT_TERMINAL_PROMPT=0
@@ -371,8 +379,24 @@ export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:---threads 8}"
 # Export both so old and new torch builds work without warnings.
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-$PYTORCH_ALLOC_CONF}"
+
+# uv/pip resilience on RunPod's /workspace network volume. Without these, uv's cache
+# (on the container overlay) and the venv (on the network mount) live on different
+# devices, so uv falls back to slow cross-device copies (uv #10051); and uv's 30s
+# read timeout with no-retry-on-timeout (uv #17697) aborts large wheel pulls over
+# PyPI's CDN — the exact "4 retries in 130.2s" failure seen in production. Co-locate
+# the cache with the venv, force copy mode, raise the timeout, and add retries.
+export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/workspace/.cache/uv}"
+export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
+export UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}"
+export UV_CONCURRENT_DOWNLOADS="${UV_CONCURRENT_DOWNLOADS:-8}"
+export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-300}"
+export PIP_RETRIES="${PIP_RETRIES:-5}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/workspace/.cache/pip}"
+
 # Create directories
-mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR"
+mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR" "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
 
 log_info "========================================="
 log_info " Arrakis Start - ComfyUI Deployment"
@@ -495,15 +519,41 @@ export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-60}"
 
 log_success "ComfyUI Python environment ready"
 
+# Make the workspace venv the active virtualenv BEFORE comfy-cli install.
+# comfy-cli resolves its target Python from VIRTUAL_ENV first (resolve_python.py),
+# so without this it installs ComfyUI's deps into the RunPod template's /venv/main
+# (pre-exported VIRTUAL_ENV) — a venv that is never used at runtime, forcing a full
+# reinstall later and downloading torch twice.
+export VIRTUAL_ENV="$COMFY_VENV_DIR"
+export PATH="$COMFY_VENV_DIR/bin:$PATH"
+
 # 3. Install ComfyUI
 log_info "[3/5] Installing ComfyUI..."
 
 if [ -f "$COMFY_DIR/main.py" ]; then
     log_warn "ComfyUI already exists, skipping installation"
 else
-    run_with_progress "Instalando ComfyUI (comfy-cli)" \
-        "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --fast-deps --nvidia
-    log_success "ComfyUI installed"
+    # Let comfy-cli auto-detect the CUDA build from the driver (cu130 on CUDA 13.x
+    # drivers, cu128 on 12.8) — its detection is correct; we only fix the mechanics.
+    # NO --fast-deps: at bootstrap there are no custom nodes yet (start.py clones them
+    # later) so its cross-node dedup buys nothing, while it couples torch+everything
+    # into one all-or-nothing uv resolution that a single slow wheel can abort, and it
+    # has a torch>=2.11 CUDA-runtime regression (comfy-cli #413). Non-fatal with a
+    # timeout + one retry: downstream steps reinstall core requirements and a
+    # driver-compatible torch into the workspace venv, so a flaky network or a single
+    # slow PyPI wheel never blocks the web UI from starting.
+    if run_with_progress "Instalando ComfyUI (comfy-cli)" \
+        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia; then
+        log_success "ComfyUI installed"
+    elif run_with_progress "Reinstalando ComfyUI (comfy-cli, retry)" \
+        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia; then
+        log_success "ComfyUI installed (retry)"
+    else
+        log_warn "comfy-cli install falhou/expirou após retry — seguindo; as etapas seguintes reinstalam deps core/torch no venv correto."
+        if [ ! -f "$COMFY_DIR/main.py" ]; then
+            log_error "Repo ComfyUI não foi clonado; ComfyUI não vai iniciar. Verifique a rede."
+        fi
+    fi
 fi
 
 # Ensure ComfyUI Python dependencies are present even if ComfyUI folder already existed.
@@ -546,8 +596,8 @@ log_info "Driver CUDA máx.: ${_driver_max_cuda:-desconhecido} | torch build: $(
 if torch_runtime_is_ready; then
     log_info "PyTorch compatível com o driver atual já presente no runtime; pulando reinstall"
 else
-    log_info "PyTorch ausente/incompatível com o driver; instalando cu128 estável ($TORCH_INDEX_URL)..."
-    run_with_progress "Instalando PyTorch cu128 (CUDA 12.8, compatível com o driver)" \
+    log_info "PyTorch ausente/incompatível com o driver; instalando build compatível ($TORCH_INDEX_URL)..."
+    run_with_progress "Instalando PyTorch compatível com o driver ($TORCH_INDEX_URL)" \
         pip_install_into "$COMFY_PYTHON" --upgrade --force-reinstall \
         torch torchvision torchaudio \
         --index-url "$TORCH_INDEX_URL"
@@ -557,12 +607,12 @@ else
     # transient probe miss), warn with an actionable hint and let ComfyUI start —
     # it will surface the real error itself if there genuinely is one.
     if torch_runtime_is_ready; then
-        log_success "PyTorch cu128 instalado e compatível com o driver"
+        log_success "PyTorch instalado e compatível com o driver ($TORCH_INDEX_URL)"
     else
         log_warn "PyTorch reinstalado, mas a validação ainda não confirma CUDA utilizável."
         log_warn "Seguindo mesmo assim — o ComfyUI vai iniciar e reportar o erro real se houver."
-        log_warn "Se esta GPU exige um CUDA diferente de 12.8 (driver máx.: ${_driver_max_cuda:-desconhecido}),"
-        log_warn "  defina TORCH_INDEX_URL para o índice correto, ex.: https://download.pytorch.org/whl/cu126"
+        log_warn "Se esta GPU exige outro índice CUDA (driver máx.: ${_driver_max_cuda:-desconhecido}),"
+        log_warn "  defina TORCH_INDEX_URL manualmente, ex.: https://download.pytorch.org/whl/cu126"
     fi
 fi
 
