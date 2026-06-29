@@ -1014,10 +1014,39 @@ class DownloadManager:
             download_start_ts = time.monotonic()
             last_log_ts = time.monotonic()
             last_activity_ts = time.monotonic()
-            last_progress_ts = time.monotonic()
             heartbeat_interval = 20  # warn if silent for this many seconds
             had_progress = False  # track if we ever saw tqdm progress
             stall_warned = False
+
+            # Stall watchdog. The read loop below BLOCKS on stdout, so an hf_xet
+            # download that goes completely SILENT (no stdout at all) would never
+            # reach an in-loop check and could hang until the overall-stall backstop
+            # (many minutes later). This daemon thread kills the process as soon as
+            # no real byte progress has been seen for the stall timeout — silent or
+            # not — so we fail over to the Python API fallback in ~120s instead.
+            stall_state = {'last_progress': time.monotonic(), 'killed': False}
+
+            def _hf_stall_watchdog():
+                to = self.aria2_stall_timeout_seconds
+                if to <= 0:
+                    return
+                while True:
+                    time.sleep(3)
+                    if process.poll() is not None or self._cancelled:
+                        return
+                    if time.monotonic() - stall_state['last_progress'] > to:
+                        stall_state['killed'] = True
+                        logger.error(
+                            f"HF CLI stall timeout para {filename or url} "
+                            f"(sem progresso por {to}s), encerrando"
+                        )
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        return
+
+            threading.Thread(target=_hf_stall_watchdog, daemon=True).start()
 
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
@@ -1066,7 +1095,7 @@ class DownloadManager:
                         last_log_ts = now
 
                     # Reset stall tracking on real progress
-                    last_progress_ts = now
+                    stall_state['last_progress'] = now
                     stall_warned = False
                 else:
                     # Non-progress lines: promote important ones to info, skip bar fragments
@@ -1086,9 +1115,10 @@ class DownloadManager:
                         )
                         last_log_ts = now
 
-                # Stall timeout: kill HF CLI if no progress for too long
+                # Stall warning only (the watchdog thread above does the kill, so
+                # this still fires even when the process goes completely silent).
                 now = time.monotonic()
-                stall_elapsed = now - last_progress_ts
+                stall_elapsed = now - stall_state['last_progress']
                 if self.aria2_stall_timeout_seconds > 0 and process.poll() is None:
                     stall_warn_seconds = max(30, self.aria2_stall_timeout_seconds // 4)
                     if not stall_warned and stall_elapsed > stall_warn_seconds:
@@ -1097,21 +1127,15 @@ class DownloadManager:
                             f"(timeout em {self.aria2_stall_timeout_seconds}s)"
                         )
                         stall_warned = True
-                    if stall_elapsed > self.aria2_stall_timeout_seconds:
-                        logger.error(
-                            f"HF CLI stall timeout para {filename or url} "
-                            f"(sem progresso por {self.aria2_stall_timeout_seconds}s), encerrando"
-                        )
-                        process.kill()
-                        process.wait()
-                        self._unregister_process(process)
-                        reason = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
-                        if tail:
-                            reason = f"{reason} | tail: {' || '.join(tail)}"
-                        return False, reason
 
             process.wait()
             self._unregister_process(process)
+
+            if stall_state['killed']:
+                reason = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
+                if tail:
+                    reason = f"{reason} | tail: {' || '.join(tail)}"
+                return False, reason
 
             if process.returncode == 0:
                 # `hf download --local-dir` preserves subfolders from repo paths (e.g., VAE/file.safetensors).
@@ -1205,9 +1229,12 @@ class DownloadManager:
                 os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
             os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
-            # Run hf_hub_download in a thread with timeout to prevent infinite hangs
+            # Run hf_hub_download in a thread with a hard wall-clock cap to prevent
+            # infinite hangs. Generous because LTX/Wan encoders are 12-24 GB and a
+            # flat 360s was too tight for them on a normal link. Override via env.
             dl_start = time.monotonic()
-            dl_timeout = max(300, self.aria2_stall_timeout_seconds * 3)
+            dl_timeout = int(os.environ.get('HF_PYTHON_FALLBACK_TIMEOUT', '0') or '0') \
+                or max(900, self.aria2_stall_timeout_seconds * 6)
             result_holder = {'path': None, 'error': None}
 
             def _do_download():
