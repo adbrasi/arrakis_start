@@ -54,7 +54,10 @@ def _safe_int_env(name: str, default: int) -> int:
 
 WEB_PORT = _safe_int_env('WEB_PORT', 8090)
 COMFY_PORT = _safe_int_env('COMFY_PORT', 8818)
-DEFAULT_TORCH_INDEX_URL = os.environ.get('TORCH_INDEX_URL', 'https://download.pytorch.org/whl/cu128')
+# Explicit override only (e.g. user forces a specific CUDA build). When unset, the
+# torch wheel index is derived per-driver by _torch_index_url() — cu130 on CUDA
+# 13.x drivers, cu128 on 12.8 — so a Blackwell box is never blanket-downgraded.
+TORCH_INDEX_URL_OVERRIDE = os.environ.get('TORCH_INDEX_URL', '').strip()
 SAGEATTENTION_INSTALLER_URL = os.environ.get(
     'SAGEATTENTION_INSTALLER_URL',
     'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
@@ -239,6 +242,21 @@ def _driver_max_cuda() -> Optional[str]:
         return None
 
 
+def _torch_index_url() -> str:
+    """PyTorch wheel index, driver-aware. Honors an explicit TORCH_INDEX_URL env
+    override; otherwise picks the newest build the driver can actually run: cu130
+    on CUDA 13.x drivers (unlocks Blackwell NVFP4 + FlashAttention-4), cu128 on
+    CUDA 12.8 (still ships sm_120 kernels, runs on any R570+ host). Mirrors
+    bootstrap.sh — never blanket-downgrades a Blackwell box from cu130 to cu128.
+    """
+    if TORCH_INDEX_URL_OVERRIDE:
+        return TORCH_INDEX_URL_OVERRIDE
+    driver = _version_pair(_driver_max_cuda())
+    if driver and driver >= (13, 0):
+        return 'https://download.pytorch.org/whl/cu130'
+    return 'https://download.pytorch.org/whl/cu128'
+
+
 def _torch_build_cuda() -> Optional[str]:
     """CUDA toolkit the installed torch wheel was built against (e.g. '12.8')."""
     py = _comfy_python()
@@ -270,45 +288,54 @@ def _torch_incompatible_with_driver() -> bool:
     return not _cuda_available()
 
 
+_torch_compat_checked = False
+
+
 def _ensure_torch_driver_compatible() -> None:
     """Repair a torch build that cannot run on the current GPU driver.
 
-    Some cloud images (e.g. RunPod comfyui-base, CUDA 12.8 only) cause comfy-cli
-    or an unpinned `torch` upgrade to pull a CUDA 13 wheel into the venv. That
-    wheel needs a driver supporting CUDA >= 13.0; on a 12.8-capped driver ComfyUI
-    dies at startup with "RuntimeError: The NVIDIA driver on your system is too
-    old". We detect it and reinstall a compatible cu128 build. Advisory only —
-    never raises — so a stubborn validation never blocks ComfyUI from starting.
-    No-op when torch already matches the driver or no GPU is present.
+    A torch wheel only fails to initialise when its CUDA toolkit is strictly NEWER
+    than the driver supports (e.g. a cu130 wheel on a CUDA 12.8 driver — ComfyUI
+    then dies at startup with "RuntimeError: The NVIDIA driver on your system is
+    too old"). We detect that and reinstall a driver-appropriate build chosen by
+    _torch_index_url() — cu130 on CUDA 13.x drivers, cu128 on 12.8 — so a good
+    cu130 on a Blackwell box is NEVER downgraded. Advisory only (never raises) and
+    runs at most once per process. No-op when torch already matches the driver or
+    no GPU is present.
     """
+    global _torch_compat_checked
+    if _torch_compat_checked:
+        return
+    _torch_compat_checked = True
+
     if not _gpu_present():
         return
     if not _torch_incompatible_with_driver():
         return
 
     driver_max = _driver_max_cuda() or 'desconhecido'
+    index_url = _torch_index_url()
     logger.warning(
         f"torch build (CUDA {_torch_build_cuda() or '?'}) é mais novo que o driver "
-        f"suporta (CUDA máx.: {driver_max}). Reinstalando build compatível de "
-        f"{DEFAULT_TORCH_INDEX_URL}"
+        f"suporta (CUDA máx.: {driver_max}). Reinstalando build compatível de {index_url}"
     )
     cmd = [
         _comfy_python(), '-m', 'pip', 'install', '--upgrade', '--force-reinstall',
         'torch', 'torchvision', 'torchaudio',
-        '--index-url', DEFAULT_TORCH_INDEX_URL,
+        '--index-url', index_url,
     ]
-    code, _ = _run_streaming_command(cmd, 'PyTorch cu128 driver-compat repair', log_prefix='torch')
+    code, _ = _run_streaming_command(cmd, 'PyTorch driver-compat repair', log_prefix='torch')
     if code != 0:
         logger.warning("PyTorch driver-compat reinstall returned non-zero; continuing anyway")
         return
     if _torch_incompatible_with_driver():
         logger.warning(
-            "torch ainda não bate com o driver após reinstalar cu128 — seguindo assim. "
-            f"Se a GPU exige CUDA != 12.8 (driver máx.: {driver_max}), defina TORCH_INDEX_URL "
+            f"torch ainda não bate com o driver após reinstalar de {index_url} — seguindo assim. "
+            f"Se a GPU exige outro índice CUDA (driver máx.: {driver_max}), defina TORCH_INDEX_URL "
             "(ex.: https://download.pytorch.org/whl/cu126)."
         )
     else:
-        logger.info("✓ torch compatível com o driver após reinstalar cu128")
+        logger.info(f"✓ torch compatível com o driver após reinstalar de {index_url}")
 
 
 def _normalize_pip_command(command: Any) -> List[str]:
@@ -341,6 +368,21 @@ def _normalize_pip_command(command: Any) -> List[str]:
         return [target_python, '-m', 'pip'] + tokens[3:]
 
     return [target_python, '-m', 'pip'] + tokens
+
+
+def _pip_install_argv(args: List[str], target_python: Optional[str] = None) -> List[str]:
+    """Build a 'pip install' argv, preferring uv (far faster: no per-call Python
+    interpreter startup and a much faster resolver) with a pip fallback. `args`
+    are the install arguments after 'install' (e.g. ['-r', req_file]). uv installs
+    into the venv given by --python; it also inherits the UV_* resilience env that
+    bootstrap.sh exports (cache on /workspace, copy link-mode, longer timeouts).
+    Falls back to '<py> -m pip install' when uv is not on PATH.
+    """
+    py = target_python or _comfy_python()
+    uv = shutil.which('uv')
+    if uv:
+        return [uv, 'pip', 'install', '--python', py, *args]
+    return [py, '-m', 'pip', 'install', *args]
 
 
 def _run_streaming_command(
@@ -742,8 +784,8 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
         )
 
     # 4. Ensure the installed torch can actually drive this GPU. Custom-node
-    # requirements or comfy-cli may have pulled a CUDA 13 wheel that crashes on a
-    # CUDA 12.8-only driver; repair to cu128 before ComfyUI is (re)started.
+    # requirements may have pulled a CUDA wheel newer than the driver supports;
+    # repair to a driver-appropriate build before ComfyUI is (re)started.
     _ensure_torch_driver_compatible()
 
     # 5. Mark presets as installed (only those actually found in preset_map)
@@ -1104,7 +1146,7 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
             if req_file.exists():
                 logger.info(f"Installing requirements for {node_name}...")
                 retcode, last_line = _run_pip_install_streaming(
-                    [_comfy_python(), '-m', 'pip', 'install', '-r', str(req_file)],
+                    _pip_install_argv(['-r', str(req_file)]),
                     node_name,
                 )
                 if retcode != 0:
