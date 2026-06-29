@@ -141,6 +141,79 @@ pip_install_into() {
     fi
 }
 
+# Pre-download the heavy torch wheels with aria2c (16 parallel streams) BEFORE
+# comfy-cli touches torch. download.pytorch.org (CloudFront) throttles a SINGLE TCP
+# connection hard — the 0.5-0.8 GB torch wheel crawls at ~300 kB/s on one stream
+# while the nvidia-* wheels (fetched in parallel by pip) already arrive at ~40 MB/s.
+# 16 parallel streams saturate the link. We resolve the exact wheel URLs via a pip
+# dry-run report (metadata only, fast), fetch them with aria2c, then install the
+# local wheels (their deps come from the same index and are already fast). The
+# caller then passes --skip-torch-or-directml so comfy-cli does NOT re-download torch.
+# Best-effort: ANY failure returns non-zero and the caller falls back to comfy-cli's
+# own torch download. Driver-aware via $TORCH_INDEX_URL (cu130 on 13.x, cu128 on 12.8).
+# Disable with PREFETCH_TORCH=0.
+prefetch_torch_via_aria2c() {
+    [ "${PREFETCH_TORCH:-1}" = "1" ] || return 1
+    command -v aria2c >/dev/null 2>&1 || return 1
+    local wheel_dir="${TORCH_WHEEL_DIR:-/workspace/.cache/torch-wheels}"
+    local report="$TMPDIR/torch-report.json"
+    mkdir -p "$wheel_dir" || return 1
+    rm -f "$wheel_dir"/torch-*.whl "$wheel_dir"/torchvision-*.whl "$wheel_dir"/torchaudio-*.whl
+
+    log_info "Pré-baixando torch via aria2c (16 conexões) de $TORCH_INDEX_URL..."
+
+    # 1) Resolve wheel URLs WITHOUT downloading the big files (pip fetches only wheel
+    #    metadata via HTTP range requests). Bounded so it can't hang on a bad index.
+    if ! timeout 150 "$COMFY_PYTHON" -m pip install --dry-run --quiet \
+            --report "$report" \
+            torch torchvision torchaudio --index-url "$TORCH_INDEX_URL" >/dev/null 2>&1; then
+        log_warn "Prefetch torch: resolução de URLs falhou/expirou; usando o download padrão do comfy-cli"
+        return 1
+    fi
+
+    # 2) Extract the torch/torchvision/torchaudio wheel URLs from the pip report.
+    local urls
+    urls="$("$COMFY_PYTHON" - "$report" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+want = {"torch", "torchvision", "torchaudio"}
+for item in data.get("install", []):
+    name = (item.get("metadata", {}).get("name") or "").lower()
+    url = item.get("download_info", {}).get("url", "")
+    if name in want and url.endswith(".whl"):
+        print(url)
+PY
+)" || return 1
+    [ -n "$urls" ] || return 1
+
+    # 3) Fetch each wheel with 16 parallel streams (defeats the per-connection throttle).
+    local u
+    while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        if ! aria2c -x16 -s16 -k1M --console-log-level=warn \
+                --auto-file-renaming=false --allow-overwrite=true \
+                -d "$wheel_dir" "$u"; then
+            log_warn "Prefetch torch: aria2c falhou em $(basename "$u"); usando o download padrão"
+            return 1
+        fi
+    done <<< "$urls"
+
+    ls "$wheel_dir"/torch-*.whl >/dev/null 2>&1 || return 1
+
+    # 4) Install the local wheels; their deps (nvidia-*, numpy, ...) resolve from the
+    #    same index and are already fast.
+    if ! pip_install_into "$COMFY_PYTHON" \
+            "$wheel_dir"/torch-*.whl "$wheel_dir"/torchvision-*.whl "$wheel_dir"/torchaudio-*.whl \
+            --index-url "$TORCH_INDEX_URL"; then
+        log_warn "Prefetch torch: instalação dos wheels locais falhou; usando o download padrão"
+        return 1
+    fi
+    return 0
+}
+
 stop_template_comfy_processes() {
     local pattern="$1"
     if pgrep -f "$pattern" >/dev/null 2>&1; then
@@ -533,9 +606,18 @@ log_info "[3/5] Installing ComfyUI..."
 if [ -f "$COMFY_DIR/main.py" ]; then
     log_warn "ComfyUI already exists, skipping installation"
 else
-    # Let comfy-cli auto-detect the CUDA build from the driver (cu130 on CUDA 13.x
-    # drivers, cu128 on 12.8) — its detection is correct; we only fix the mechanics.
-    # NO --fast-deps: at bootstrap there are no custom nodes yet (start.py clones them
+    # Beat the single-connection CDN throttle on the torch wheel: pre-fetch it with
+    # aria2c (16 streams), then tell comfy-cli to skip its own (single-stream) torch
+    # download. Best-effort — on any failure comfy-cli downloads torch itself as before.
+    _comfy_install_extra=()
+    if prefetch_torch_via_aria2c; then
+        log_success "PyTorch pré-instalado via aria2c (multi-conexão); comfy-cli vai pular o torch"
+        _comfy_install_extra+=(--skip-torch-or-directml)
+    fi
+
+    # comfy-cli auto-detects the CUDA build from the driver (cu130 on CUDA 13.x drivers,
+    # cu128 on 12.8) — its detection is correct; we only fix the mechanics. NO
+    # --fast-deps: at bootstrap there are no custom nodes yet (start.py clones them
     # later) so its cross-node dedup buys nothing, while it couples torch+everything
     # into one all-or-nothing uv resolution that a single slow wheel can abort, and it
     # has a torch>=2.11 CUDA-runtime regression (comfy-cli #413). Non-fatal with a
@@ -543,10 +625,10 @@ else
     # driver-compatible torch into the workspace venv, so a flaky network or a single
     # slow PyPI wheel never blocks the web UI from starting.
     if run_with_progress "Instalando ComfyUI (comfy-cli)" \
-        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia; then
+        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia "${_comfy_install_extra[@]}"; then
         log_success "ComfyUI installed"
     elif run_with_progress "Reinstalando ComfyUI (comfy-cli, retry)" \
-        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia; then
+        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia "${_comfy_install_extra[@]}"; then
         log_success "ComfyUI installed (retry)"
     else
         log_warn "comfy-cli install falhou/expirou após retry — seguindo; as etapas seguintes reinstalam deps core/torch no venv correto."
