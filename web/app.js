@@ -396,6 +396,78 @@ async function removePreset(presetName, btn) {
 }
 
 // ============================================
+// Live Console (SSE log stream)
+// ============================================
+let logES = null;
+let logLineCount = 0;
+const MAX_LOG_LINES = 1500;
+
+function connectLogStream() {
+    if (logES || typeof EventSource === 'undefined') return;
+    try {
+        logES = new EventSource('/api/logs/stream');
+        logES.onmessage = (e) => appendLogLine(e.data);
+        // EventSource auto-reconnects on error (resuming via Last-Event-ID).
+    } catch (err) {
+        console.error('Falha ao conectar no stream de logs:', err);
+    }
+}
+
+function appendLogLine(text) {
+    const pre = document.getElementById('console-log');
+    if (!pre) return;
+    const auto = document.getElementById('console-autoscroll');
+    const autoScroll = !auto || auto.checked;
+    pre.textContent += (pre.textContent ? '\n' : '') + text;
+    logLineCount++;
+    if (logLineCount > MAX_LOG_LINES) {
+        const lines = pre.textContent.split('\n');
+        const keep = Math.floor(MAX_LOG_LINES * 0.8);
+        pre.textContent = lines.slice(lines.length - keep).join('\n');
+        logLineCount = keep;
+    }
+    if (autoScroll) pre.scrollTop = pre.scrollHeight;
+}
+
+function setConsoleOpen(open) {
+    const sec = document.getElementById('console-section');
+    const toggle = document.getElementById('console-toggle');
+    if (!sec) return;
+    sec.classList.toggle('open', open);
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+        const pre = document.getElementById('console-log');
+        if (pre) pre.scrollTop = pre.scrollHeight;
+    }
+}
+
+function setConsoleActive(active) {
+    const dot = document.getElementById('console-dot');
+    if (dot) dot.classList.toggle('active', active);
+}
+
+// ============================================
+// Cancel install
+// ============================================
+async function cancelInstall() {
+    if (!confirm('Cancelar a instalação? Os downloads em andamento serão interrompidos.')) return;
+    const btn = document.getElementById('cancel-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch('/api/cancel', { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        showToast(
+            d.cancelled ? 'Cancelamento solicitado — interrompendo downloads.' : 'Nenhuma instalação ativa.',
+            'info'
+        );
+    } catch {
+        showToast('Falha ao solicitar cancelamento.', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// ============================================
 // Install & Start
 // ============================================
 async function startWithPresets() {
@@ -407,6 +479,11 @@ async function startWithPresets() {
     startBtn.textContent = 'Instalando...';
 
     showToast('Instalando presets e iniciando ComfyUI...', 'info');
+
+    const cancelBtn = document.getElementById('cancel-btn');
+    if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.disabled = false; }
+    setConsoleOpen(true);
+    setConsoleActive(true);
 
     try {
         const extraFlagsStr = document.getElementById('extra-flags-input').value.trim();
@@ -435,6 +512,9 @@ async function startWithPresets() {
                         await loadPresets();
                         selectedPresets = [];
                         isInstalling = false;
+                        const cb = document.getElementById('cancel-btn');
+                        if (cb) cb.hidden = true;
+                        setConsoleActive(false);
                         updateStartButton();
                     }
                 } catch {
@@ -449,6 +529,9 @@ async function startWithPresets() {
         console.error('Erro na instalacao:', error);
         showToast('Instalacao falhou. Verifique o console para detalhes.', 'error');
         isInstalling = false;
+        const cb = document.getElementById('cancel-btn');
+        if (cb) cb.hidden = true;
+        setConsoleActive(false);
         startBtn.disabled = false;
         startBtn.textContent = 'Iniciar com Presets Selecionados';
     }
@@ -491,4 +574,17 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleManagePopup();
     });
     document.getElementById('manage-close').addEventListener('click', () => toggleManagePopup(false));
+
+    // Live console + cancel
+    document.getElementById('cancel-btn').addEventListener('click', cancelInstall);
+    document.getElementById('console-toggle').addEventListener('click', () => {
+        const sec = document.getElementById('console-section');
+        setConsoleOpen(!sec.classList.contains('open'));
+    });
+    document.getElementById('console-clear').addEventListener('click', () => {
+        const pre = document.getElementById('console-log');
+        if (pre) pre.textContent = '';
+        logLineCount = 0;
+    });
+    connectLogStream();
 });

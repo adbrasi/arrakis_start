@@ -7,11 +7,12 @@ Serves web UI and handles installation requests
 import json
 import logging
 import threading
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Callable, List
 
 from state import get_state_manager
+from log_stream import get_log_buffer, install_log_capture
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
         elif self.path.startswith('/api/workflows/'):
             filename = self.path[len('/api/workflows/'):]
             self._handle_get_workflow(filename)
+        elif self.path.startswith('/api/logs/stream'):
+            self._handle_logs_stream()
         else:
             # Serve static files
             super().do_GET()
@@ -54,6 +57,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self._handle_uninstall()
         elif self.path == '/api/restart':
             self._handle_restart()
+        elif self.path == '/api/cancel':
+            self._handle_cancel()
         elif self.path == '/api/shutdown':
             self._handle_shutdown()
         else:
@@ -162,6 +167,61 @@ class PresetHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             logger.error(f"Failed to get status: {e}")
             self.send_error(500, str(e))
+
+    def _sse_send(self, event_id, data):
+        """Write one Server-Sent Event (handles multi-line data correctly)."""
+        chunk = f"id: {event_id}\n" + "".join(
+            f"data: {seg}\n" for seg in str(data).split('\n')) + "\n"
+        self.wfile.write(chunk.encode('utf-8', 'replace'))
+        self.wfile.flush()
+
+    def _handle_logs_stream(self):
+        """Stream the live log buffer to the browser via Server-Sent Events.
+
+        Needs ThreadingHTTPServer (each SSE client holds its handler thread).
+        Replays the buffered backlog (or from Last-Event-ID / ?after=), then
+        blocks for new lines, emitting a keepalive comment when idle so proxies
+        don't drop the connection.
+        """
+        from urllib.parse import urlparse, parse_qs
+
+        after = 0
+        hdr = self.headers.get('Last-Event-ID')
+        if hdr and hdr.strip().isdigit():
+            after = int(hdr.strip())
+        elif '?' in self.path:
+            val = (parse_qs(urlparse(self.path).query).get('after') or ['0'])[0]
+            if val.isdigit():
+                after = int(val)
+
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'keep-alive')
+            self.send_header('X-Accel-Buffering', 'no')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+        except Exception:
+            return
+
+        buf = get_log_buffer()
+        last = after
+        try:
+            for sid, line in buf.since(after):
+                self._sse_send(sid, line)
+                last = sid
+            while True:
+                new = buf.wait_since(last, timeout=15)
+                if new:
+                    for sid, line in new:
+                        self._sse_send(sid, line)
+                        last = sid
+                else:
+                    self.wfile.write(b': keepalive\n\n')
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return  # client disconnected — let the handler thread exit
 
     def _handle_restart(self):
         """Handle ComfyUI restart request (kill + start with last preset flags)"""
@@ -290,6 +350,24 @@ class PresetHandler(SimpleHTTPRequestHandler):
             logger.error(f"Installation error: {e}")
             self.send_error(500, str(e))
 
+    def _handle_cancel(self):
+        """Cancel an in-progress installation (interrupts active downloads)."""
+        try:
+            from start import cancel_active_install
+            cancelled = bool(cancel_active_install())
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': True,
+                'cancelled': cancelled,
+                'message': 'Cancelamento solicitado' if cancelled else 'Nenhuma instalação ativa no momento'
+            }).encode())
+        except Exception as e:
+            logger.error(f"Cancel error: {e}")
+            self.send_error(500, str(e))
+
     def _handle_uninstall(self):
         """Handle preset uninstall request — deletes models specific to a preset"""
         try:
@@ -383,8 +461,14 @@ def run_server(port: int = 8090, presets_callback: Callable = None):
     global _presets_callback, _state_manager
     _presets_callback = presets_callback
     _state_manager = get_state_manager()
-    
-    server = HTTPServer(('0.0.0.0', port), PresetHandler)
+
+    # Capture root-logger output so the web UI can stream it live (SSE).
+    install_log_capture()
+
+    # ThreadingHTTPServer is required: a long-lived SSE connection would block a
+    # single-threaded server. daemon_threads lets SSE/handler threads die with us.
+    server = ThreadingHTTPServer(('0.0.0.0', port), PresetHandler)
+    server.daemon_threads = True
     
     # Colorful startup banner
     print("\n" + "="*60)

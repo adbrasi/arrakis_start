@@ -61,6 +61,30 @@
                 <button id="start-btn" class="btn-primary" disabled>
                     Iniciar com Presets Selecionados
                 </button>
+                <button id="cancel-btn" class="btn-cancel" type="button" hidden>
+                    Cancelar instalação
+                </button>
+            </section>
+
+            <!-- Live install console (streams server logs via SSE) -->
+            <section id="console-section" class="console-section">
+                <button id="console-toggle" class="console-header" type="button"
+                    aria-expanded="false" aria-controls="console-log">
+                    <span class="console-title">
+                        <span id="console-dot" class="console-dot"></span>
+                        Progresso / logs ao vivo
+                    </span>
+                    <span class="console-chevron" aria-hidden="true">▾</span>
+                </button>
+                <div class="console-body">
+                    <pre id="console-log" class="console-log" aria-live="polite" tabindex="0"></pre>
+                    <div class="console-actions">
+                        <button id="console-clear" class="console-clear" type="button">Limpar</button>
+                        <label class="console-autoscroll">
+                            <input id="console-autoscroll" type="checkbox" checked> auto-scroll
+                        </label>
+                    </div>
+                </div>
             </section>
         </main>
     </div>
