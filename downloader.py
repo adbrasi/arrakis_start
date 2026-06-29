@@ -6,6 +6,7 @@ Supports HuggingFace (hf/hf_xet), Civitai, and direct URLs
 
 import os
 import sys
+import signal
 import subprocess
 import logging
 import json
@@ -423,40 +424,44 @@ class DownloadManager:
         }
         
         try:
-            response = requests.get(
+            # stream=True + context manager: we only inspect status/headers (and a
+            # small JSON error body), never the file body. Without it, a rare 200
+            # carrying the file inline would buffer the entire model into RAM.
+            with requests.get(
                 auth_url,
                 headers=headers,
                 allow_redirects=False,
-                timeout=30
-            )
-            if response.status_code in (301, 302, 303, 307, 308):
-                location = (response.headers.get('Location') or '').strip()
-                if location:
-                    location_lower = location.lower()
-                    if location_lower.startswith('/login') or 'reason=download-auth' in location_lower:
-                        return None, (
-                            f"civitai_auth_http_401_auth_redirect_login "
-                            f"(token tail: {self._token_tail(self.civitai_token)})"
-                        )
-                    return urljoin(auth_url, location), ""
-                return None, f"civitai_redirect_without_location_{response.status_code}"
-            if response.status_code == 200:
-                return auth_url, ""
-            if response.status_code in (401, 403):
-                detail = ""
-                try:
-                    body = response.json() if response.content else {}
-                    msg = str(body.get('message') or body.get('error') or '').strip()
-                    if msg:
-                        detail = f": {msg}"
-                except Exception:
+                timeout=30,
+                stream=True,
+            ) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = (response.headers.get('Location') or '').strip()
+                    if location:
+                        location_lower = location.lower()
+                        if location_lower.startswith('/login') or 'reason=download-auth' in location_lower:
+                            return None, (
+                                f"civitai_auth_http_401_auth_redirect_login "
+                                f"(token tail: {self._token_tail(self.civitai_token)})"
+                            )
+                        return urljoin(auth_url, location), ""
+                    return None, f"civitai_redirect_without_location_{response.status_code}"
+                if response.status_code == 200:
+                    return auth_url, ""
+                if response.status_code in (401, 403):
                     detail = ""
-                return None, (
-                    f"civitai_auth_http_{response.status_code} "
-                    f"{detail} "
-                    f"(token tail: {self._token_tail(self.civitai_token)})"
-                )
-            return None, f"civitai_resolve_http_{response.status_code}"
+                    try:
+                        body = response.json()
+                        msg = str(body.get('message') or body.get('error') or '').strip()
+                        if msg:
+                            detail = f": {msg}"
+                    except Exception:
+                        detail = ""
+                    return None, (
+                        f"civitai_auth_http_{response.status_code} "
+                        f"{detail} "
+                        f"(token tail: {self._token_tail(self.civitai_token)})"
+                    )
+                return None, f"civitai_resolve_http_{response.status_code}"
         except Exception as e:
             return None, f"civitai_resolve_exception: {e}"
     
@@ -481,6 +486,255 @@ class DownloadManager:
                     buf = bytearray()
             else:
                 buf += chunk
+
+    # ------------------------------------------------------------------ #
+    # Robust progress/stall primitives (bytes-on-disk, not stdout scraping)
+    # ------------------------------------------------------------------ #
+
+    def _hf_python(self) -> str:
+        """Return the python executable that owns the HF CLI (same venv as hf_xet)."""
+        if self.hf_cli_path:
+            cli_bin = Path(self.hf_cli_path).resolve().parent
+            for name in ('python', 'python3'):
+                cand = cli_bin / name
+                if cand.exists():
+                    return str(cand)
+        return sys.executable
+
+    @staticmethod
+    def _hf_staging_dir(dest_dir: Path) -> Path:
+        """Dir where huggingface_hub writes the in-progress *.incomplete file for a
+        `--local-dir` download. Stable across hf_hub versions (only the temp file's
+        name changes); both the hf_xet and classic HTTP backends write here."""
+        return Path(dest_dir) / ".cache" / "huggingface" / "download"
+
+    @staticmethod
+    def _tree_bytes(*paths) -> Tuple[int, int]:
+        """Sum apparent size (st_size) and allocated size (st_blocks*512) over the
+        given files/dirs. Allocated size guards against any sparse/preallocated temp
+        file, so growth is detected even if st_size were set up-front by a backend."""
+        total_size = 0
+        total_alloc = 0
+        for p in paths:
+            try:
+                if p is None:
+                    continue
+                if p.is_dir():
+                    for root, _dirs, files in os.walk(p):
+                        for f in files:
+                            try:
+                                st = os.stat(os.path.join(root, f))
+                                total_size += st.st_size
+                                total_alloc += getattr(st, 'st_blocks', 0) * 512
+                            except OSError:
+                                pass
+                elif p.exists():
+                    st = p.stat()
+                    total_size += st.st_size
+                    total_alloc += getattr(st, 'st_blocks', 0) * 512
+            except OSError:
+                pass
+        return total_size, total_alloc
+
+    @staticmethod
+    def _fmt_speed(bps: float) -> str:
+        if bps >= 1_073_741_824:
+            return f"{bps / 1_073_741_824:.1f}GB/s"
+        if bps >= 1_048_576:
+            return f"{bps / 1_048_576:.0f}MB/s"
+        if bps >= 1024:
+            return f"{bps / 1024:.0f}KB/s"
+        return f"{bps:.0f}B/s"
+
+    @staticmethod
+    def _fmt_eta(seconds: float) -> str:
+        seconds = int(max(0, seconds))
+        if seconds >= 3600:
+            return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
+        if seconds >= 60:
+            return f"{seconds // 60}m{seconds % 60}s"
+        return f"{seconds}s"
+
+    @staticmethod
+    def _speed_suffix(target: Path, elapsed: float) -> str:
+        try:
+            if elapsed > 0.5 and target.exists():
+                sb = target.stat().st_size
+                if sb > 0:
+                    bps = sb / elapsed
+                    if bps >= 1_073_741_824:
+                        return f" ({bps / 1_073_741_824:.1f} GB/s, {elapsed:.0f}s)"
+                    if bps >= 1_048_576:
+                        return f" ({bps / 1_048_576:.0f} MB/s, {elapsed:.0f}s)"
+                    return f" ({bps / 1024:.0f} KB/s, {elapsed:.0f}s)"
+        except Exception:
+            pass
+        return ""
+
+    def _terminate_process(self, process: subprocess.Popen, grace: float = 8.0) -> None:
+        """Stop a download subprocess cleanly: SIGINT first (lets the hf_xet Rust
+        backend run abort_xet_session and avoid orphaned threads / corrupt temp
+        files — verified in xet-core), then SIGKILL if it doesn't exit in `grace`s."""
+        try:
+            process.send_signal(signal.SIGINT)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                return
+            time.sleep(0.3)
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+    def _hf_remote_size(self, repo_id: str, branch: str, file_path: str) -> Optional[int]:
+        """Best-effort total file size via a HEAD on the resolve URL (for % display).
+        Non-fatal: returns None on any problem (we then report bytes/speed only)."""
+        try:
+            from urllib.parse import quote
+            url = f"https://huggingface.co/{repo_id}/resolve/{branch}/{quote(file_path)}"
+            headers = {'User-Agent': HTTP_USER_AGENT, 'Accept-Encoding': 'identity'}
+            if self.hf_token:
+                headers['Authorization'] = f'Bearer {self.hf_token}'
+            resp = requests.head(url, headers=headers, allow_redirects=True, timeout=15)
+            size = resp.headers.get('x-linked-size') or resp.headers.get('Content-Length')
+            return int(size) if size and str(size).isdigit() else None
+        except Exception:
+            return None
+
+    def _run_disk_watchdog(self, process, staging_dir, final_path, filename,
+                           expected_size, stall_state):
+        """Authoritative progress + stall signal = BYTES WRITTEN TO DISK.
+
+        This replaces scraping the CLI's stdout (the hf_xet/tqdm bar goes to stderr
+        and is throttled/absent on a non-TTY pipe, which left us blind). Disk bytes
+        are backend-agnostic (XET and HTTP stream the same *.incomplete file) and
+        version-independent. Resets the stall clock on any growth (size OR
+        allocation), emits throttled progress, and stops the process (SIGINT→SIGKILL)
+        when no new bytes land for the stall timeout."""
+        to = self.aria2_stall_timeout_seconds
+        warn_after = max(30, to // 4) if to > 0 else 0
+        poll = 3.0
+        prev_size, prev_alloc = self._tree_bytes(staging_dir, final_path)
+        stall_state['last_bytes'] = prev_size
+        now0 = time.monotonic()
+        last_emit_ts = now0
+        last_emit_bytes = prev_size
+        warned = False
+        while True:
+            time.sleep(poll)
+            if process.poll() is not None or self._cancelled:
+                return
+            size, alloc = self._tree_bytes(staging_dir, final_path)
+            now = time.monotonic()
+            if size > prev_size or alloc > prev_alloc:
+                stall_state['last_progress'] = now
+                stall_state['last_bytes'] = size
+                warned = False
+                prev_size, prev_alloc = size, alloc
+                if now - last_emit_ts >= 5:
+                    dt = now - last_emit_ts
+                    speed_bps = max(0, size - last_emit_bytes) / dt if dt > 0 else 0
+                    speed = self._fmt_speed(speed_bps)
+                    pct = (size / expected_size * 100.0) if expected_size else 0.0
+                    eta = self._fmt_eta((expected_size - size) / speed_bps) \
+                        if (expected_size and speed_bps > 0) else ""
+                    if HAS_WEBSOCKET:
+                        send_download_progress(filename, pct, speed, eta)
+                    if expected_size:
+                        logger.info(
+                            f"  ↓ {filename}: {pct:.0f}% "
+                            f"({size / 1_048_576:.0f}/{expected_size / 1_048_576:.0f} MB) @ {speed}"
+                            + (f" ETA {eta}" if eta else "")
+                        )
+                    else:
+                        logger.info(f"  ↓ {filename}: {size / 1_048_576:.0f} MB @ {speed}")
+                    last_emit_ts = now
+                    last_emit_bytes = size
+            else:
+                stalled_for = now - stall_state['last_progress']
+                if warn_after and not warned and stalled_for > warn_after:
+                    logger.warning(
+                        f"  ⚠ {filename}: sem bytes novos em disco há {stalled_for:.0f}s "
+                        f"(timeout em {to}s)"
+                    )
+                    warned = True
+                if to > 0 and stalled_for > to:
+                    stall_state['killed'] = True
+                    logger.error(
+                        f"Stall em disco para {filename} (sem bytes novos por {to}s), "
+                        f"encerrando (SIGINT) e caindo para fallback"
+                    )
+                    self._terminate_process(process)
+                    return
+
+    def _finalize_hf_file(self, dest_dir: Path, file_path: str, filename: str,
+                          target: Path, downloaded: Path,
+                          expected_size: Optional[int]) -> Tuple[bool, str]:
+        """Move the HF-downloaded file (placed at <dest_dir>/<repo_path>) to the
+        requested <dest_dir>/<filename>, prune empty repo subdirs, and sanity-check
+        the size. Returns (ok, reason)."""
+        try:
+            if downloaded.exists():
+                if downloaded.resolve() != target.resolve():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(downloaded), str(target))
+                    parent = downloaded.parent
+                    while parent != dest_dir and parent.exists():
+                        try:
+                            parent.rmdir()
+                        except OSError:
+                            break
+                        parent = parent.parent
+            elif not target.exists():
+                flat = dest_dir / Path(file_path).name
+                if flat.exists() and flat.resolve() != target.resolve():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(flat), str(target))
+                else:
+                    return False, f"hf_download_missing_output: expected '{downloaded}' or '{target}'"
+            if not target.exists():
+                return False, "hf_download_missing_output"
+            if expected_size and target.stat().st_size < expected_size:
+                return False, f"hf_download_incomplete_{target.stat().st_size}_of_{expected_size}"
+            return True, ""
+        except Exception as e:
+            return False, f"hf_finalize_error: {e}"
+
+    def _verify_download_landed(self, dest_dir: Path, filename: str,
+                                content_disposition: bool) -> Tuple[bool, str]:
+        """Verify a generic (aria2c/wget) download actually produced a file, so a
+        returncode==0 with a misnamed/empty output isn't reported as success."""
+        try:
+            if filename:
+                p = dest_dir / filename
+                if p.exists() and p.stat().st_size > 0:
+                    return True, ""
+                if not content_disposition:
+                    return False, f"verify_failed: '{filename}' missing/empty in {dest_dir}"
+            if content_disposition:
+                # Server may have saved under its content-disposition name; accept the
+                # newest non-trivial file (the control file is excluded).
+                newest, newest_mt = None, -1.0
+                for f in dest_dir.iterdir():
+                    if f.is_file() and not f.name.endswith('.aria2'):
+                        try:
+                            mt = f.stat().st_mtime
+                        except OSError:
+                            continue
+                        if mt > newest_mt:
+                            newest, newest_mt = f, mt
+                if newest and newest.stat().st_size > 0:
+                    return True, ""
+            return False, f"verify_failed: nothing landed in {dest_dir}"
+        except Exception as e:
+            return False, f"verify_error: {e}"
 
     def _find_hf_cli(self) -> Tuple[Optional[str], Optional[str]]:
         """Find HuggingFace CLI executable and its corresponding pip.
@@ -950,12 +1204,15 @@ class DownloadManager:
         return authenticated_url
     
     def _download_hf_direct(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
-        """Download from HuggingFace using `hf download` with hf_xet for max speed.
+        """Download from HuggingFace via `hf download` (hf_xet backend).
 
-        Progress is read using CR-aware streaming so tqdm/hf_xet updates
-        (which use \\r) are captured in real-time instead of buffered.
+        Progress and stall detection are driven by BYTES WRITTEN TO DISK (the
+        *.incomplete file under <dest_dir>/.cache/huggingface/download/), NOT by
+        scraping the CLI's stdout: the hf_xet/tqdm bar goes to stderr and is
+        throttled/absent on a non-TTY pipe, which used to leave us blind. The disk
+        signal is backend-agnostic (XET and HTTP write the same file) and version
+        independent. The process is stopped with SIGINT so hf_xet aborts cleanly.
         """
-        # Parse HF URL: https://huggingface.co/repo/resolve/main/file.safetensors
         clean_url = url.split('?', 1)[0]
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', clean_url)
         if not match:
@@ -970,325 +1227,201 @@ class DownloadManager:
         xet_label = " [XET]" if self.has_hf_xet else ""
         logger.info(f"━━ HuggingFace{xet_label}: {repo_id}/{file_path} → {filename}")
 
-        # Configure environment for maximum download speed
+        # Token goes via env (HF_TOKEN), never argv — avoids leaking it in `ps`.
         env = os.environ.copy()
-        # Ensure HF_TOKEN is in subprocess env (may have been set only at init time)
         if self.hf_token:
             env['HF_TOKEN'] = self.hf_token
-        # hf_xet (v1.0+): high-performance mode — only when we have enough RAM
-        # (HF docs require ≥64GB RAM for HP mode; it allocates multi-GB buffers).
         if _should_enable_hf_xet_hp():
             env['HF_XET_HIGH_PERFORMANCE'] = '1'
         env['HF_XET_NUM_CONCURRENT_RANGE_GETS'] = os.environ.get('HF_XET_NUM_CONCURRENT_RANGE_GETS', '32')
-        # HF_HUB_ENABLE_HF_TRANSFER is deprecated by HuggingFace: hf_transfer was
-        # replaced by hf_xet and the variable is ignored when hf_xet is active.
-        env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '120')
-        # Ensure tqdm doesn't get disabled
+        env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '30')
         env.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
         cmd = [
-            self.hf_cli_path,
-            'download',
-            repo_id,
-            file_path,
-            '--revision', branch,
-            '--local-dir', str(dest_dir)
+            self.hf_cli_path, 'download', repo_id, file_path,
+            '--revision', branch, '--local-dir', str(dest_dir),
         ]
-        if self.hf_token:
-            cmd.extend(['--token', self.hf_token])
+
+        staging_dir = self._hf_staging_dir(dest_dir)
+        final_path = dest_dir / file_path
+        target = dest_dir / filename
+        expected_size = self._hf_remote_size(repo_id, branch, file_path)
 
         process: Optional[subprocess.Popen] = None
+        watchdog: Optional[threading.Thread] = None
         try:
-            # Use binary mode + unbuffered so we can split on \r (tqdm progress)
             process = subprocess.Popen(
-                cmd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=0
+                cmd, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, bufsize=0,
             )
             self._register_process(process)
-
-            tail = deque(maxlen=12)
-            last_logged_pct = -10  # log every ~10% change
             download_start_ts = time.monotonic()
-            last_log_ts = time.monotonic()
-            last_activity_ts = time.monotonic()
-            heartbeat_interval = 20  # warn if silent for this many seconds
-            had_progress = False  # track if we ever saw tqdm progress
-            stall_warned = False
+            tail = deque(maxlen=12)
+            stall_state = {'last_progress': time.monotonic(), 'killed': False, 'last_bytes': 0}
+            watchdog = threading.Thread(
+                target=self._run_disk_watchdog,
+                args=(process, staging_dir, final_path, filename, expected_size, stall_state),
+                daemon=True,
+            )
+            watchdog.start()
 
-            # Stall watchdog. The read loop below BLOCKS on stdout, so an hf_xet
-            # download that goes completely SILENT (no stdout at all) would never
-            # reach an in-loop check and could hang until the overall-stall backstop
-            # (many minutes later). This daemon thread kills the process as soon as
-            # no real byte progress has been seen for the stall timeout — silent or
-            # not — so we fail over to the Python API fallback in ~120s instead.
-            stall_state = {'last_progress': time.monotonic(), 'killed': False}
-
-            def _hf_stall_watchdog():
-                to = self.aria2_stall_timeout_seconds
-                if to <= 0:
-                    return
-                while True:
-                    time.sleep(3)
-                    if process.poll() is not None or self._cancelled:
-                        return
-                    if time.monotonic() - stall_state['last_progress'] > to:
-                        stall_state['killed'] = True
-                        logger.error(
-                            f"HF CLI stall timeout para {filename or url} "
-                            f"(sem progresso por {to}s), encerrando"
-                        )
-                        try:
-                            process.kill()
-                        except Exception:
-                            pass
-                        return
-
-            threading.Thread(target=_hf_stall_watchdog, daemon=True).start()
-
+            # Drain stdout so the pipe never blocks; surface only error/auth lines.
+            # Progress and stalls are handled by the disk watchdog (above).
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
-                if not stripped:
+                if not stripped or stripped.startswith('|') or '%|' in stripped:
                     continue
                 tail.append(stripped)
-                last_activity_ts = time.monotonic()
-
-                # Parse tqdm-style progress:
-                #   model.safetensors: 45%|████▌     | 1.23G/2.75G [00:12<00:15, 102MB/s]
-                #   Fetching 1 files: 100%|██████████| 1/1 [00:05<00:00, 1.02GB/s]
-                pct_match = re.search(
-                    r'(\d+)%\|'           # percent + bar start
-                    r'[^|]*\|'            # bar characters
-                    r'\s*([^[]*)'         # size info (e.g., 1.23G/2.75G)
-                    r'\[([^\]]*)\]',      # timing info [elapsed<remaining, speed]
-                    stripped
-                )
-                if pct_match:
-                    had_progress = True
-                    percent = float(pct_match.group(1))
-                    timing_info = pct_match.group(3)
-
-                    # Extract speed from timing: "00:12<00:15, 102MB/s"
-                    speed_match = re.search(r'([\d\.]+\s*\w+/s)', timing_info)
-                    speed = speed_match.group(1) if speed_match else ""
-
-                    # Extract ETA: "00:12<00:15" -> remaining is after <
-                    eta_match = re.search(r'<([\d:]+)', timing_info)
-                    eta = eta_match.group(1) if eta_match else ""
-
-                    # Send to WebSocket
-                    if HAS_WEBSOCKET:
-                        send_download_progress(filename, percent, speed, eta)
-
-                    # Log progress periodically (every ~10% or every 20s)
-                    now = time.monotonic()
-                    if percent - last_logged_pct >= 10 or (now - last_log_ts) > 20:
-                        size_info = pct_match.group(2).strip()
-                        speed_str = f" @ {speed}" if speed else ""
-                        eta_str = f" ETA {eta}" if eta else ""
-                        logger.info(
-                            f"  ↓ {filename}: {percent:.0f}% {size_info}{speed_str}{eta_str}"
-                        )
-                        last_logged_pct = percent
-                        last_log_ts = now
-
-                    # Reset stall tracking on real progress
-                    stall_state['last_progress'] = now
-                    stall_warned = False
+                low = stripped.lower()
+                if any(kw in low for kw in (
+                    'error', 'denied', 'forbidden', 'unauthorized', 'gated',
+                    'requires', 'not found', 'failed', 'traceback', 'restricted',
+                )):
+                    logger.info(f"  [hf] {stripped}")
                 else:
-                    # Non-progress lines: promote important ones to info, skip bar fragments
-                    if not stripped.startswith('|') and '%|' not in stripped:
-                        line_lower = stripped.lower()
-                        if any(kw in line_lower for kw in ('error', 'warning', 'failed', 'unauthorized', 'forbidden', 'downloading', 'fetching')):
-                            logger.info(f"  [hf] {stripped}")
-                        else:
-                            logger.debug(f"  [hf] {stripped}")
-                    # Heartbeat: log if no progress update appeared for a while
-                    now = time.monotonic()
-                    if (now - last_log_ts) > heartbeat_interval:
-                        elapsed = now - last_activity_ts
-                        logger.info(
-                            f"  ↓ {filename}: aguardando dados do HuggingFace... "
-                            f"({elapsed:.0f}s sem atualização de progresso)"
-                        )
-                        last_log_ts = now
-
-                # Stall warning only (the watchdog thread above does the kill, so
-                # this still fires even when the process goes completely silent).
-                now = time.monotonic()
-                stall_elapsed = now - stall_state['last_progress']
-                if self.aria2_stall_timeout_seconds > 0 and process.poll() is None:
-                    stall_warn_seconds = max(30, self.aria2_stall_timeout_seconds // 4)
-                    if not stall_warned and stall_elapsed > stall_warn_seconds:
-                        logger.warning(
-                            f"  ⚠ {filename}: sem progresso há {stall_elapsed:.0f}s "
-                            f"(timeout em {self.aria2_stall_timeout_seconds}s)"
-                        )
-                        stall_warned = True
+                    logger.debug(f"  [hf] {stripped}")
 
             process.wait()
+            if watchdog is not None:
+                watchdog.join(timeout=2)
             self._unregister_process(process)
+            try:
+                if process.stdout:
+                    process.stdout.close()
+            except Exception:
+                pass
 
-            if stall_state['killed']:
-                reason = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
-                if tail:
-                    reason = f"{reason} | tail: {' || '.join(tail)}"
-                return False, reason
+            killed = stall_state['killed']
+            # Salvage: if the file actually landed (success, or killed right as it
+            # finished), finalize it instead of forcing a needless fallback.
+            if process.returncode == 0 or final_path.exists() or target.exists():
+                ok, reason = self._finalize_hf_file(
+                    dest_dir, file_path, filename, target, final_path, expected_size
+                )
+                if ok:
+                    elapsed = time.monotonic() - download_start_ts
+                    logger.info(
+                        f"✓ Downloaded from HF{xet_label}: {filename}"
+                        f"{self._speed_suffix(target, elapsed)}"
+                    )
+                    return True, ""
+                if process.returncode == 0 and not killed:
+                    return False, reason
 
-            if process.returncode == 0:
-                # `hf download --local-dir` preserves subfolders from repo paths (e.g., VAE/file.safetensors).
-                # Normalize output to the requested target name inside dest_dir.
-                downloaded = dest_dir / file_path
-                target = dest_dir / filename
-
-                if downloaded.exists():
-                    if downloaded.resolve() != target.resolve():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(downloaded), str(target))
-
-                        # Remove now-empty intermediate directories created by HF.
-                        parent = downloaded.parent
-                        while parent != dest_dir and parent.exists():
-                            try:
-                                parent.rmdir()
-                            except OSError:
-                                break
-                            parent = parent.parent
-                elif not target.exists():
-                    flat_downloaded = dest_dir / Path(file_path).name
-                    if flat_downloaded.exists() and flat_downloaded.resolve() != target.resolve():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(flat_downloaded), str(target))
-                    else:
-                        reason = (
-                            "hf_download_missing_output: "
-                            f"expected '{downloaded}' or '{target}'"
-                        )
-                        logger.error(reason)
-                        return False, reason
-
-                # Calculate speed from file size and elapsed time
-                elapsed = time.monotonic() - download_start_ts
-                speed_str = ""
-                if elapsed > 0.5 and target.exists():
-                    size_bytes = target.stat().st_size
-                    if size_bytes > 0:
-                        speed_bps = size_bytes / elapsed
-                        if speed_bps >= 1_073_741_824:
-                            speed_str = f" ({speed_bps / 1_073_741_824:.1f} GB/s, {elapsed:.0f}s)"
-                        elif speed_bps >= 1_048_576:
-                            speed_str = f" ({speed_bps / 1_048_576:.0f} MB/s, {elapsed:.0f}s)"
-                        else:
-                            speed_str = f" ({speed_bps / 1024:.0f} KB/s, {elapsed:.0f}s)"
-                logger.info(f"✓ Downloaded from HF{xet_label}: {filename}{speed_str}")
-                return True, ""
-            else:
-                logger.error(f"HF download failed with code {process.returncode}")
-                reason = f"hf_cli_exit_{process.returncode}"
-                if tail:
-                    reason = f"{reason} | tail: {' || '.join(tail)}"
-                return False, reason
+            if killed:
+                r = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
+                return False, (f"{r} | tail: {' || '.join(tail)}" if tail else r)
+            logger.error(f"HF download failed with code {process.returncode}")
+            r = f"hf_cli_exit_{process.returncode}"
+            return False, (f"{r} | tail: {' || '.join(tail)}" if tail else r)
 
         except Exception as e:
             if process is not None:
                 try:
-                    process.kill()
-                    process.wait()
+                    self._terminate_process(process, grace=2)
                 except Exception:
                     pass
             self._unregister_process(process)
             logger.error(f"HF download failed: {e}")
             return False, str(e)
-    
-    def _download_hf_via_python(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
-        """Fallback HuggingFace download via huggingface_hub Python API.
 
-        Uses tqdm callback to report progress via WebSocket and periodic logs.
-        hf_xet is automatically used if installed (default since huggingface_hub v1.0).
-        """
+    def _download_hf_via_python(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
+        """Fallback: huggingface_hub in a SEPARATE, KILLABLE subprocess with the XET
+        backend DISABLED (HF_HUB_DISABLE_XET=1) — the documented workaround for
+        hf_xet transfer stalls (xet-core#789). Running it as a subprocess (not an
+        in-process thread) is what lets cancel()/the stall watchdog actually stop it;
+        the old in-process thread was unkillable and kept downloading after "timeout".
+        Progress/stall use the same on-disk byte signal as the primary path."""
         clean_url = url.split('?', 1)[0]
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', clean_url)
         if not match:
             return False, "invalid_hf_url_for_python_fallback"
         repo_id, branch, file_path = match.groups()
+        file_path = unquote(file_path)
+        logger.info(f"Fallback: huggingface_hub sem XET (HTTP) → {repo_id}/{file_path}")
 
-        logger.info(f"Fallback: downloading via huggingface_hub Python API: {repo_id}/{file_path}")
+        env = os.environ.copy()
+        env['HF_HUB_DISABLE_XET'] = '1'
+        env.pop('HF_XET_HIGH_PERFORMANCE', None)
+        env.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+        if self.hf_token:
+            env['HF_TOKEN'] = self.hf_token
+        env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '30')
 
-        # Save original env values to restore later
-        _saved_env = {
-            'HF_XET_HIGH_PERFORMANCE': os.environ.get('HF_XET_HIGH_PERFORMANCE'),
-            'HF_HUB_DISABLE_PROGRESS_BARS': os.environ.get('HF_HUB_DISABLE_PROGRESS_BARS'),
-        }
+        script = (
+            "import sys\n"
+            "from huggingface_hub import hf_hub_download\n"
+            "p = hf_hub_download(repo_id=sys.argv[1], filename=sys.argv[2], "
+            "revision=sys.argv[3], local_dir=sys.argv[4])\n"
+            "print('DLPATH=' + p)\n"
+        )
+        cmd = [self._hf_python(), '-c', script, repo_id, file_path, branch, str(dest_dir)]
+
+        staging_dir = self._hf_staging_dir(dest_dir)
+        final_path = dest_dir / file_path
+        target = dest_dir / filename
+        expected_size = self._hf_remote_size(repo_id, branch, file_path)
+
+        process: Optional[subprocess.Popen] = None
+        watchdog: Optional[threading.Thread] = None
         try:
-            from huggingface_hub import hf_hub_download
-            # Ensure fast backend + progress bars are enabled.
-            # HP mode requires ≥64GB RAM; avoid enabling it on small VMs.
-            if _should_enable_hf_xet_hp():
-                os.environ['HF_XET_HIGH_PERFORMANCE'] = '1'
-            os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+            process = subprocess.Popen(
+                cmd, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, bufsize=0,
+            )
+            self._register_process(process)
+            start = time.monotonic()
+            tail = deque(maxlen=20)
+            stall_state = {'last_progress': time.monotonic(), 'killed': False, 'last_bytes': 0}
+            watchdog = threading.Thread(
+                target=self._run_disk_watchdog,
+                args=(process, staging_dir, final_path, filename, expected_size, stall_state),
+                daemon=True,
+            )
+            watchdog.start()
 
-            # Run hf_hub_download in a thread with a hard wall-clock cap to prevent
-            # infinite hangs. Generous because LTX/Wan encoders are 12-24 GB and a
-            # flat 360s was too tight for them on a normal link. Override via env.
-            dl_start = time.monotonic()
-            dl_timeout = int(os.environ.get('HF_PYTHON_FALLBACK_TIMEOUT', '0') or '0') \
-                or max(900, self.aria2_stall_timeout_seconds * 6)
-            result_holder = {'path': None, 'error': None}
+            for line in self._read_lines_cr_aware(process.stdout):
+                s = line.strip()
+                if s:
+                    tail.append(s)
 
-            def _do_download():
-                try:
-                    result_holder['path'] = hf_hub_download(
-                        repo_id=repo_id,
-                        filename=file_path,
-                        revision=branch,
-                        local_dir=str(dest_dir),
-                        token=self.hf_token or None
-                    )
-                except Exception as exc:
-                    result_holder['error'] = exc
+            process.wait()
+            if watchdog is not None:
+                watchdog.join(timeout=2)
+            self._unregister_process(process)
+            try:
+                if process.stdout:
+                    process.stdout.close()
+            except Exception:
+                pass
 
-            dl_thread = threading.Thread(target=_do_download, daemon=True)
-            dl_thread.start()
-            dl_thread.join(timeout=dl_timeout)
-
-            if dl_thread.is_alive():
-                logger.error(
-                    f"hf_hub_download timeout para {repo_id}/{file_path} "
-                    f"(>{dl_timeout}s), abortando"
+            if process.returncode == 0 or final_path.exists() or target.exists():
+                ok, reason = self._finalize_hf_file(
+                    dest_dir, file_path, filename, target, final_path, expected_size
                 )
-                return False, f"hf_hub_python_timeout_{dl_timeout}s"
+                if ok:
+                    logger.info(
+                        f"✓ Downloaded (huggingface_hub/HTTP): {filename}"
+                        f"{self._speed_suffix(target, time.monotonic() - start)}"
+                    )
+                    return True, ""
+                if process.returncode == 0 and not stall_state['killed']:
+                    return False, reason
 
-            if result_holder['error'] is not None:
-                raise result_holder['error']
+            if stall_state['killed']:
+                return False, f"hf_python_stall_timeout_{self.aria2_stall_timeout_seconds}s"
+            r = f"hf_python_exit_{process.returncode}"
+            # keep the tail (GatedRepoError / 403 traceback) so auth classification works
+            return False, (f"{r} | tail: {' || '.join(list(tail)[-6:])}" if tail else r)
 
-            downloaded = Path(result_holder['path'])
-            target = dest_dir / filename
-            if downloaded.resolve() != target.resolve():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(downloaded), str(target))
-
-            elapsed = time.monotonic() - dl_start
-            speed_str = ""
-            if elapsed > 0.5 and target.exists():
-                size_bytes = target.stat().st_size
-                if size_bytes > 0:
-                    speed_bps = size_bytes / elapsed
-                    if speed_bps >= 1_048_576:
-                        speed_str = f" ({speed_bps / 1_048_576:.0f} MB/s, {elapsed:.0f}s)"
-                    else:
-                        speed_str = f" ({speed_bps / 1024:.0f} KB/s, {elapsed:.0f}s)"
-            logger.info(f"✓ Downloaded from huggingface_hub (Python API): {filename}{speed_str}")
-            return True, ""
         except Exception as e:
+            if process is not None:
+                try:
+                    self._terminate_process(process, grace=2)
+                except Exception:
+                    pass
+            self._unregister_process(process)
             return False, f"hf_hub_python_exception: {e}"
-        finally:
-            for key, original in _saved_env.items():
-                if original is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = original
 
     def _download_aria2c(
         self,
@@ -1307,6 +1440,11 @@ class DownloadManager:
         connections = self.aria2_hf_connections if is_hf else self.aria2_connections
         splits = connections if is_hf else self.aria2_splits
 
+        # Bound retries/timeouts so a flaky link can't loop internally for minutes.
+        # The in-loop stall check (kept below) is the primary stall guard; these
+        # caps stop aria2c from silently retrying forever on a dead connection.
+        connect_to = max(30, min(60, self.aria2_stall_timeout_seconds))
+        read_to = max(30, self.aria2_stall_timeout_seconds)
         cmd = [
             'aria2c',
             '-c',  # Continue download
@@ -1317,6 +1455,10 @@ class DownloadManager:
             '--file-allocation=none',
             '--console-log-level=notice',
             '--summary-interval=1',
+            '--max-tries=2',
+            '--retry-wait=3',
+            f'--connect-timeout={connect_to}',
+            f'--timeout={read_to}',
             '--dir', str(dest_dir),
         ]
         
@@ -1442,8 +1584,14 @@ class DownloadManager:
             self._unregister_process(process)
 
             if process.returncode == 0:
-                logger.info(f"✓ Downloaded: {filename}")
-                return True, ""
+                landed, vreason = self._verify_download_landed(
+                    dest_dir, filename, use_content_disposition
+                )
+                if landed:
+                    logger.info(f"✓ Downloaded: {filename}")
+                    return True, ""
+                logger.error(f"aria2c exit 0 mas arquivo não confirmado: {vreason}")
+                return False, f"aria2c_{vreason}"
             else:
                 logger.error(f"aria2c failed with code {process.returncode}")
                 reason = f"aria2c_exit_{process.returncode}"
@@ -1470,11 +1618,20 @@ class DownloadManager:
     ) -> Tuple[bool, str]:
         """Download using wget (fallback) with content-disposition support"""
         use_content_disposition = prefer_content_disposition or ('civitai.com' in url)
+        # --timeout sets dns/connect/read timeouts: wget aborts a SILENTLY stalled
+        # read after this many seconds (its progress output stops on a dead TCP
+        # connection, so our in-loop stall check alone can't see it). --tries caps
+        # wget's own internal retries (default 20) so a flaky link can't loop for
+        # many minutes past the per-path budget.
+        wget_to = max(30, self.aria2_stall_timeout_seconds)
         cmd = [
             'wget',
             '--progress=bar:force',
             '-c',  # Continue
             '--content-disposition',
+            f'--timeout={wget_to}',
+            '--tries=2',
+            '--waitretry=3',
         ]
         
         # Add HF token header if needed
@@ -1578,8 +1735,14 @@ class DownloadManager:
             self._unregister_process(process)
 
             if process.returncode == 0:
-                logger.info(f"✓ Downloaded: {dest_path.name}")
-                return True, ""
+                landed, vreason = self._verify_download_landed(
+                    dest_path.parent, dest_path.name, use_content_disposition
+                )
+                if landed:
+                    logger.info(f"✓ Downloaded: {dest_path.name}")
+                    return True, ""
+                logger.error(f"wget exit 0 mas arquivo não confirmado: {vreason}")
+                return False, f"wget_{vreason}"
             else:
                 logger.error(f"wget failed with code {process.returncode}")
                 reason = f"wget_exit_{process.returncode}"
