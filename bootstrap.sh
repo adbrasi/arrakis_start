@@ -145,9 +145,9 @@ pip_install_into() {
 # comfy-cli touches torch. download.pytorch.org (CloudFront) throttles a SINGLE TCP
 # connection hard — the 0.5-0.8 GB torch wheel crawls at ~300 kB/s on one stream
 # while the nvidia-* wheels (fetched in parallel by pip) already arrive at ~40 MB/s.
-# 16 parallel streams saturate the link. We resolve the exact wheel URLs via a pip
-# dry-run report (metadata only, fast), fetch them with aria2c, then install the
-# local wheels (their deps come from the same index and are already fast). The
+# 16 parallel streams saturate the link. We resolve the exact wheel URLs by reading
+# the PyTorch simple-index pages (~85 KB each, fast on any link), fetch them with
+# aria2c, then install the local wheels (their deps come from the same index). The
 # caller then passes --skip-torch-or-directml so comfy-cli does NOT re-download torch.
 # Best-effort: ANY failure returns non-zero and the caller falls back to comfy-cli's
 # own torch download. Driver-aware via $TORCH_INDEX_URL (cu130 on 13.x, cu128 on 12.8).
