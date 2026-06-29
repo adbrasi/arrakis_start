@@ -698,7 +698,7 @@ class DownloadManager:
 
     def download_all(self, downloads: List[Dict]) -> bool:
         """Download all files in the list, running up to parallel_downloads at once."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
         # Filter invalid items early
         valid_downloads = [d for d in downloads if d.get('url')]
@@ -724,30 +724,70 @@ class DownloadManager:
         completed = 0
         success_lock = threading.Lock()
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dl') as executor:
-            future_to_idx = {}
-            for idx, item in enumerate(valid_downloads, 1):
-                label = f"[{idx}/{total}]"
-                future = executor.submit(self._download_one_with_retry, item, label)
-                future_to_idx[future] = idx
+        # Hard backstop against an infinite hang: if NO download completes for this
+        # many seconds, every still-pending download is treated as stuck (e.g. a
+        # silent hf_xet stream on a huge file that dodges the per-path stall check
+        # because the read loop is blocked) — we abandon them, warn, and move on so
+        # a single file can never freeze the whole install. Generous by default so
+        # legitimately large/slow downloads still finish; tune via env.
+        overall_stall = max(120, int(os.environ.get('DOWNLOAD_OVERALL_STALL_SECONDS', '1800') or '1800'))
 
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    ok = future.result()
-                except Exception as e:
-                    logger.error(f"[{idx}/{total}] Download task raised: {e}")
-                    ok = False
-                with success_lock:
-                    if ok:
-                        success_count += 1
-                    completed += 1
-                    done = completed
-                self._report_progress(
-                    f"Progress: {done}/{total} concluded (ok={success_count})",
-                    done,
-                    total
-                )
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dl')
+        future_to_idx = {}
+        for idx, item in enumerate(valid_downloads, 1):
+            label = f"[{idx}/{total}]"
+            future = executor.submit(self._download_one_with_retry, item, label)
+            future_to_idx[future] = idx
+
+        pending = set(future_to_idx)
+        aborted = False
+        try:
+            while pending:
+                done_set, pending = wait(pending, timeout=overall_stall, return_when=FIRST_COMPLETED)
+                if not done_set:
+                    # Nothing finished within the window → the rest are stuck.
+                    stuck = sorted(future_to_idx[f] for f in pending)
+                    logger.error(
+                        f"{len(pending)} download(s) sem NENHUMA conclusão há >{overall_stall}s — "
+                        f"abandonando travado(s) e seguindo: {', '.join(str(i) for i in stuck)}"
+                    )
+                    for f in pending:
+                        idx = future_to_idx[f]
+                        item = valid_downloads[idx - 1]
+                        self._record_failure(
+                            {'url': item.get('url', ''), 'dir': item.get('dir', ''),
+                             'filename': item.get('filename', '')},
+                            reason=f'overall_stall_timeout_{overall_stall}s',
+                            stage='stall'
+                        )
+                        with success_lock:
+                            completed += 1
+                            done = completed
+                        self._report_progress(f"[{idx}/{total}] download travado — pulado", done, total)
+                    self.cancel()  # kill active subprocesses so worker threads can exit
+                    aborted = True
+                    break
+                for future in done_set:
+                    idx = future_to_idx[future]
+                    try:
+                        ok = future.result()
+                    except Exception as e:
+                        logger.error(f"[{idx}/{total}] Download task raised: {e}")
+                        ok = False
+                    with success_lock:
+                        if ok:
+                            success_count += 1
+                        completed += 1
+                        done = completed
+                    self._report_progress(
+                        f"Progress: {done}/{total} concluded (ok={success_count})",
+                        done,
+                        total
+                    )
+        finally:
+            # On abort, don't block on the stuck worker threads (cancel() killed
+            # their subprocesses, so they'll unwind shortly on their own).
+            executor.shutdown(wait=not aborted, cancel_futures=True)
 
         self._report_progress(
             f"Downloaded {success_count}/{total} files successfully", total, total
