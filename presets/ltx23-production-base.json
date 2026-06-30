@@ -36,6 +36,16 @@
       "filename": "Singularity-LTX-2.3_OmniCine_V1.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/smooth_loop_v3/resolve/main/smooth_loop_v3-step00002500.comfy.safetensors",
+      "dir": "loras",
+      "filename": "smooth_loop_v3-step00002500.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/scene_rush_v2/resolve/main/anima_scene_rush_v2_500.safetensors",
+      "dir": "loras",
+      "filename": "anima_scene_rush_v2_500.safetensors"
+    },
+    {
       "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
       "dir": "vae",
       "filename": "taeltx2_3.safetensors"
