@@ -21,3 +21,6 @@ ruff_cache/
 Thumbs.db
 .vscode/
 .idea/
+
+# MCP local config (contém segredos — nunca commitar)
+.mcp.json
