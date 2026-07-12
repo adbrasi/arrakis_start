@@ -519,9 +519,8 @@ def _run_sageattention_installer(
 def _rebuild_sageattention_for_current_torch(
     comfy_activate: Path
 ) -> Tuple[bool, List[str]]:
-    """Build SageAttention against the active torch ABI without publishing it."""
+    """Build SageAttention against the active torch ABI and publish when authorized."""
     build_env = os.environ.copy()
-    build_env['HF_TOKEN'] = ''
     build_env['SKIP_TORCH_INSTALL'] = '1'
     logger.warning(
         "Prebuilt SageAttention wheel is not importable with the active torch ABI. "

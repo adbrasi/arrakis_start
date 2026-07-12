@@ -44,7 +44,7 @@ No test suite or linter is configured.
 
 **Data flow:** Web UI → `server.py` API → `start.py` orchestrator → `downloader.py` + node installer → `state.py` persistence, with `websocket_server.py` streaming progress back to the UI.
 
-**Runtime stack selection:** When any active preset sets `use_sage_attention: true`, `start.py` runs the unified SageAttention installer (`SAGEATTENTION_INSTALLER_URL`) and passes `--use-sage-attention` to ComfyUI. If the downloaded wheel cannot import against the active PyTorch ABI, it rebuilds SageAttention from source without publishing the local wheel. Otherwise it installs the standard torch wheel selected for the detected driver.
+**Runtime stack selection:** When any active preset sets `use_sage_attention: true`, `start.py` runs the unified SageAttention installer (`SAGEATTENTION_INSTALLER_URL`) and passes `--use-sage-attention` to ComfyUI. If the downloaded wheel cannot import against the active PyTorch ABI, it rebuilds SageAttention from source and publishes the compatible wheel when `HF_TOKEN` is available. Otherwise it installs the standard torch wheel selected for the detected driver.
 
 ## Preset System
 

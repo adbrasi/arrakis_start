@@ -23,7 +23,7 @@ class SageAttentionInstallerTests(unittest.TestCase):
         self.assertEqual(run_command.call_args.kwargs['env'], {'TEST_ENV': '1'})
 
     @patch('start._run_sageattention_installer')
-    def test_rebuild_preserves_torch_and_disables_publish(self, installer):
+    def test_rebuild_preserves_torch_and_hf_publish_token(self, installer):
         installer.return_value = (True, ['rebuilt'])
 
         with patch.dict(os.environ, {'HF_TOKEN': 'secret', 'KEEP_ME': 'yes'}, clear=True):
@@ -35,7 +35,7 @@ class SageAttentionInstallerTests(unittest.TestCase):
         installer.assert_called_once()
         kwargs = installer.call_args.kwargs
         self.assertEqual(kwargs['action'], 'build')
-        self.assertEqual(kwargs['env']['HF_TOKEN'], '')
+        self.assertEqual(kwargs['env']['HF_TOKEN'], 'secret')
         self.assertEqual(kwargs['env']['SKIP_TORCH_INSTALL'], '1')
         self.assertEqual(kwargs['env']['KEEP_ME'], 'yes')
 

@@ -63,7 +63,7 @@ WAN video-focused preset:
 - MMAudio models
 - WAN text encoders + VAE + clip vision
 - Uses `"use_sage_attention": true` to run unified SageAttention installer
-- Rebuilds SageAttention locally when a prebuilt wheel does not match the active PyTorch ABI
+- Rebuilds SageAttention when a prebuilt wheel does not match the active PyTorch ABI and publishes it when `HF_TOKEN` is available
 - Auto adds `--use-sage-attention` only when `use_sage_attention=true`
 - Optional preset-specific pip installs (CUDA-aware)
 
