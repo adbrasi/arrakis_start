@@ -26,9 +26,9 @@
       "filename": "ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"
     },
     {
-      "url": "https://huggingface.co/TenStrip/LTX2.3_DMD_Lora/resolve/main/LTX2.3_DMD_Lora_r256_testA.safetensors",
+      "url": "https://huggingface.co/TenStrip/LTX2.3_DMD_Lora/resolve/main/LTX2.3_DMD_reshaped_r256.safetensors",
       "dir": "loras",
-      "filename": "LTX2.3_DMD_Lora_r256_testA.safetensors"
+      "filename": "LTX2.3_DMD_reshaped_r256.safetensors"
     },
     {
       "url": "https://huggingface.co/WarmBloodAban/Singularity-LTX-2.3_OmniCine_V1/resolve/main/Singularity-LTX-2.3_OmniCine_V1.safetensors",
