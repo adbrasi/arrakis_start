@@ -1277,8 +1277,7 @@ def start_comfyui():
         '--',
         '--listen', '0.0.0.0',
         '--port', str(COMFY_PORT),
-        '--preview-method', 'latent2rgb',
-        '--front-end-version', 'Comfy-Org/ComfyUI_frontend@latest'
+        '--preview-method', 'latent2rgb'
     ]
 
     # Ensure workspace venv is used (same logic as process_manager.py)

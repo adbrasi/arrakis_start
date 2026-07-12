@@ -209,8 +209,7 @@ class ProcessManager:
         default_flags = [
             '--listen', '0.0.0.0',
             '--port', str(port),
-            '--preview-method', 'latent2rgb',
-            '--front-end-version', 'Comfy-Org/ComfyUI_frontend@latest'
+            '--preview-method', 'latent2rgb'
         ]
         
         # Get preset-specific flags from state
