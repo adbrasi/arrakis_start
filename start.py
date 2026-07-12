@@ -451,28 +451,36 @@ def _detect_runtime_stack() -> str:
     return 'unknown'
 
 
-def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]:
+def _run_sageattention_installer(
+    comfy_activate: Path,
+    action: str = 'auto',
+    env: Optional[Dict[str, str]] = None
+) -> Tuple[bool, List[str]]:
     """
     Run SageAttention installer with retry/backoff.
     Uses pipefail so download failures are not masked by the shell pipe.
     """
+    if action not in {'auto', 'build'}:
+        raise ValueError(f"Unsupported SageAttention installer action: {action}")
+
     attempts = max(SAGEATTENTION_INSTALL_ATTEMPTS, 1)
     retry_delay = max(SAGEATTENTION_RETRY_DELAY_SECONDS, 1)
     last_output: List[str] = []
     logger.info(
-        f"Starting SageAttention installer (url={SAGEATTENTION_INSTALLER_URL}, attempts={attempts})"
+        f"Starting SageAttention installer "
+        f"(action={action}, url={SAGEATTENTION_INSTALLER_URL}, attempts={attempts})"
     )
 
     curl_shell = (
         f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
         f"curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "
         f"--connect-timeout 30 --max-time 300 {shlex.quote(SAGEATTENTION_INSTALLER_URL)} "
-        f"| bash -s -- auto"
+        f"| bash -s -- {shlex.quote(action)}"
     )
     wget_shell = (
         f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
         f"wget -qO- --timeout=30 --tries=5 {shlex.quote(SAGEATTENTION_INSTALLER_URL)} "
-        f"| bash -s -- auto"
+        f"| bash -s -- {shlex.quote(action)}"
     )
 
     for attempt in range(1, attempts + 1):
@@ -480,7 +488,8 @@ def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]
         result_code, output_lines = _run_streaming_command(
             curl_cmd,
             f"SageAttention unified installer (curl attempt {attempt}/{attempts})",
-            log_prefix='sage'
+            log_prefix='sage',
+            env=env
         )
         last_output = output_lines
         if result_code == 0:
@@ -492,7 +501,8 @@ def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]
         result_code, output_lines = _run_streaming_command(
             wget_cmd,
             f"SageAttention unified installer (wget fallback {attempt}/{attempts})",
-            log_prefix='sage'
+            log_prefix='sage',
+            env=env
         )
         last_output = output_lines
         if result_code == 0:
@@ -504,6 +514,24 @@ def _run_sageattention_installer(comfy_activate: Path) -> Tuple[bool, List[str]]
             time.sleep(retry_delay)
 
     return False, last_output
+
+
+def _rebuild_sageattention_for_current_torch(
+    comfy_activate: Path
+) -> Tuple[bool, List[str]]:
+    """Build SageAttention against the active torch ABI without publishing it."""
+    build_env = os.environ.copy()
+    build_env['HF_TOKEN'] = ''
+    build_env['SKIP_TORCH_INSTALL'] = '1'
+    logger.warning(
+        "Prebuilt SageAttention wheel is not importable with the active torch ABI. "
+        "Rebuilding from source against the current torch runtime."
+    )
+    return _run_sageattention_installer(
+        comfy_activate,
+        action='build',
+        env=build_env
+    )
 
 
 def configure_runtime_stack(use_sage_attention: bool) -> bool:
@@ -538,9 +566,20 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
             return False
 
         comfy_python = _comfy_python()
-        for package_name in ('torch', 'triton', 'sageattention'):
+        for package_name in ('torch', 'triton'):
             if not _verify_python_import(package_name, python_bin=comfy_python):
                 return False
+
+        if not _can_import('sageattention', python_bin=comfy_python):
+            ok, output_lines = _rebuild_sageattention_for_current_torch(comfy_activate)
+            if not ok:
+                logger.error("SageAttention source rebuild failed")
+                if output_lines:
+                    logger.error(f"Last build lines: {' | '.join(output_lines[-10:])}")
+                return False
+
+        if not _verify_python_import('sageattention', python_bin=comfy_python):
+            return False
 
         state.set_runtime_stack('sageattention')
         logger.info("✓ SageAttention runtime stack configured")
