@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -111,6 +112,60 @@ class PipInstallStreamingTests(unittest.TestCase):
         self.assertEqual(returncode, -1)
         self.assertLess(time.monotonic() - started_at, 2)
         self.assertTrue(any('timeout after' in message for message in captured.output))
+
+
+class CustomNodeRecoveryTests(unittest.TestCase):
+    @patch('start._pip_install_argv', return_value=['pip', 'install'])
+    @patch('start._run_pip_install_streaming', return_value=(0, 'done'))
+    @patch('start.get_state_manager')
+    def test_existing_untracked_clone_resumes_requirements(
+        self,
+        get_state_manager,
+        run_pip,
+        _pip_argv,
+    ):
+        url = 'https://github.com/example/recover-node'
+        state = get_state_manager.return_value
+        state.is_node_installed.return_value = False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            comfy_dir = Path(temp_dir)
+            node_dir = comfy_dir / 'custom_nodes' / 'recover-node'
+            (node_dir / '.git').mkdir(parents=True)
+            (node_dir / 'requirements.txt').write_text('example-package\n')
+
+            with patch.object(start, 'COMFY_DIR', comfy_dir):
+                result = start.install_custom_nodes([url])
+
+        self.assertTrue(result['success'])
+        run_pip.assert_called_once()
+        state.add_node.assert_called_once_with(url)
+
+    @patch('start._pip_install_argv', return_value=['pip', 'install'])
+    @patch('start._run_pip_install_streaming', return_value=(1, 'failed'))
+    @patch('start.get_state_manager')
+    def test_requirements_failure_does_not_mark_node_installed(
+        self,
+        get_state_manager,
+        _run_pip,
+        _pip_argv,
+    ):
+        url = 'https://github.com/example/broken-node'
+        state = get_state_manager.return_value
+        state.is_node_installed.return_value = False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            comfy_dir = Path(temp_dir)
+            node_dir = comfy_dir / 'custom_nodes' / 'broken-node'
+            (node_dir / '.git').mkdir(parents=True)
+            (node_dir / 'requirements.txt').write_text('broken-package\n')
+
+            with patch.object(start, 'COMFY_DIR', comfy_dir):
+                result = start.install_custom_nodes([url])
+
+        self.assertFalse(result['success'])
+        self.assertEqual(result['failed'], ['broken-node'])
+        state.add_node.assert_not_called()
 
 
 if __name__ == '__main__':

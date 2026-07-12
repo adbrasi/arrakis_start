@@ -1188,6 +1188,10 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
             logger.info("✓ ComfyUI-Manager v4+ detected as pip package (skipping git clone)")
             state.add_node(url)
             continue
+        node_dest = cn_dir / node_name
+        if state.is_node_installed(url) and (node_dest / '.git').exists():
+            logger.info(f"✓ Fully installed node: {node_name} (skipping)")
+            continue
         to_clone.append(url)
 
     if not to_clone:
@@ -1214,9 +1218,10 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
                 continue
 
             if skip_reason == 'already_installed':
-                logger.info(f"✓ Already installed: {node_name} (skipping)")
-                state.add_node(url)
-                continue
+                logger.info(
+                    f"Existing clone without completed state: {node_name}; "
+                    "resuming requirements installation"
+                )
 
             if not clone_ok:
                 logger.error(f"Failed to clone node {node_name} after retries: {url}")
@@ -1236,6 +1241,8 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
                     )
                     if last_line:
                         logger.warning(f"[{node_name} pip last] {last_line}")
+                    failed_nodes.append(node_name)
+                    continue
 
             state.add_node(url)
 
