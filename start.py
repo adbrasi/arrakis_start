@@ -9,7 +9,9 @@ import sys
 import json
 import subprocess
 import logging
+import queue
 import re
+import signal
 import shlex
 import shutil
 import threading
@@ -969,57 +971,98 @@ def _run_pip_install_streaming(
 ):
     """Run pip install with streaming output, heartbeat, and hard timeout.
 
-    A watchdog thread kills the process if it runs longer than timeout_sec
-    even when it produces no output (e.g. stuck on a slow wheel download).
+    Stdout is drained in a reader thread so the main loop can emit heartbeats
+    even when uv/pip is completely silent. The hard timeout terminates the
+    whole process group, preventing child processes from keeping stdout open.
     Returns (returncode, last_line); returncode=-1 signals a timeout kill.
     """
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1
+        text=True, bufsize=1, start_new_session=True
     )
+    assert proc.stdout is not None
 
-    cancel_watchdog = threading.Event()
-    timed_out = {'value': False}
+    output_queue: "queue.Queue[Optional[str]]" = queue.Queue()
+    reader_done = threading.Event()
 
-    def _watchdog():
-        if not cancel_watchdog.wait(timeout=timeout_sec):
-            if proc.poll() is None:
-                timed_out['value'] = True
+    def _read_output():
+        try:
+            for output_line in proc.stdout:
+                output_queue.put(output_line)
+        finally:
+            reader_done.set()
+
+    reader = threading.Thread(target=_read_output, daemon=True)
+    reader.start()
+
+    started_at = time.monotonic()
+    last_log_at = started_at
+    last_line = ""
+    timed_out = False
+    try:
+        while True:
+            now = time.monotonic()
+            elapsed = now - started_at
+            if timeout_sec > 0 and elapsed >= timeout_sec and proc.poll() is None:
+                timed_out = True
                 logger.error(
-                    f"[{node_name} pip] timeout after {timeout_sec}s — killing process"
+                    f"[{node_name} pip] timeout after {timeout_sec}s — "
+                    "terminating process group"
                 )
                 try:
-                    proc.kill()
-                except Exception:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                except ProcessLookupError:
                     pass
+                break
 
-    watchdog = threading.Thread(target=_watchdog, daemon=True)
-    watchdog.start()
+            poll_interval = min(max(float(heartbeat_interval), 0.1), 1.0)
+            try:
+                line = output_queue.get(timeout=poll_interval)
+            except queue.Empty:
+                line = None
 
-    last_log_ts = time.time()
-    last_line = ""
-    try:
-        for line in proc.stdout:
-            line = line.rstrip()
-            if not line:
-                continue
-            last_line = line
-            now = time.time()
-            # Log important lines (errors, warnings, collecting/downloading)
-            lower = line.lower()
-            if any(kw in lower for kw in ['error', 'warning', 'fail', 'collecting', 'downloading', 'building']):
-                logger.info(f"[{node_name} pip] {line}")
-                last_log_ts = now
-            elif now - last_log_ts >= heartbeat_interval:
-                logger.info(f"[{node_name} pip] still working... {line[:80]}")
-                last_log_ts = now
+            if line is not None:
+                line = line.rstrip()
+                if line:
+                    last_line = line
+                    lower = line.lower()
+                    if any(
+                        keyword in lower
+                        for keyword in (
+                            'error', 'warning', 'fail', 'collecting',
+                            'downloading', 'building'
+                        )
+                    ):
+                        logger.info(f"[{node_name} pip] {line}")
+                        last_log_at = time.monotonic()
+
+            now = time.monotonic()
+            if proc.poll() is None and now - last_log_at >= heartbeat_interval:
+                logger.info(
+                    f"[{node_name} pip] still working... "
+                    f"({now - started_at:.0f}s elapsed)"
+                )
+                last_log_at = now
+
+            if reader_done.is_set() and output_queue.empty() and proc.poll() is not None:
+                break
     except Exception as e:
         logger.warning(f"[{node_name} pip] stream read error: {e}")
     finally:
-        cancel_watchdog.set()
-        proc.wait()
+        if proc.poll() is None:
+            proc.wait()
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
 
-    returncode = -1 if timed_out['value'] else proc.returncode
+    returncode = -1 if timed_out else proc.returncode
     return returncode, last_line
 
 

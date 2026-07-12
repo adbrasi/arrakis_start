@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import call, patch
@@ -74,6 +76,41 @@ class SageAttentionInstallerTests(unittest.TestCase):
             ]
         )
         state.set_runtime_stack.assert_any_call('sageattention')
+
+
+class PipInstallStreamingTests(unittest.TestCase):
+    def test_silent_process_emits_heartbeat(self):
+        command = [sys.executable, '-c', 'import time; time.sleep(0.2)']
+
+        with self.assertLogs(start.logger, level='INFO') as captured:
+            returncode, last_line = start._run_pip_install_streaming(
+                command,
+                'silent-node',
+                heartbeat_interval=0.05,
+                timeout_sec=2,
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(last_line, '')
+        self.assertTrue(
+            any('still working' in message for message in captured.output)
+        )
+
+    def test_silent_process_is_killed_at_timeout(self):
+        command = [sys.executable, '-c', 'import time; time.sleep(10)']
+        started_at = time.monotonic()
+
+        with self.assertLogs(start.logger, level='ERROR') as captured:
+            returncode, _ = start._run_pip_install_streaming(
+                command,
+                'stuck-node',
+                heartbeat_interval=0.05,
+                timeout_sec=0.2,
+            )
+
+        self.assertEqual(returncode, -1)
+        self.assertLess(time.monotonic() - started_at, 2)
+        self.assertTrue(any('timeout after' in message for message in captured.output))
 
 
 if __name__ == '__main__':
