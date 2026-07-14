@@ -1,0 +1,30 @@
+{
+  "name": "Ideogram 4.0",
+  "description": "Ideogram 4.0 (9.3B DiT, open weights) in fp8_scaled - best-in-class text rendering and JSON structured prompts. Loads two checkpoints (conditional + unconditional) through DualModelGuider. Weights are non-commercial use only.",
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_fp8_scaled.safetensors",
+      "dir": "diffusion_models",
+      "filename": "ideogram4_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors",
+      "dir": "diffusion_models",
+      "filename": "ideogram4_unconditional_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Ideogram-4/resolve/main/text_encoders/qwen3vl_8b_fp8_scaled.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen3vl_8b_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+      "dir": "vae",
+      "filename": "flux2-vae.safetensors"
+    }
+  ],
+  "nodes": [],
+  "workflow": "ideogram4_t2i.json"
+}

@@ -1,0 +1,70 @@
+{
+  "name": "Krea 2 Turbo",
+  "description": "Krea 2 Turbo (12.9B DiT, open weights) in fp8_scaled - 8 steps, cfg 1.0, euler/simple. Includes the 9 official Krea style LoRAs. Needs a recent ComfyUI (CLIPLoader type 'krea2').",
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+      "dir": "diffusion_models",
+      "filename": "krea2_turbo_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen3vl_4b_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/vae/qwen_image_vae.safetensors",
+      "dir": "vae",
+      "filename": "qwen_image_vae.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_darkbrush.safetensors",
+      "dir": "loras",
+      "filename": "krea2_darkbrush.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_dotmatrix.safetensors",
+      "dir": "loras",
+      "filename": "krea2_dotmatrix.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_kidsdrawing.safetensors",
+      "dir": "loras",
+      "filename": "krea2_kidsdrawing.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_neondrip.safetensors",
+      "dir": "loras",
+      "filename": "krea2_neondrip.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_rainywindow.safetensors",
+      "dir": "loras",
+      "filename": "krea2_rainywindow.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_retroanime.safetensors",
+      "dir": "loras",
+      "filename": "krea2_retroanime.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_softwatercolor.safetensors",
+      "dir": "loras",
+      "filename": "krea2_softwatercolor.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_sunsetblur.safetensors",
+      "dir": "loras",
+      "filename": "krea2_sunsetblur.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_vintagetarot.safetensors",
+      "dir": "loras",
+      "filename": "krea2_vintagetarot.safetensors"
+    }
+  ],
+  "nodes": [],
+  "workflow": "krea2_turbo_t2i.json"
+}
