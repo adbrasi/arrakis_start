@@ -6,6 +6,7 @@ Serves web UI and handles installation requests
 
 import json
 import logging
+import signal
 import threading
 from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -453,8 +454,21 @@ def run_server(port: int = 8090, presets_callback: Callable = None):
     logger.info(f"Web server running on http://0.0.0.0:{port}")
     logger.info("Press Ctrl+C to stop")
     
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _stop_on_sigterm(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop_on_sigterm)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         logger.info("\nShutting down server...")
-        server.shutdown()
+        try:
+            from start import cancel_active_install
+            cancel_active_install()
+        except Exception as e:
+            logger.warning(f"Failed to cancel active install during shutdown: {e}")
+    finally:
+        server.server_close()
+        signal.signal(signal.SIGTERM, previous_sigterm)

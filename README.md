@@ -12,7 +12,7 @@ Deploy ComfyUI with preset-based model selection in minutes. No more downloading
 
 ```bash
 export HF_TOKEN="your_hf_token_here"
-export CIVITAI_TOKEN="43d813c07860ba5ef0f6eb32b568949c"
+export CIVITAI_TOKEN="your_civitai_token_here"
 curl -L https://raw.githubusercontent.com/adbrasi/arrakis_start/main/bootstrap.sh | bash
 
 ```
@@ -168,6 +168,11 @@ Na UI, o card do preset exibirá um botão **Workflow** — ao clicar, o arquivo
 | `TEMPLATE_COMFY_DIR` | Template ComfyUI directory to clean when present | No (default: `/workspace/ComfyUI`) |
 | `WEB_PORT` | Web selector port | No (default: `8090`) |
 | `COMFY_PORT` | ComfyUI server port | No (default: `8818`) |
+| `DOWNLOAD_PARALLELISM` | Concurrent model files | No (default: `3`) |
+| `ARIA2_CONNECTIONS` | Connections per generic/Civitai file | No (default: `16`) |
+| `ARIA2_HF_CONNECTIONS` | Connections per Hugging Face fallback | No (default: `8`) |
+| `ARIA2_STALL_TIMEOUT_SECONDS` | Seconds without new bytes before changing backend | No (default: `120`) |
+| `ARRAKIS_HF_PARTIAL_DIR` | Persistent HF resume cache | No (default: `ComfyUI/.arrakis-hf-partials`) |
 
 ---
 
@@ -195,11 +200,37 @@ arrakis_start/
 
 ## Performance Optimizations
 
-- ✅ **Parallel downloads** via aria2c (2 connections per file)
+- ✅ **Parallel downloads** (3 files at once; up to 16 aria2c connections per generic file and 8 for HF fallback)
 - ✅ **Smart caching** - skips existing files
 - ✅ **Preset-driven runtime stack** - standard torch or SageAttention installer
 - ✅ **Modular installation** - download only what you need
 - ✅ **Resume support** - continues interrupted downloads
+
+---
+
+## Cancel, resume, and run again
+
+Use the **Cancel installation** button in the web UI. Arrakis stops active
+downloads, clones, and `pip` installs, preserves completed files, and keeps
+partial payloads under staging names/directories. A cancelled preset is not
+marked as installed.
+
+After cancellation, select the same presets and install again:
+
+- completed models are skipped;
+- HF downloads resume from a private per-file cache;
+- aria2c/wget resume the `.arrakis.part` file;
+- cloned custom nodes resume `requirements.txt` when needed;
+- no second final copy of a model is created.
+
+Running `bootstrap.sh` again is also safe. Existing venvs and the checkout are
+reused, ComfyUI is not cloned again when `main.py` exists, and synchronized
+requirements are skipped. Bootstrap may update packages and the checkout, but
+that replaces previous versions instead of creating a parallel installation.
+
+`Ctrl+C`/`SIGTERM` on the Arrakis process now requests the same safe cancellation
+before shutdown. Prefer the UI button because it keeps the page alive until a
+terminal status is confirmed.
 
 ---
 
@@ -213,6 +244,17 @@ arrakis_start/
 - Ensure `HF_TOKEN` and `CIVITAI_TOKEN` are set
 - Check network connectivity
 - Verify disk space is sufficient
+
+### Stall warnings and progress
+
+- `sem bytes novos ... há 30s` is a warning; the backend is interrupted only at
+  the full timeout (120 seconds by default).
+- When the timeout is reached, Arrakis preserves the partial and tries the HTTP
+  backend.
+- HF progress is isolated per file and capped at 100%; parallel files no longer
+  contribute to each other's byte count.
+- If a model or custom node fails, ComfyUI may still start, but that preset stays
+  pending in the UI so a later run can resume it.
 
 ### ComfyUI not starting
 - Check logs in terminal

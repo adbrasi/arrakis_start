@@ -252,7 +252,7 @@ stop_listeners_on_port() {
     fi
 
     if [ -n "$pids" ]; then
-        log_warn "Stopping template ComfyUI listening on port $port (pids: $(echo $pids | tr '\n' ' '))"
+        log_warn "Stopping template ComfyUI listening on port $port (pids: $(echo "$pids" | tr '\n' ' '))"
         for pid in $pids; do kill -TERM "$pid" >/dev/null 2>&1 || true; done
         sleep 2
         for pid in $pids; do kill -KILL "$pid" >/dev/null 2>&1 || true; done
@@ -541,7 +541,7 @@ run_with_progress "Instalando dependencias de sistema" apt-get install -y -qq --
 # Install Cloudflared
 if ! command -v cloudflared &>/dev/null; then
     log_info "Installing Cloudflared..."
-    mkdir -p --mode=0755 /usr/share/keyrings
+    install -d -m 0755 /usr/share/keyrings
     curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" | tee /etc/apt/sources.list.d/cloudflared.list
     run_with_progress "Atualizando indices para instalar cloudflared" apt-get update -qq
