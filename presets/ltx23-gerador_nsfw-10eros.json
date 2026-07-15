@@ -51,9 +51,14 @@
       "filename": "ltx-2.3-temporal-upscaler-x2-1.0.safetensors"
     },
     {
-      "url": "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/LTX2_audio_vae_bf16.safetensors",
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors",
       "dir": "vae",
-      "filename": "LTX2_audio_vae_bf16.safetensors"
+      "filename": "LTX23_audio_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors",
+      "dir": "checkpoints",
+      "filename": "LTX23_audio_vae_bf16.safetensors"
     },
     {
       "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
