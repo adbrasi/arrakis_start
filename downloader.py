@@ -11,6 +11,7 @@ import subprocess
 import logging
 import json
 import time
+import hashlib
 from collections import deque
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Tuple
@@ -120,6 +121,15 @@ class DownloadManager:
         self._active_procs: "set[subprocess.Popen]" = set()
         self._process_lock = threading.Lock()
         self._failures_lock = threading.Lock()
+
+        # Keep partial Hugging Face payloads outside ComfyUI's model folders.
+        # Each source/target pair gets a stable private directory so parallel
+        # downloads cannot see each other's cache bytes, while an interrupted
+        # transfer can still resume on the next installer run.
+        self.hf_partial_root = Path(os.environ.get(
+            'ARRAKIS_HF_PARTIAL_DIR',
+            str(self.models_dir.parent / '.arrakis-hf-partials'),
+        ))
 
         # Parallel downloads: defaults to 3 concurrent files. Each aria2c call
         # still uses its own 16-connection pool, so total connections can reach
@@ -508,6 +518,81 @@ class DownloadManager:
         name changes); both the hf_xet and classic HTTP backends write here."""
         return Path(dest_dir) / ".cache" / "huggingface" / "download"
 
+    def _hf_work_dir(
+        self,
+        dest_dir: Path,
+        filename: str,
+        repo_id: str,
+        branch: str,
+        file_path: str,
+    ) -> Path:
+        """Return a stable, per-download local_dir for Hugging Face.
+
+        huggingface_hub stores every transfer for a local_dir below one shared
+        ``.cache/huggingface/download`` directory. Watching that shared tree is
+        incorrect when multiple files download in parallel: their bytes are
+        added together, producing progress above 100% and false stall signals.
+        A deterministic private local_dir fixes the accounting and preserves
+        resume data across cancellation/restart.
+        """
+        identity = "\0".join((
+            str(Path(dest_dir).resolve()),
+            filename,
+            repo_id,
+            branch,
+            file_path,
+        ))
+        digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]
+        return self.hf_partial_root / digest
+
+    @staticmethod
+    def _partial_path(dest_path: Path) -> Path:
+        """Stable atomic staging path used by aria2c/wget downloads."""
+        return dest_path.with_name(f"{dest_path.name}.arrakis.part")
+
+    def _promote_partial(self, partial_path: Path, dest_path: Path) -> Tuple[bool, str]:
+        """Atomically expose a completed generic download as its final model."""
+        try:
+            if not partial_path.exists() or partial_path.stat().st_size <= 0:
+                return False, f"partial_missing_or_empty: {partial_path.name}"
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(partial_path, dest_path)
+            control_path = partial_path.with_name(f"{partial_path.name}.aria2")
+            control_path.unlink(missing_ok=True)
+            return True, ""
+        except Exception as e:
+            return False, f"partial_promote_failed: {e}"
+
+    def _migrate_legacy_aria2_partial(self, dest_path: Path) -> bool:
+        """Move a pre-fix aria2 partial away from the final model filename."""
+        legacy_control = dest_path.with_name(f"{dest_path.name}.aria2")
+        if not (dest_path.exists() and legacy_control.exists()):
+            return False
+
+        partial_path = self._partial_path(dest_path)
+        partial_control = partial_path.with_name(f"{partial_path.name}.aria2")
+        try:
+            if not partial_path.exists():
+                os.replace(dest_path, partial_path)
+            else:
+                # Prefer the larger payload if a previous migration was
+                # interrupted between the two renames.
+                if dest_path.stat().st_size > partial_path.stat().st_size:
+                    os.replace(dest_path, partial_path)
+                else:
+                    dest_path.unlink()
+            if not partial_control.exists():
+                os.replace(legacy_control, partial_control)
+            else:
+                legacy_control.unlink()
+            logger.info(f"Retomando download parcial legado: {dest_path.name}")
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Não foi possível migrar parcial legado de {dest_path.name}: {e}"
+            )
+            return True
+
     @staticmethod
     def _tree_bytes(*paths) -> Tuple[int, int]:
         """Sum apparent size (st_size) and allocated size (st_blocks*512) over the
@@ -642,15 +727,16 @@ class DownloadManager:
                     dt = now - last_emit_ts
                     speed_bps = max(0, size - last_emit_bytes) / dt if dt > 0 else 0
                     speed = self._fmt_speed(speed_bps)
-                    pct = (size / expected_size * 100.0) if expected_size else 0.0
-                    eta = self._fmt_eta((expected_size - size) / speed_bps) \
+                    display_size = min(size, expected_size) if expected_size else size
+                    pct = (display_size / expected_size * 100.0) if expected_size else 0.0
+                    eta = self._fmt_eta((expected_size - display_size) / speed_bps) \
                         if (expected_size and speed_bps > 0) else ""
                     if HAS_WEBSOCKET:
                         send_download_progress(filename, pct, speed, eta)
                     if expected_size:
                         logger.info(
                             f"  ↓ {filename}: {pct:.0f}% "
-                            f"({size / 1_048_576:.0f}/{expected_size / 1_048_576:.0f} MB) @ {speed}"
+                            f"({display_size / 1_048_576:.0f}/{expected_size / 1_048_576:.0f} MB) @ {speed}"
                             + (f" ETA {eta}" if eta else "")
                         )
                     else:
@@ -875,15 +961,14 @@ class DownloadManager:
             self._active_procs.discard(process)
 
     def cancel(self):
-        """Cancel ongoing downloads immediately (kills every live subprocess)."""
+        """Cancel ongoing downloads and preserve resumable partial files."""
         self._cancelled = True
         with self._process_lock:
             active = list(self._active_procs)
-            self._active_procs.clear()
         for proc in active:
-            logger.warning("Killing active download process...")
+            logger.warning("Interrompendo download ativo com segurança...")
             try:
-                proc.kill()
+                self._terminate_process(proc, grace=3)
             except Exception as e:
                 logger.error(f"Failed to kill process: {e}")
         logger.info("Download cancelled by user")
@@ -961,7 +1046,6 @@ class DownloadManager:
             logger.warning(f"Skipped {skipped} item(s) with no URL")
 
         total = len(valid_downloads)
-        self._cancelled = False
         self.failures = []
         self.attempt_logs = []
 
@@ -1081,7 +1165,9 @@ class DownloadManager:
         
         # Skip if exists
         if dest_path is not None and dest_path.exists():
-            if self._is_invalid_existing_file(dest_path, url):
+            if self._migrate_legacy_aria2_partial(dest_path):
+                logger.info(f"Arquivo parcial detectado; retomando: {filename}")
+            elif self._is_invalid_existing_file(dest_path, url):
                 logger.warning(
                     f"Found invalid existing file for {filename}, removing and retrying download"
                 )
@@ -1237,13 +1323,16 @@ class DownloadManager:
         env['HF_HUB_DOWNLOAD_TIMEOUT'] = os.environ.get('HF_HUB_DOWNLOAD_TIMEOUT', '30')
         env.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
 
+        work_dir = self._hf_work_dir(dest_dir, filename, repo_id, branch, file_path)
+        work_dir.mkdir(parents=True, exist_ok=True)
+
         cmd = [
             self.hf_cli_path, 'download', repo_id, file_path,
-            '--revision', branch, '--local-dir', str(dest_dir),
+            '--revision', branch, '--local-dir', str(work_dir),
         ]
 
-        staging_dir = self._hf_staging_dir(dest_dir)
-        final_path = dest_dir / file_path
+        staging_dir = self._hf_staging_dir(work_dir)
+        final_path = work_dir / file_path
         target = dest_dir / filename
         expected_size = self._hf_remote_size(repo_id, branch, file_path)
 
@@ -1296,9 +1385,10 @@ class DownloadManager:
             # finished), finalize it instead of forcing a needless fallback.
             if process.returncode == 0 or final_path.exists() or target.exists():
                 ok, reason = self._finalize_hf_file(
-                    dest_dir, file_path, filename, target, final_path, expected_size
+                    work_dir, file_path, filename, target, final_path, expected_size
                 )
                 if ok:
+                    shutil.rmtree(work_dir, ignore_errors=True)
                     elapsed = time.monotonic() - download_start_ts
                     logger.info(
                         f"✓ Downloaded from HF{xet_label}: {filename}"
@@ -1355,10 +1445,12 @@ class DownloadManager:
             "revision=sys.argv[3], local_dir=sys.argv[4])\n"
             "print('DLPATH=' + p)\n"
         )
-        cmd = [self._hf_python(), '-c', script, repo_id, file_path, branch, str(dest_dir)]
+        work_dir = self._hf_work_dir(dest_dir, filename, repo_id, branch, file_path)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [self._hf_python(), '-c', script, repo_id, file_path, branch, str(work_dir)]
 
-        staging_dir = self._hf_staging_dir(dest_dir)
-        final_path = dest_dir / file_path
+        staging_dir = self._hf_staging_dir(work_dir)
+        final_path = work_dir / file_path
         target = dest_dir / filename
         expected_size = self._hf_remote_size(repo_id, branch, file_path)
 
@@ -1397,9 +1489,10 @@ class DownloadManager:
 
             if process.returncode == 0 or final_path.exists() or target.exists():
                 ok, reason = self._finalize_hf_file(
-                    dest_dir, file_path, filename, target, final_path, expected_size
+                    work_dir, file_path, filename, target, final_path, expected_size
                 )
                 if ok:
+                    shutil.rmtree(work_dir, ignore_errors=True)
                     logger.info(
                         f"✓ Downloaded (huggingface_hub/HTTP): {filename}"
                         f"{self._speed_suffix(target, time.monotonic() - start)}"
@@ -1433,6 +1526,8 @@ class DownloadManager:
         """Download using aria2c (parallel, resumable) with visible progress"""
         # For Civitai-origin downloads, always honor content-disposition.
         use_content_disposition = prefer_content_disposition or ('civitai.com' in url)
+        dest_path = dest_dir / filename
+        partial_path = self._partial_path(dest_path)
 
         # HF uses an LFS bridge with stricter rate limits; use fewer connections
         # per file to avoid 429 responses. Civitai/direct CDNs tolerate 16.
@@ -1480,11 +1575,10 @@ class DownloadManager:
         if self.speed_limit != '0':
             cmd.extend(['--max-download-limit', self.speed_limit])
         
-        if use_content_disposition:
-            cmd.append('--content-disposition=true')
-            cmd.append('--auto-file-renaming=false')
-        else:
-            cmd.extend(['--out', filename])
+        # Always write to a stable partial name. The final model path only
+        # appears after exit 0 + verification, so cancellation can never leave
+        # a truncated .safetensors that a later run mistakes for complete.
+        cmd.extend(['--out', partial_path.name])
 
         cmd.append(url)
 
@@ -1585,11 +1679,15 @@ class DownloadManager:
 
             if process.returncode == 0:
                 landed, vreason = self._verify_download_landed(
-                    dest_dir, filename, use_content_disposition
+                    dest_dir, partial_path.name, False
                 )
                 if landed:
-                    logger.info(f"✓ Downloaded: {filename}")
-                    return True, ""
+                    promoted, preason = self._promote_partial(partial_path, dest_path)
+                    if promoted:
+                        logger.info(f"✓ Downloaded: {filename}")
+                        return True, ""
+                    logger.error(f"aria2c concluiu, mas promoção atômica falhou: {preason}")
+                    return False, preason
                 logger.error(f"aria2c exit 0 mas arquivo não confirmado: {vreason}")
                 return False, f"aria2c_{vreason}"
             else:
@@ -1618,6 +1716,7 @@ class DownloadManager:
     ) -> Tuple[bool, str]:
         """Download using wget (fallback) with content-disposition support"""
         use_content_disposition = prefer_content_disposition or ('civitai.com' in url)
+        partial_path = self._partial_path(dest_path)
         # --timeout sets dns/connect/read timeouts: wget aborts a SILENTLY stalled
         # read after this many seconds (its progress output stops on a dead TCP
         # connection, so our in-loop stall check alone can't see it). --tries caps
@@ -1646,10 +1745,9 @@ class DownloadManager:
             cmd.extend(['--user-agent', HTTP_USER_AGENT])
             cmd.extend(['--header', 'Referer: https://civitai.com/'])
         
-        if not use_content_disposition:
-            cmd.extend(['-O', str(dest_path)])
-        else:
-            cmd.extend(['-P', str(dest_path.parent)])
+        # Match aria2c's staging file so wget can continue the same partial
+        # payload after a fallback, without ever exposing a truncated final.
+        cmd.extend(['-O', str(partial_path)])
 
         cmd.append(url)
 
@@ -1736,11 +1834,15 @@ class DownloadManager:
 
             if process.returncode == 0:
                 landed, vreason = self._verify_download_landed(
-                    dest_path.parent, dest_path.name, use_content_disposition
+                    dest_path.parent, partial_path.name, False
                 )
                 if landed:
-                    logger.info(f"✓ Downloaded: {dest_path.name}")
-                    return True, ""
+                    promoted, preason = self._promote_partial(partial_path, dest_path)
+                    if promoted:
+                        logger.info(f"✓ Downloaded: {dest_path.name}")
+                        return True, ""
+                    logger.error(f"wget concluiu, mas promoção atômica falhou: {preason}")
+                    return False, preason
                 logger.error(f"wget exit 0 mas arquivo não confirmado: {vreason}")
                 return False, f"wget_{vreason}"
             else:

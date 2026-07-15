@@ -709,7 +709,8 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
                     continue
 
                 dest_path = MODELS_DIR / model_dir / filename
-                if dest_path.exists():
+                legacy_partial = dest_path.with_name(f"{dest_path.name}.aria2")
+                if dest_path.exists() and not legacy_partial.exists():
                     logger.info(f"✓ Already exists: {filename}")
                     state.add_model(filename, model_dir, model.get('url', ''), 0)
                 else:
