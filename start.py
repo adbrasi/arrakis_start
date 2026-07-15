@@ -173,19 +173,116 @@ def load_presets() -> List[Dict]:
 
 # Global tracker for cancellation
 _active_downloader = None
+_install_lock = threading.Lock()
+_install_cancel_event = threading.Event()
+_install_status_lock = threading.Lock()
+_install_status = 'idle'
+_active_install_processes = set()
+_active_install_processes_lock = threading.Lock()
+
+
+def _set_install_status(status: str) -> None:
+    global _install_status
+    with _install_status_lock:
+        _install_status = status
+
+
+def get_install_status() -> Dict[str, Any]:
+    """Return volatile installation state for the web UI/API."""
+    with _install_status_lock:
+        status = _install_status
+    return {
+        'installing': _install_lock.locked(),
+        'install_status': status,
+    }
+
+
+def reserve_install_slot() -> bool:
+    """Reserve the single installer slot before a background web job starts."""
+    if not _install_lock.acquire(blocking=False):
+        return False
+    _install_cancel_event.clear()
+    _set_install_status('running')
+    return True
+
+
+def _finish_install_slot(status: str) -> None:
+    global _active_downloader
+    _active_downloader = None
+    _set_install_status(status)
+    if _install_lock.locked():
+        _install_lock.release()
+
+
+def finish_install_reservation(status: str = 'failed') -> None:
+    """Release a web-reserved slot when setup fails before install_presets()."""
+    if _install_lock.locked():
+        _finish_install_slot('cancelled' if _install_cancel_event.is_set() else status)
+
+
+def _register_install_process(process: subprocess.Popen) -> None:
+    with _active_install_processes_lock:
+        _active_install_processes.add(process)
+
+
+def _unregister_install_process(process: Optional[subprocess.Popen]) -> None:
+    if process is None:
+        return
+    with _active_install_processes_lock:
+        _active_install_processes.discard(process)
+
+
+def _terminate_install_process(process: subprocess.Popen, grace: float = 3.0) -> None:
+    """Terminate a tracked installer command and its child process group."""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        try:
+            process.terminate()
+        except Exception:
+            return
+
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
 
 def get_active_downloader():
     return _active_downloader
 
 def cancel_active_install():
-    """Cancel the currently active installation"""
-    global _active_downloader
-    if _active_downloader:
-        logger.warning("Cancelling active installation...")
-        _active_downloader.cancel()
-        _active_downloader = None
-        return True
-    return False
+    """Cancel every cancellable phase of the currently active installation."""
+    if not _install_lock.locked():
+        return False
+
+    logger.warning("Cancelando instalação ativa...")
+    _install_cancel_event.set()
+    _set_install_status('cancelling')
+
+    downloader = _active_downloader
+    if downloader is not None:
+        downloader.cancel()
+
+    with _active_install_processes_lock:
+        active_processes = list(_active_install_processes)
+    for process in active_processes:
+        _terminate_install_process(process)
+
+    return True
 
 
 def _cuda_available() -> bool:
@@ -393,7 +490,7 @@ def _run_streaming_command(
     log_prefix: str = 'cmd',
     env: Optional[Dict[str, str]] = None
 ) -> Tuple[int, List[str]]:
-    """Run command with streamed logs and collect output lines for diagnostics."""
+    """Run a cancellable command with streamed logs and diagnostics."""
     logger.info(f"Running {description}: {' '.join(cmd)}")
     process = subprocess.Popen(
         cmd,
@@ -401,17 +498,52 @@ def _run_streaming_command(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        env=env
+        env=env,
+        start_new_session=True,
     )
+    _register_install_process(process)
     output_lines: List[str] = []
     assert process.stdout is not None
-    for line in process.stdout:
-        line = line.rstrip()
-        if line:
-            output_lines.append(line)
-            logger.info(f"[{log_prefix}] {line}")
-    process.wait()
-    return process.returncode, output_lines
+    output_queue: "queue.Queue[Optional[str]]" = queue.Queue()
+    reader_done = threading.Event()
+
+    def _read_output():
+        try:
+            for output_line in process.stdout:
+                output_queue.put(output_line)
+        finally:
+            reader_done.set()
+
+    threading.Thread(target=_read_output, daemon=True).start()
+    cancelled = False
+    try:
+        while True:
+            if _install_cancel_event.is_set() and process.poll() is None:
+                cancelled = True
+                logger.warning(f"Cancelando comando ativo: {description}")
+                _terminate_install_process(process)
+
+            try:
+                line = output_queue.get(timeout=0.2)
+            except queue.Empty:
+                line = None
+            if line is not None:
+                line = line.rstrip()
+                if line:
+                    output_lines.append(line)
+                    logger.info(f"[{log_prefix}] {line}")
+
+            if reader_done.is_set() and output_queue.empty() and process.poll() is not None:
+                break
+
+        process.wait()
+        return (-2 if cancelled else process.returncode), output_lines
+    finally:
+        _unregister_install_process(process)
+        try:
+            process.stdout.close()
+        except Exception:
+            pass
 
 
 def _verify_python_import(package_name: str, python_bin: Optional[str] = None) -> bool:
@@ -486,6 +618,8 @@ def _run_sageattention_installer(
     )
 
     for attempt in range(1, attempts + 1):
+        if _install_cancel_event.is_set():
+            return False, last_output
         curl_cmd = ['bash', '-lc', curl_shell]
         result_code, output_lines = _run_streaming_command(
             curl_cmd,
@@ -496,6 +630,8 @@ def _run_sageattention_installer(
         last_output = output_lines
         if result_code == 0:
             return True, output_lines
+        if _install_cancel_event.is_set():
+            return False, output_lines
 
         logger.warning(f"SageAttention installer via curl failed (exit {result_code})")
 
@@ -509,11 +645,14 @@ def _run_sageattention_installer(
         last_output = output_lines
         if result_code == 0:
             return True, output_lines
+        if _install_cancel_event.is_set():
+            return False, output_lines
 
         logger.warning(f"SageAttention installer via wget failed (exit {result_code})")
         if attempt < attempts:
             logger.info(f"Retrying SageAttention installer in {retry_delay}s...")
-            time.sleep(retry_delay)
+            if _install_cancel_event.wait(retry_delay):
+                return False, last_output
 
     return False, last_output
 
@@ -607,6 +746,9 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
     logger.info(f"CUDA available for pip conditions: {cuda_available}")
 
     for index, item in enumerate(pip_commands, start=1):
+        if _install_cancel_event.is_set():
+            logger.warning("Instalação cancelada antes dos comandos pip restantes")
+            return False
         if isinstance(item, str):
             command = item
             condition = None
@@ -662,7 +804,39 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
     return True
 
 
-def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
+def install_presets(
+    preset_names: List[str],
+    include_base: bool = True,
+    _slot_reserved: bool = False,
+    _keep_slot: bool = False,
+) -> bool:
+    """Run one installation at a time and publish its terminal status."""
+    if not _slot_reserved and not reserve_install_slot():
+        logger.error("Já existe uma instalação em andamento")
+        return False
+    if _slot_reserved and not _install_lock.locked():
+        logger.error("Installer slot was not reserved")
+        return False
+
+    result = False
+    try:
+        if _install_cancel_event.is_set():
+            logger.warning("Instalação cancelada antes de iniciar")
+            return False
+        result = _install_presets_impl(preset_names, include_base=include_base)
+        return result
+    finally:
+        if _install_cancel_event.is_set():
+            terminal_status = 'cancelled'
+        else:
+            terminal_status = 'completed' if result else 'failed'
+        if _keep_slot:
+            _set_install_status(terminal_status)
+        else:
+            _finish_install_slot(terminal_status)
+
+
+def _install_presets_impl(preset_names: List[str], include_base: bool = True) -> bool:
     """Install selected presets with smart skip-existing and parallelism"""
     from downloader import DownloadManager
     state = get_state_manager()
@@ -688,6 +862,9 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     processed_presets = []
 
     for preset_name in preset_names:
+        if _install_cancel_event.is_set():
+            logger.warning("Instalação cancelada ao preparar presets")
+            return False
         if preset_name not in preset_map:
             logger.error(f"Preset not found: {preset_name}")
             continue
@@ -735,6 +912,8 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
             pip_commands.extend(preset['pip_commands'])
 
     # 1. Configure runtime stack before preset-specific pip commands.
+    if _install_cancel_event.is_set():
+        return False
     if not configure_runtime_stack(use_sage_attention=use_sage_attention):
         logger.error("Installation failed during runtime stack configuration")
         return False
@@ -752,6 +931,8 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     logger.info(f"Saved {len(unique_flags)} preset-specific ComfyUI flags")
 
     # 3. Execute downloads and node installs in parallel
+    if _install_cancel_event.is_set():
+        return False
     with ThreadPoolExecutor(max_workers=4) as executor:
         download_future = None
         nodes_future = None
@@ -793,6 +974,13 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     finally:
         _active_downloader = None
 
+    if _install_cancel_event.is_set() or nodes_result.get('cancelled'):
+        logger.warning(
+            "Instalação cancelada. Arquivos concluídos foram preservados e "
+            "downloads parciais serão retomados na próxima execução."
+        )
+        return False
+
     # Download errors are non-blocking (continue install/start); node errors remain blocking.
     if not download_success:
         if downloader_failures:
@@ -827,9 +1015,13 @@ def install_presets(preset_names: List[str], include_base: bool = True) -> bool:
     # 4. Ensure the installed torch can actually drive this GPU. Custom-node
     # requirements may have pulled a CUDA wheel newer than the driver supports;
     # repair to a driver-appropriate build before ComfyUI is (re)started.
+    if _install_cancel_event.is_set():
+        return False
     _ensure_torch_driver_compatible()
 
     # 5. Mark presets as installed (only those actually found in preset_map)
+    if _install_cancel_event.is_set():
+        return False
     for preset_name in processed_presets:
         state.add_preset(preset_name)
 
@@ -981,6 +1173,7 @@ def _run_pip_install_streaming(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1, start_new_session=True
     )
+    _register_install_process(proc)
     assert proc.stdout is not None
 
     output_queue: "queue.Queue[Optional[str]]" = queue.Queue()
@@ -1000,10 +1193,16 @@ def _run_pip_install_streaming(
     last_log_at = started_at
     last_line = ""
     timed_out = False
+    cancelled = False
     try:
         while True:
             now = time.monotonic()
             elapsed = now - started_at
+            if _install_cancel_event.is_set() and proc.poll() is None:
+                cancelled = True
+                logger.warning(f"[{node_name} pip] cancel requested — terminating process group")
+                _terminate_install_process(proc)
+                break
             if timeout_sec > 0 and elapsed >= timeout_sec and proc.poll() is None:
                 timed_out = True
                 logger.error(
@@ -1058,12 +1257,13 @@ def _run_pip_install_streaming(
     finally:
         if proc.poll() is None:
             proc.wait()
+        _unregister_install_process(proc)
         try:
             proc.stdout.close()
         except Exception:
             pass
 
-    returncode = -1 if timed_out else proc.returncode
+    returncode = -2 if cancelled else (-1 if timed_out else proc.returncode)
     return returncode, last_line
 
 
@@ -1112,6 +1312,31 @@ def _is_manager_pip_installed() -> bool:
         return False
 
 
+def _run_capture_cancellable(cmd: List[str]) -> subprocess.CompletedProcess:
+    """Run a short installer command with captured output and cancellation."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    _register_install_process(process)
+    try:
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                if _install_cancel_event.is_set():
+                    _terminate_install_process(process)
+                    stdout, stderr = process.communicate()
+                    break
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+    finally:
+        _unregister_install_process(process)
+
+
 def _clone_node(url: str, cn_dir: Path) -> Tuple[str, str, Path, bool, Optional[str]]:
     """Clone a single custom node with retry. Returns (url, node_name, dest,
     clone_ok, skip_reason). skip_reason is set when no clone was needed."""
@@ -1139,14 +1364,16 @@ def _clone_node(url: str, cn_dir: Path) -> Tuple[str, str, Path, bool, Optional[
         logger.info(f"Using authenticated URL for: {node_name}")
 
     for attempt in range(1, 3):
-        clone = subprocess.run(
-            ['git', 'clone', '--depth', '1', clone_url, str(dest)],
-            check=False,
-            capture_output=True,
-            text=True,
+        if _install_cancel_event.is_set():
+            return (url, node_name, dest, False, 'cancelled')
+        clone = _run_capture_cancellable(
+            ['git', 'clone', '--depth', '1', clone_url, str(dest)]
         )
         if clone.returncode == 0:
             return (url, node_name, dest, True, None)
+
+        if _install_cancel_event.is_set():
+            return (url, node_name, dest, False, 'cancelled')
 
         logger.warning(
             f"Clone failed for {node_name} (attempt {attempt}/2, exit {clone.returncode})"
@@ -1184,6 +1411,8 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
     # Partition into: manager-via-pip, already-installed, and needs-clone.
     to_clone: List[str] = []
     for url in node_urls:
+        if _install_cancel_event.is_set():
+            return {"success": False, "failed": failed_nodes, "cancelled": True}
         node_name = url.rstrip('/').split('/')[-1]
         if node_name == 'ComfyUI-Manager' and _is_manager_pip_installed():
             logger.info("✓ ComfyUI-Manager v4+ detected as pip package (skipping git clone)")
@@ -1218,6 +1447,12 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
                 logger.error(f"Clone task raised an exception: {e}")
                 continue
 
+            if skip_reason == 'cancelled' or _install_cancel_event.is_set():
+                logger.warning("Instalação de custom nodes cancelada")
+                for pending in futures:
+                    pending.cancel()
+                return {"success": False, "failed": failed_nodes, "cancelled": True}
+
             if skip_reason == 'already_installed':
                 logger.info(
                     f"Existing clone without completed state: {node_name}; "
@@ -1237,6 +1472,8 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
                     node_name,
                 )
                 if retcode != 0:
+                    if _install_cancel_event.is_set():
+                        return {"success": False, "failed": failed_nodes, "cancelled": True}
                     logger.warning(
                         f"Requirements install failed for {node_name} (exit {retcode}), continuing"
                     )

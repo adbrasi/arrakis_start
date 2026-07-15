@@ -952,6 +952,11 @@ class DownloadManager:
         """Track a live subprocess so cancel() can kill it later."""
         with self._process_lock:
             self._active_procs.add(process)
+            cancel_immediately = self._cancelled
+        # Close the race where cancel() snapshots active processes immediately
+        # before a fallback registers its subprocess.
+        if cancel_immediately:
+            self._terminate_process(process, grace=1)
 
     def _unregister_process(self, process: Optional[subprocess.Popen]) -> None:
         """Stop tracking a subprocess (called after wait/kill)."""
@@ -1192,11 +1197,15 @@ class DownloadManager:
             self._record_attempt(url, 'hf-cli', result, reason)
             if result:
                 return True, 'ok', 'hf-cli'
+            if self._cancelled:
+                return False, 'cancelled_by_user', 'cancel'
             # Fallback to huggingface_hub API before generic downloaders
             hub_ok, hub_reason = self._download_hf_via_python(url, dest_dir, filename)
             self._record_attempt(url, 'hf-hub-python', hub_ok, hub_reason)
             if hub_ok:
                 return True, 'ok', 'hf-hub-python'
+            if self._cancelled:
+                return False, 'cancelled_by_user', 'cancel'
 
             # Classify auth errors but DO NOT fail-fast yet — aria2c with
             # Authorization header can succeed where hf CLI / hf_hub fail
@@ -1213,6 +1222,8 @@ class DownloadManager:
                 )
 
         # Resolve Civitai URL with authenticated redirect handling
+        if self._cancelled:
+            return False, 'cancelled_by_user', 'cancel'
         if is_civitai_source:
             resolved_url, resolve_reason = self._resolve_civitai_download_url(url)
             if not resolved_url:
@@ -1256,6 +1267,8 @@ class DownloadManager:
             self._record_attempt(url, 'aria2c', ok, reason)
             if ok:
                 return True, 'ok', 'aria2c'
+            if self._cancelled:
+                return False, 'cancelled_by_user', 'cancel'
             fallback_ok, fallback_reason = self._download_wget(
                 download_url,
                 dest_dir / filename,

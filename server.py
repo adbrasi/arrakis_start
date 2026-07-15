@@ -150,6 +150,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
             pm = ProcessManager(state)
             is_running = pm.is_running()
             status_data = state.get_comfyui_status()
+            from start import get_install_status
+            install_data = get_install_status()
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -159,7 +161,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 'running': is_running,
                 'status': status_data.get('status', 'unknown'),
                 'port': status_data.get('port', 8818),
-                'installed_presets': state.get_installed_presets()
+                'installed_presets': state.get_installed_presets(),
+                **install_data,
             }).encode())
         except Exception as e:
             logger.error(f"Failed to get status: {e}")
@@ -228,10 +231,27 @@ class PresetHandler(SimpleHTTPRequestHandler):
             logger.info(f"Installation request: {preset_names} (extra flags: {extra_flags})")
 
             # Start installation in background thread
-            from start import install_presets
+            from start import (
+                finish_install_reservation,
+                install_presets,
+                reserve_install_slot,
+            )
             from process_manager import ProcessManager
 
+            if not reserve_install_slot():
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'success': False,
+                    'error': 'Já existe uma instalação em andamento.'
+                }).encode())
+                return
+
             def install_and_restart():
+                install_presets_called = False
+                install_slot_finished = False
                 try:
                     state = _state_manager or get_state_manager()
                     pm = ProcessManager(state)
@@ -247,7 +267,13 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
                     # STEP 2: Install presets (this also saves preset flags to state)
                     logger.info(f"Installing presets: {preset_names}")
-                    success = install_presets(preset_names, include_base=True)
+                    install_presets_called = True
+                    success = install_presets(
+                        preset_names,
+                        include_base=True,
+                        _slot_reserved=True,
+                        _keep_slot=True,
+                    )
 
                     # STEP 3: Restart ComfyUI with new preset flags (+ optional extra flags from UI).
                     # Use restart() instead of start() so that any stray ComfyUI instance
@@ -262,18 +288,27 @@ class PresetHandler(SimpleHTTPRequestHandler):
                         started = pm.restart(flags=extra_flags if extra_flags else None)
                         if started:
                             logger.info("✓ ComfyUI started successfully")
+                            finish_install_reservation('completed')
+                            install_slot_finished = True
                         else:
                             logger.error(
                                 "ComfyUI failed to start after installation — "
                                 "check logs above for startup timeout or port conflict"
                             )
+                            finish_install_reservation('start_failed')
+                            install_slot_finished = True
                     else:
                         print("\n" + "="*60)
                         print("\033[1;31m❌ ERRO NA INSTALAÇÃO ❌\033[0m")
                         print("="*60 + "\n")
                         logger.error("Installation failed")
+                        finish_install_reservation('failed')
+                        install_slot_finished = True
                 except Exception as e:
                     logger.error(f"Install thread error: {e}")
+                finally:
+                    if not install_presets_called or not install_slot_finished:
+                        finish_install_reservation('failed')
             
             thread = threading.Thread(target=install_and_restart, daemon=True)
             thread.start()

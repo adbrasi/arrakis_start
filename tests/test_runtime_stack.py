@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -80,6 +81,11 @@ class SageAttentionInstallerTests(unittest.TestCase):
 
 
 class PipInstallStreamingTests(unittest.TestCase):
+    def tearDown(self):
+        start._install_cancel_event.clear()
+        if start._install_lock.locked():
+            start.finish_install_reservation('failed')
+
     def test_silent_process_emits_heartbeat(self):
         command = [sys.executable, '-c', 'import time; time.sleep(0.2)']
 
@@ -112,6 +118,59 @@ class PipInstallStreamingTests(unittest.TestCase):
         self.assertEqual(returncode, -1)
         self.assertLess(time.monotonic() - started_at, 2)
         self.assertTrue(any('timeout after' in message for message in captured.output))
+
+    def test_active_pip_process_is_stopped_by_install_cancel(self):
+        self.assertTrue(start.reserve_install_slot())
+        result = {}
+
+        def run_pip():
+            result['value'] = start._run_pip_install_streaming(
+                [sys.executable, '-c', 'import time; time.sleep(30)'],
+                'cancel-node',
+                heartbeat_interval=5,
+                timeout_sec=60,
+            )
+
+        worker = threading.Thread(target=run_pip)
+        worker.start()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with start._active_install_processes_lock:
+                if start._active_install_processes:
+                    break
+            time.sleep(0.01)
+
+        self.assertTrue(start.cancel_active_install())
+        worker.join(timeout=3)
+
+        self.assertFalse(worker.is_alive())
+        self.assertNotEqual(result['value'][0], 0)
+        start.finish_install_reservation('cancelled')
+        self.assertEqual(start.get_install_status()['install_status'], 'cancelled')
+
+
+class InstallCoordinatorTests(unittest.TestCase):
+    def tearDown(self):
+        start._install_cancel_event.clear()
+        if start._install_lock.locked():
+            start.finish_install_reservation('failed')
+
+    def test_only_one_installation_can_be_reserved(self):
+        self.assertTrue(start.reserve_install_slot())
+        self.assertFalse(start.reserve_install_slot())
+
+    def test_cancelled_reservation_never_enters_installer(self):
+        self.assertTrue(start.reserve_install_slot())
+        self.assertTrue(start.cancel_active_install())
+
+        with patch('start._install_presets_impl') as installer:
+            result = start.install_presets(['Base'], _slot_reserved=True)
+
+        self.assertFalse(result)
+        installer.assert_not_called()
+        status = start.get_install_status()
+        self.assertFalse(status['installing'])
+        self.assertEqual(status['install_status'], 'cancelled')
 
 
 class CustomNodeRecoveryTests(unittest.TestCase):

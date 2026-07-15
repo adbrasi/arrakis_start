@@ -399,14 +399,17 @@ async function removePreset(presetName, btn) {
 // Cancel install
 // ============================================
 async function cancelInstall() {
-    if (!confirm('Cancelar a instalação? Os downloads em andamento serão interrompidos.')) return;
+    if (!confirm(
+        'Cancelar a instalação?\n\n' +
+        'Arquivos concluídos serão preservados e downloads parciais poderão ser retomados ao instalar novamente.'
+    )) return;
     const btn = document.getElementById('cancel-btn');
     if (btn) btn.disabled = true;
     try {
         const r = await fetch('/api/cancel', { method: 'POST' });
         const d = await r.json().catch(() => ({}));
         showToast(
-            d.cancelled ? 'Cancelamento solicitado — interrompendo downloads.' : 'Nenhuma instalação ativa.',
+            d.cancelled ? 'Cancelamento solicitado — preservando o que já foi concluído.' : 'Nenhuma instalação ativa.',
             'info'
         );
     } catch {
@@ -454,7 +457,23 @@ async function startWithPresets() {
                     const statusResp = await fetch('/api/status');
                     const statusData = await statusResp.json();
                     pollStatus(); // Update UI
-                    if (statusData.running) {
+                    const terminalFailure = !statusData.installing &&
+                        ['cancelled', 'failed', 'start_failed'].includes(statusData.install_status);
+                    if (terminalFailure) {
+                        clearInterval(installPoll);
+                        isInstalling = false;
+                        const cb = document.getElementById('cancel-btn');
+                        if (cb) cb.hidden = true;
+                        updateStartButton();
+                        showToast(
+                            statusData.install_status === 'cancelled'
+                                ? 'Instalação cancelada. Você pode selecionar e instalar novamente para retomar.'
+                                : statusData.install_status === 'start_failed'
+                                    ? 'Arquivos instalados, mas o ComfyUI não iniciou. Consulte os logs.'
+                                    : 'A instalação falhou. Consulte os logs e tente novamente.',
+                            statusData.install_status === 'cancelled' ? 'info' : 'error'
+                        );
+                    } else if (statusData.running && !statusData.installing) {
                         clearInterval(installPoll);
                         await loadPresets();
                         selectedPresets = [];

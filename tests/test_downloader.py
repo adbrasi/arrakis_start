@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from downloader import DownloadManager
 
@@ -66,6 +67,31 @@ class DownloadStagingTests(unittest.TestCase):
             self.assertFalse(dest.exists())
             self.assertEqual(partial.read_bytes(), b'partial-model')
             self.assertTrue(partial.with_name(f'{partial.name}.aria2').exists())
+
+    def test_cancel_does_not_start_hf_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            models_dir = Path(temp_dir) / 'models'
+            manager = self._manager(models_dir)
+            manager._cancelled = False
+            manager.hf_cli_path = '/fake/hf'
+            manager._failures_lock = __import__('threading').Lock()
+            manager.attempt_logs = []
+
+            def cancel_primary(*_args):
+                manager._cancelled = True
+                return False, 'interrupted'
+
+            with patch.object(manager, '_download_hf_direct', side_effect=cancel_primary), \
+                    patch.object(manager, '_download_hf_via_python') as fallback:
+                ok, reason, stage = manager._download_file(
+                    'https://huggingface.co/org/repo/resolve/main/model.safetensors',
+                    'checkpoints',
+                    'model.safetensors',
+                )
+
+            self.assertFalse(ok)
+            self.assertEqual((reason, stage), ('cancelled_by_user', 'cancel'))
+            fallback.assert_not_called()
 
 
 if __name__ == '__main__':
