@@ -76,11 +76,6 @@
       "filename": ""
     },
     {
-      "url": "https://civitai.com/api/download/models/2134864?type=Model&format=SafeTensor",
-      "dir": "loras",
-      "filename": ""
-    },
-    {
       "url": "https://huggingface.co/xChenNing/Wan21-Anti-Realistic-Transformation/resolve/main/Wan21-Anti-Realistic-Transformation-720p-rank256.safetensors?download=true",
       "dir": "loras",
       "filename": "Wan21-Anti-Realistic-Transformation-720p-rank256.safetensors"

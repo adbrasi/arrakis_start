@@ -93,6 +93,16 @@ class DownloadStagingTests(unittest.TestCase):
             self.assertEqual((reason, stage), ('cancelled_by_user', 'cancel'))
             fallback.assert_not_called()
 
+    def test_deterministic_404_is_not_retried(self):
+        manager = self._manager(Path('/tmp/models'))
+
+        self.assertFalse(
+            manager._is_retryable_failure(
+                'civitai-resolve',
+                'civitai_resolve_http_404',
+            )
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

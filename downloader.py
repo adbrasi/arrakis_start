@@ -288,6 +288,13 @@ class DownloadManager:
             return False
         if 'auth_gated_model_not_accepted' in reason_lower:
             return False
+        if (
+            'http_404' in reason_lower or
+            '404 not found' in reason_lower or
+            '404 client error' in reason_lower or
+            'entry not found' in reason_lower
+        ):
+            return False
         if '401 unauthorized' in reason_lower or '403 forbidden' in reason_lower:
             return False
         if 'requires you to be logged in' in reason_lower:
