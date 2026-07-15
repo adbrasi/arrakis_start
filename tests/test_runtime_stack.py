@@ -173,6 +173,70 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertEqual(status['install_status'], 'cancelled')
 
 
+class PresetCompletionTests(unittest.TestCase):
+    def test_missing_model_keeps_preset_pending(self):
+        preset = {
+            'models': [{
+                'url': 'https://example.com/model.safetensors',
+                'dir': 'checkpoints',
+                'filename': 'model.safetensors',
+            }],
+            'nodes': [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            issues = start._preset_install_issues(
+                preset,
+                downloader_failures=[],
+                failed_node_names=set(),
+                models_dir=Path(temp_dir),
+            )
+
+        self.assertEqual(issues, ['modelo ausente: model.safetensors'])
+
+    def test_complete_model_and_nodes_have_no_issues(self):
+        preset = {
+            'models': [{
+                'url': 'https://example.com/model.safetensors',
+                'dir': 'checkpoints',
+                'filename': 'model.safetensors',
+            }],
+            'nodes': ['https://github.com/example/good-node'],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            models_dir = Path(temp_dir)
+            target = models_dir / 'checkpoints' / 'model.safetensors'
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b'model')
+            issues = start._preset_install_issues(
+                preset,
+                downloader_failures=[],
+                failed_node_names=set(),
+                models_dir=models_dir,
+            )
+
+        self.assertEqual(issues, [])
+
+    def test_failed_unnamed_download_and_node_are_reported(self):
+        url = 'https://civitai.com/api/download/models/123'
+        preset = {
+            'models': [{'url': url, 'dir': 'checkpoints', 'filename': ''}],
+            'nodes': ['https://github.com/example/broken-node'],
+        }
+
+        issues = start._preset_install_issues(
+            preset,
+            downloader_failures=[{'url': url, 'filename': '', 'stage': 'wget'}],
+            failed_node_names={'broken-node'},
+        )
+
+        self.assertEqual(
+            issues,
+            ['download sem filename falhou', 'custom node falhou: broken-node'],
+        )
+
+
 class CustomNodeRecoveryTests(unittest.TestCase):
     @patch('start._pip_install_argv', return_value=['pip', 'install'])
     @patch('start._run_pip_install_streaming', return_value=(0, 'done'))

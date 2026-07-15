@@ -1019,11 +1019,27 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
         return False
     _ensure_torch_driver_compatible()
 
-    # 5. Mark presets as installed (only those actually found in preset_map)
+    # 5. Mark only complete presets as installed. Download/node failures remain
+    # non-blocking for ComfyUI startup, but the UI must not claim that a partial
+    # preset is finished: leaving it pending makes the next run resume only the
+    # missing artifacts.
     if _install_cancel_event.is_set():
         return False
+    failed_node_names = set(nodes_result.get('failed', []))
     for preset_name in processed_presets:
-        state.add_preset(preset_name)
+        issues = _preset_install_issues(
+            preset_map[preset_name],
+            downloader_failures,
+            failed_node_names,
+        )
+        if issues:
+            state.remove_preset(preset_name)
+            logger.warning(
+                f"Preset '{preset_name}' permanece pendente: {'; '.join(issues)}. "
+                "Execute novamente para retomar somente o que falta."
+            )
+        else:
+            state.add_preset(preset_name)
 
     all_ok = download_success and nodes_result["success"]
     if all_ok:
@@ -1031,6 +1047,48 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     else:
         logger.warning("Presets installed with some failures (see warnings above)")
     return True
+
+
+def _preset_install_issues(
+    preset: Dict[str, Any],
+    downloader_failures: List[Dict[str, str]],
+    failed_node_names: set,
+    models_dir: Optional[Path] = None,
+) -> List[str]:
+    """Return concrete reasons why a preset is not fully installed."""
+    root = models_dir or MODELS_DIR
+    failed_urls = {
+        str(failure.get('url', '')).strip()
+        for failure in downloader_failures
+        if failure.get('url')
+    }
+    failed_files = {
+        str(failure.get('filename', '')).strip()
+        for failure in downloader_failures
+        if failure.get('filename')
+    }
+    issues: List[str] = []
+
+    for model in preset.get('models', []):
+        filename = str(model.get('filename') or '').strip()
+        model_url = str(model.get('url') or '').strip()
+        model_dir = str(model.get('dir') or '').strip()
+        if filename:
+            target = root / model_dir / filename
+            legacy_control = target.with_name(f"{target.name}.aria2")
+            if not target.exists() or legacy_control.exists():
+                issues.append(f"modelo ausente: {filename}")
+            elif filename in failed_files or model_url in failed_urls:
+                issues.append(f"download falhou: {filename}")
+        elif model_url in failed_urls:
+            issues.append("download sem filename falhou")
+
+    for node_url in preset.get('nodes', []):
+        node_name = str(node_url).rstrip('/').split('/')[-1]
+        if node_name in failed_node_names:
+            issues.append(f"custom node falhou: {node_name}")
+
+    return list(dict.fromkeys(issues))
 
 
 def uninstall_preset(preset_name: str) -> Dict[str, Any]:
