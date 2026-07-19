@@ -1,0 +1,118 @@
+{
+  "name": "Anime production",
+  "description": "LTX 2.3 production base with the Animateka I2V LoRA and experimental PhiNoise node.",
+  "workflow": "padrao_ltx2_arrakisV1-3.json",
+  "use_sage_attention": true,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/diffusion_models/ltx-2-3-22b-dev_transformer_only_fp8_input_scaled.safetensors",
+      "dir": "diffusion_models",
+      "filename": "ltx-2-3-22b-dev_transformer_only_fp8_input_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/loras/ltx-2.3-22b-distilled-1.1_lora-dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2.3-22b-distilled-1.1_lora-dynamic_fro09_avg_rank_111_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/loras/LTX-2.3-OmniNFT-RL-Lora_bf16.safetensors",
+      "dir": "loras",
+      "filename": "LTX-2.3-OmniNFT-RL-Lora_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/loras/ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/TenStrip/LTX2.3_DMD_Lora/resolve/main/LTX2.3_DMD_reshaped_r256.safetensors",
+      "dir": "loras",
+      "filename": "LTX2.3_DMD_reshaped_r256.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/WarmBloodAban/Singularity-LTX-2.3_OmniCine_V1/resolve/main/Singularity-LTX-2.3_OmniCine_V1.safetensors",
+      "dir": "loras",
+      "filename": "Singularity-LTX-2.3_OmniCine_V1.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/smooth_loop_v3/resolve/main/smooth_loop_v3-step00002500.comfy.safetensors",
+      "dir": "loras",
+      "filename": "smooth_loop_v3-step00002500.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/scene_rush_v2/resolve/main/anima_scene_rush_v2_500.safetensors",
+      "dir": "loras",
+      "filename": "anima_scene_rush_v2_500.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/animateka/resolve/main/checkpoints/animateka_i2v-step00006000.comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "animateka_i2v-step00006000.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
+      "dir": "vae",
+      "filename": "taeltx2_3.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_video_vae_bf16.safetensors",
+      "dir": "vae",
+      "filename": "LTX23_video_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors",
+      "dir": "vae",
+      "filename": "LTX23_audio_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors",
+      "dir": "checkpoints",
+      "filename": "LTX23_audio_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/TenStrip/LTX2.3-10Eros/resolve/main/text_encoders/gemma-3-12b-it-ablit-norms-biproj-fp8mixed.safetensors",
+      "dir": "text_encoders",
+      "filename": "gemma-3-12b-it-ablit-norms-biproj-fp8mixed.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fpmixed.safetensors",
+      "dir": "text_encoders",
+      "filename": "gemma_3_12B_it_fpmixed.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/text_encoders/ltx-2.3_text_projection_bf16.safetensors",
+      "dir": "text_encoders",
+      "filename": "ltx-2.3_text_projection_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-temporal-upscaler-x2-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2.3-temporal-upscaler-x2-1.0.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/Lightricks/ComfyUI-LTXVideo",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/ClownsharkBatwing/RES4LYF",
+    "https://github.com/cubiq/ComfyUI_essentials",
+    "https://github.com/evanspearman/ComfyMath",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
+    "https://github.com/adbrasi/loppiner",
+    "https://github.com/adbrasi/PhiNoise"
+  ]
+}
