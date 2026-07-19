@@ -1,0 +1,47 @@
+{
+  "name": "ltx wan helper",
+  "description": "WAN 2.2 helper preset with two low-noise GGUF diffusion models, Lightning LoRAs, VAE, NSFW UMT5 encoder, and video utility nodes.",
+  "use_sage_attention": true,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/vantagewithai/Bernini-R-GGUF-ComfyUI/resolve/main/low/wan2.2_bernini_r_low-Q8_0.gguf?download=true",
+      "dir": "diffusion_models",
+      "filename": "wan2.2_bernini_r_low-Q8_0.gguf"
+    },
+    {
+      "url": "https://huggingface.co/QuantStack/Index-Anisora-V3.2-GGUF/resolve/main/Low/Index-Anisora-V3.2-Low-Q8_0.gguf?download=true",
+      "dir": "diffusion_models",
+      "filename": "Index-Anisora-V3.2-Low-Q8_0.gguf"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22-Lightning/Wan22_A14B_T2V_LOW_Lightning_4steps_lora_250928_rank64_fp16.safetensors?download=true",
+      "dir": "loras",
+      "filename": "Wan22_A14B_T2V_LOW_Lightning_4steps_lora_250928_rank64_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/lightx2v/Wan2.2-Distill-Loras/resolve/main/wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors?download=true",
+      "dir": "loras",
+      "filename": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors",
+      "dir": "vae",
+      "filename": "Wan2_1_VAE_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/NSFW-API/NSFW-Wan-UMT5-XXL/resolve/main/nsfw_wan_umt5-xxl_fp8_scaled.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "nsfw_wan_umt5-xxl_fp8_scaled.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation",
+    "https://github.com/kijai/ComfyUI-GIMM-VFI",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit",
+    "https://github.com/GACLove/ComfyUI-VFI",
+    "https://github.com/rgthree/rgthree-comfy"
+  ]
+}
