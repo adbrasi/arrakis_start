@@ -20,6 +20,11 @@
       "filename": "qwen_image_vae.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/groundedsecret/resolve/main/checkpoints/step-01000/adapter_model.safetensors?download=true",
+      "dir": "loras",
+      "filename": "adapter_model.safetensors"
+    },
+    {
       "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_darkbrush.safetensors",
       "dir": "loras",
       "filename": "krea2_darkbrush.safetensors"
@@ -65,6 +70,8 @@
       "filename": "krea2_vintagetarot.safetensors"
     }
   ],
-  "nodes": [],
+  "nodes": [
+    "https://github.com/adbrasi/ctxrush-edit"
+  ],
   "workflow": "krea2_turbo_t2i.json"
 }
