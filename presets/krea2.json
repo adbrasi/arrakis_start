@@ -25,6 +25,11 @@
       "filename": "adapter_model.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/animateka/resolve/main/ctx_rushado_adapter_model.safetensors",
+      "dir": "loras",
+      "filename": "ctx_rushado_adapter_model.safetensors"
+    },
+    {
       "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_darkbrush.safetensors",
       "dir": "loras",
       "filename": "krea2_darkbrush.safetensors"
