@@ -61,6 +61,11 @@
       "filename": "ctx_rushado_adapter_model.safetensors"
     },
     {
+      "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8n_v2.pt?download=true",
+      "dir": "ultralytics/bbox",
+      "filename": "face_yolov8n_v2.pt"
+    },
+    {
       "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/taeltx2_3.safetensors",
       "dir": "vae",
       "filename": "taeltx2_3.safetensors"
