@@ -1,0 +1,270 @@
+{
+  "name": "animegen wan 2.2",
+  "description": "AnimeGen WAN 2.2 I2V preset with low-noise and high-noise Q8 GGUF diffusion models, WanVideo tooling, and optional SageAttention stack",
+  "use_sage_attention": true,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors",
+      "dir": "loras",
+      "filename": "SVI_v2_PRO_Wan2.2-I2V-A14B_HIGH_lora_rank_128_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Stable-Video-Infinity/v2.0/SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors",
+      "dir": "loras",
+      "filename": "SVI_v2_PRO_Wan2.2-I2V-A14B_LOW_lora_rank_128_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_Lightx2v/Wan_2_2_I2V_A14B_HIGH_lightx2v_4step_lora_v1030_rank_64_bf16.safetensors",
+      "dir": "loras",
+      "filename": "Wan_2_2_I2V_A14B_HIGH_lightx2v_4step_lora_v1030_rank_64_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/LoRAs/Wan22_Lightx2v/Wan_2_2_I2V_A14B_HIGH_lightx2v_MoE_distill_lora_rank_64_bf16.safetensors",
+      "dir": "loras",
+      "filename": "Wan_2_2_I2V_A14B_HIGH_lightx2v_MoE_distill_lora_rank_64_bf16.safetensors"
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2376136?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": ""
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2553271?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": ""
+    },
+    {
+      "url": "https://civitai.com/api/download/models/2553151?type=Model&format=SafeTensor",
+      "dir": "loras",
+      "filename": ""
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/NSFW-22-H-e8.safetensors",
+      "dir": "loras",
+      "filename": "NSFW-22-H-e8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/NSFW-22-L-e8.safetensors",
+      "dir": "loras",
+      "filename": "NSFW-22-L-e8.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/ultimate_sex_000006500_high_noise.safetensors",
+      "dir": "loras",
+      "filename": "ultimate_sex_000006500_high_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/x-ray_i2v_low.safetensors",
+      "dir": "loras",
+      "filename": "x-ray_i2v_low.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/boorutaags.txt",
+      "dir": "loras",
+      "filename": "boorutaags.txt"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/x-ray_i2v_high.safetensors",
+      "dir": "loras",
+      "filename": "x-ray_i2v_high.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan22_i2v_futa_cowgirl_low_noise.safetensors",
+      "dir": "loras",
+      "filename": "wan22_i2v_futa_cowgirl_low_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan22_i2v_futa_cowgirl_high_noise.safetensors",
+      "dir": "loras",
+      "filename": "wan22_i2v_futa_cowgirl_high_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan22.r3v3rs3_c0wg1rl-14b-Low-i2v_e70.safetensors",
+      "dir": "loras",
+      "filename": "wan22.r3v3rs3_c0wg1rl-14b-Low-i2v_e70.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan22.r3v3rs3_c0wg1rl-14b-High-i2v_e70.safetensors",
+      "dir": "loras",
+      "filename": "wan22.r3v3rs3_c0wg1rl-14b-High-i2v_e70.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan22-ultimatedeepthroat-i2v-102epoc-high-k3nk.safetensors",
+      "dir": "loras",
+      "filename": "wan22-ultimatedeepthroat-i2v-102epoc-high-k3nk.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan2.2_i2v_lownoise_pov_missionary_v1.0.safetensors",
+      "dir": "loras",
+      "filename": "wan2.2_i2v_lownoise_pov_missionary_v1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan2.2_i2v_highnoise_pov_missionary_v1.0.safetensors",
+      "dir": "loras",
+      "filename": "wan2.2_i2v_highnoise_pov_missionary_v1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/st0m4chBulg3_FUSED_LN.safetensors",
+      "dir": "loras",
+      "filename": "st0m4chBulg3_FUSED_LN.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/st0m4chBulg3_FUSED_HN.safetensors",
+      "dir": "loras",
+      "filename": "st0m4chBulg3_FUSED_HN.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/slop_twerk_LowNoise_merged3_7_v2.safetensors",
+      "dir": "loras",
+      "filename": "slop_twerk_LowNoise_merged3_7_v2.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/slop_twerk_HighNoise_merged3_7_v2.safetensors",
+      "dir": "loras",
+      "filename": "slop_twerk_HighNoise_merged3_7_v2.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/reverse_suspended_congress_I2V_low.safetensors",
+      "dir": "loras",
+      "filename": "reverse_suspended_congress_I2V_low.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/reverse_suspended_congress_I2V_high.safetensors",
+      "dir": "loras",
+      "filename": "reverse_suspended_congress_I2V_high.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/pworship_low_noise.safetensors",
+      "dir": "loras",
+      "filename": "pworship_low_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/pworship_high_noise.safetensors",
+      "dir": "loras",
+      "filename": "pworship_high_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/mating_press_low.safetensors",
+      "dir": "loras",
+      "filename": "mating_press_low.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/mating_press_high.safetensors",
+      "dir": "loras",
+      "filename": "mating_press_high.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/livewallpaper_wan22_14b_i2v_low_model_0_1_e26.safetensors",
+      "dir": "loras",
+      "filename": "livewallpaper_wan22_14b_i2v_low_model_0_1_e26.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/huge-titfuck-low.safetensors",
+      "dir": "loras",
+      "filename": "huge-titfuck-low.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/huge-titfuck-high.safetensors",
+      "dir": "loras",
+      "filename": "huge-titfuck-high.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/Wan22_I2V_Jacko_Pose_j4ck0_HIGH.safetensors",
+      "dir": "loras",
+      "filename": "Wan22_I2V_Jacko_Pose_j4ck0_HIGH.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/WAN22_LowNoise_TransTwerk.safetensors",
+      "dir": "loras",
+      "filename": "WAN22_LowNoise_TransTwerk.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/WAN22_HighNoise_TransTwerk.safetensors",
+      "dir": "loras",
+      "filename": "WAN22_HighNoise_TransTwerk.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/WAN-2.2-I2V-Handjob-LOW-v1.safetensors",
+      "dir": "loras",
+      "filename": "WAN-2.2-I2V-Handjob-LOW-v1.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/WAN-2.2-I2V-Handjob-HIGH-v1.safetensors",
+      "dir": "loras",
+      "filename": "WAN-2.2-I2V-Handjob-HIGH-v1.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/DR34MJOB_I2V_14b_LowNoise.safetensors",
+      "dir": "loras",
+      "filename": "DR34MJOB_I2V_14b_LowNoise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/DR34MJOB_I2V_14b_HighNoise.safetensors",
+      "dir": "loras",
+      "filename": "DR34MJOB_I2V_14b_HighNoise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/wanlotest/resolve/main/wan22-ultimatedeepthroat-I2V-101epoc-low-k3nk.safetensors",
+      "dir": "loras",
+      "filename": "wan22-ultimatedeepthroat-I2V-101epoc-low-k3nk.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/22-nsfw-HIGH-e6.safetensors",
+      "dir": "loras",
+      "filename": "22-nsfw-HIGH-e6.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/smoothLoopv2_000002450_high_noise.safetensors",
+      "dir": "loras",
+      "filename": "smoothLoopv2_000002450_high_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/adbrasi/download_models/resolve/main/smoothLoopv2_000002450_low_noise.safetensors",
+      "dir": "loras",
+      "filename": "smoothLoopv2_000002450_low_noise.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/NSFW-API/NSFW-Wan-UMT5-XXL/resolve/main/nsfw_wan_umt5-xxl_fp8_scaled.safetensors?download=true",
+      "dir": "text_encoders",
+      "filename": "nsfw_wan_umt5-xxl_fp8_scaled.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/NullpoLab/AnimeGen-I2V-GGUF/resolve/main/I2V_low_noise_Q8_0.gguf?download=true",
+      "dir": "diffusion_models",
+      "filename": "I2V_low_noise_Q8_0.gguf"
+    },
+    {
+      "url": "https://huggingface.co/NullpoLab/AnimeGen-I2V-GGUF/resolve/main/I2V_high_noise_Q8_0.gguf?download=true",
+      "dir": "diffusion_models",
+      "filename": "I2V_high_noise_Q8_0.gguf"
+    },
+    {
+      "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan2_1_VAE_bf16.safetensors",
+      "dir": "vae",
+      "filename": "Wan2_1_VAE_bf16.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/adbrasi/groqrouter",
+    "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation",
+    "https://github.com/kijai/ComfyUI-GIMM-VFI",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/Artificial-Sweetener/comfyui-WhiteRabbit",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/WASasquatch/was-node-suite-comfyui",
+    "https://github.com/justUmen/Bjornulf_custom_nodes",
+    "https://github.com/mingsky-ai/ComfyUI-MingNodes",
+    "https://github.com/adbrasi/upavidito",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/raindrop313/ComfyUI-WanVideoStartEndFrames",
+    "https://github.com/MushroomFleet/DJZ-Nodes",
+    "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes",
+    "https://github.com/MoonGoblinDev/Civicomfy",
+    "https://github.com/GACLove/ComfyUI-VFI",
+    "https://github.com/city96/ComfyUI-GGUF"
+  ]
+}
