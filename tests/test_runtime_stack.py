@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -348,8 +349,20 @@ class CustomNodeRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             comfy_dir = Path(temp_dir)
             node_dir = comfy_dir / 'custom_nodes' / 'recover-node'
-            (node_dir / '.git').mkdir(parents=True)
+            node_dir.mkdir(parents=True)
             (node_dir / 'requirements.txt').write_text('example-package\n')
+            # A real checkout with a commit. A bare `.git` directory is what a
+            # clone killed mid-flight leaves behind, and treating that as
+            # installed is the bug that marks a node complete with its code
+            # absent — so the fixture must be a genuinely complete clone for the
+            # "resume requirements" behaviour to be the thing under test.
+            subprocess.run(['git', 'init', '-q'], cwd=node_dir, check=True)
+            subprocess.run(['git', 'add', 'requirements.txt'], cwd=node_dir, check=True)
+            subprocess.run(
+                ['git', '-c', 'user.email=t@t', '-c', 'user.name=t',
+                 'commit', '-qm', 'init'],
+                cwd=node_dir, check=True,
+            )
 
             with patch.object(start, 'COMFY_DIR', comfy_dir):
                 result = start.install_custom_nodes([url])
@@ -357,6 +370,38 @@ class CustomNodeRecoveryTests(unittest.TestCase):
         self.assertTrue(result['success'])
         run_pip.assert_called_once()
         state.add_node.assert_called_once_with(url)
+
+    @patch('start._pip_install_argv', return_value=['pip', 'install'])
+    @patch('start._run_pip_install_streaming', return_value=(0, ''))
+    @patch('start.get_state_manager')
+    def test_incomplete_clone_is_not_treated_as_installed(
+        self,
+        get_state_manager,
+        run_pip,
+        _pip_argv,
+    ):
+        """A bare `.git` left by a killed clone must not count as installed.
+
+        `_clone_node` used to accept the mere existence of a `.git` entry — true
+        for an empty directory or even a plain file — so a node cancelled
+        mid-clone stayed permanently "installed" with no code in it.
+        """
+        url = 'https://github.com/example/recover-node'
+        state = get_state_manager.return_value
+        state.is_node_installed.return_value = False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            comfy_dir = Path(temp_dir)
+            node_dir = comfy_dir / 'custom_nodes' / 'recover-node'
+            (node_dir / '.git').mkdir(parents=True)
+
+            self.assertFalse(start._git_checkout_is_complete(node_dir))
+
+            # A `.git` *file* is rejected too.
+            import shutil as _shutil
+            _shutil.rmtree(node_dir / '.git')
+            (node_dir / '.git').write_text('gitdir: /nowhere\n')
+            self.assertFalse(start._git_checkout_is_complete(node_dir))
 
     @patch('start._pip_install_argv', return_value=['pip', 'install'])
     @patch('start._run_pip_install_streaming', return_value=(1, 'failed'))

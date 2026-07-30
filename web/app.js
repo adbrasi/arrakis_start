@@ -55,7 +55,9 @@ function renderProgress(progress) {
     const panel = document.getElementById('progress-panel');
     if (!panel) return;
 
-    if (!progress || (!progress.active?.length && !progress.total && !progress.detail)) {
+    const stages = progress?.stages || {};
+    const stageNames = Object.keys(stages);
+    if (!progress || (!progress.active?.length && !progress.total && !stageNames.length)) {
         panel.hidden = true;
         return;
     }
@@ -63,10 +65,19 @@ function renderProgress(progress) {
 
     const stageEl = document.getElementById('progress-stage');
     if (stageEl) {
-        const counts = progress.total
-            ? ` (${progress.done}/${progress.total})`
-            : '';
-        stageEl.textContent = `${progress.stage || ''}${counts}${progress.detail ? ' — ' + progress.detail : ''}`;
+        // Lanes run concurrently (models download while nodes install), so each
+        // gets its own line rather than competing for one.
+        stageEl.textContent = '';
+        if (progress.total) {
+            const counts = document.createElement('div');
+            counts.textContent = `Modelos: ${progress.done}/${progress.total}`;
+            stageEl.appendChild(counts);
+        }
+        for (const lane of stageNames) {
+            const line = document.createElement('div');
+            line.textContent = `${lane}: ${stages[lane]}`;
+            stageEl.appendChild(line);
+        }
     }
 
     const list = document.getElementById('progress-files');

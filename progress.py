@@ -26,7 +26,10 @@ _lock = threading.RLock()
 
 _downloads: Dict[str, Dict[str, Any]] = {}
 _recent: list = []
-_stage: Dict[str, Any] = {'stage': 'idle', 'detail': ''}
+# One slot per lane, not one global slot: model downloads and custom-node
+# installs run concurrently, so a single slot means each lane overwrites the
+# other's message and the UI shows whichever wrote last.
+_stages: Dict[str, str] = {}
 _counts: Dict[str, int] = {'done': 0, 'total': 0}
 
 
@@ -35,15 +38,22 @@ def reset() -> None:
     with _lock:
         _downloads.clear()
         _recent.clear()
-        _stage.update({'stage': 'idle', 'detail': ''})
+        _stages.clear()
         _counts.update({'done': 0, 'total': 0})
 
 
 def set_stage(stage: str, detail: str = "") -> None:
-    """Record the coarse install phase (models, nodes, pip, runtime...)."""
+    """Record the current message for one install lane.
+
+    ``stage`` names the lane (``models``, ``nodes``, ``pip``, ``runtime``).
+    An empty ``detail`` clears that lane.
+    """
+    lane = str(stage or '').strip() or 'geral'
     with _lock:
-        _stage['stage'] = str(stage)
-        _stage['detail'] = str(detail)
+        if detail:
+            _stages[lane] = str(detail)
+        else:
+            _stages.pop(lane, None)
 
 
 def set_counts(done: int, total: int) -> None:
@@ -88,8 +98,7 @@ def snapshot() -> Dict[str, Any]:
     """Return a deep-enough copy for JSON serialization."""
     with _lock:
         return {
-            'stage': _stage['stage'],
-            'detail': _stage['detail'],
+            'stages': dict(_stages),
             'done': _counts['done'],
             'total': _counts['total'],
             'active': [dict(e) for e in _downloads.values()],

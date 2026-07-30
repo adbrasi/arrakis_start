@@ -411,7 +411,9 @@ class DownloadManager:
         if not text:
             return ''
         result = str(text)
-        for secret in (self.hf_token, self.civitai_token):
+        # getattr: this runs on the failure/logging path, which must never raise
+        # and mask the error it is trying to report.
+        for secret in (getattr(self, 'hf_token', ''), getattr(self, 'civitai_token', '')):
             if secret and len(str(secret)) >= 8:
                 result = result.replace(str(secret), '<redacted>')
         # Catch tokens embedded in query strings even if the value differs from
