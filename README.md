@@ -247,10 +247,13 @@ terminal status is confirmed.
 
 ### Stall warnings and progress
 
-- `sem bytes novos ... há 30s` is a warning; the backend is interrupted only at
-  the full timeout (120 seconds by default).
-- When the timeout is reached, Arrakis preserves the partial and tries the HTTP
-  backend.
+- XET can fetch and reconstruct chunks without continuously growing the local
+  staging file. Arrakis reports this preparation as an informational heartbeat
+  and does not terminate XET because of local disk silence.
+- HTTP downloads still use the disk-stall timeout (120 seconds by default).
+- HTTP fallback starts only when the XET process exits unsuccessfully.
+- `DOWNLOAD_OVERALL_STALL_SECONDS` remains the hard batch safety limit when no
+  model completes at all (1800 seconds by default).
 - HF progress is isolated per file and capped at 100%; parallel files no longer
   contribute to each other's byte count.
 - If a model or custom node fails, ComfyUI may still start, but that preset stays

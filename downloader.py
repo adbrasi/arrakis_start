@@ -701,15 +701,15 @@ class DownloadManager:
             return None
 
     def _run_disk_watchdog(self, process, staging_dir, final_path, filename,
-                           expected_size, stall_state):
-        """Authoritative progress + stall signal = BYTES WRITTEN TO DISK.
+                           expected_size, stall_state, *,
+                           terminate_on_stall=True, backend_label="HTTP"):
+        """Observe local download bytes and optionally enforce an HTTP stall limit.
 
-        This replaces scraping the CLI's stdout (the hf_xet/tqdm bar goes to stderr
-        and is throttled/absent on a non-TTY pipe, which left us blind). Disk bytes
-        are backend-agnostic (XET and HTTP stream the same *.incomplete file) and
-        version-independent. Resets the stall clock on any growth (size OR
-        allocation), emits throttled progress, and stops the process (SIGINT→SIGKILL)
-        when no new bytes land for the stall timeout."""
+        HTTP writes continuously to its local ``*.incomplete`` payload, so disk
+        silence is a valid stall signal there. XET may fetch/reconstruct chunks
+        before the local staging path grows, so its observer reports liveness but
+        leaves failure detection to the XET subprocess and the batch hard timeout.
+        """
         to = self.aria2_stall_timeout_seconds
         warn_after = max(30, to // 4) if to > 0 else 0
         poll = 3.0
@@ -753,12 +753,19 @@ class DownloadManager:
             else:
                 stalled_for = now - stall_state['last_progress']
                 if warn_after and not warned and stalled_for > warn_after:
-                    logger.warning(
-                        f"  ⚠ {filename}: sem bytes novos em disco há {stalled_for:.0f}s "
-                        f"(timeout em {to}s)"
-                    )
+                    if terminate_on_stall:
+                        logger.warning(
+                            f"  ⚠ {filename}: sem bytes novos em disco há {stalled_for:.0f}s "
+                            f"(timeout em {to}s)"
+                        )
+                    else:
+                        logger.info(
+                            f"  ↳ {filename}: {backend_label} ativo; "
+                            "preparando/transferindo sem crescimento visível "
+                            "no staging local"
+                        )
                     warned = True
-                if to > 0 and stalled_for > to:
+                if terminate_on_stall and to > 0 and stalled_for > to:
                     stall_state['killed'] = True
                     logger.error(
                         f"Stall em disco para {filename} (sem bytes novos por {to}s), "
@@ -1384,12 +1391,10 @@ class DownloadManager:
     def _download_hf_direct(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
         """Download from HuggingFace via `hf download` (hf_xet backend).
 
-        Progress and stall detection are driven by BYTES WRITTEN TO DISK (the
-        *.incomplete file under <dest_dir>/.cache/huggingface/download/), NOT by
-        scraping the CLI's stdout: the hf_xet/tqdm bar goes to stderr and is
-        throttled/absent on a non-TTY pipe, which used to leave us blind. The disk
-        signal is backend-agnostic (XET and HTTP write the same file) and version
-        independent. The process is stopped with SIGINT so hf_xet aborts cleanly.
+        Local disk bytes provide best-effort progress, but never decide that XET
+        failed: XET may fetch and reconstruct chunks before its local staging path
+        grows. The subprocess exit status is authoritative, while cancellation
+        still uses SIGINT so hf_xet can abort cleanly.
         """
         clean_url = url.split('?', 1)[0]
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', clean_url)
@@ -1442,6 +1447,10 @@ class DownloadManager:
             watchdog = threading.Thread(
                 target=self._run_disk_watchdog,
                 args=(process, staging_dir, final_path, filename, expected_size, stall_state),
+                kwargs={
+                    'terminate_on_stall': False,
+                    'backend_label': 'XET',
+                },
                 daemon=True,
             )
             watchdog.start()
@@ -1472,9 +1481,8 @@ class DownloadManager:
             except Exception:
                 pass
 
-            killed = stall_state['killed']
-            # Salvage: if the file actually landed (success, or killed right as it
-            # finished), finalize it instead of forcing a needless fallback.
+            # Finalize any payload that landed. A non-zero XET exit is the only
+            # transfer failure signal that enables the slower HTTP fallback.
             if process.returncode == 0 or final_path.exists() or target.exists():
                 ok, reason = self._finalize_hf_file(
                     work_dir, file_path, filename, target, final_path, expected_size
@@ -1487,12 +1495,9 @@ class DownloadManager:
                         f"{self._speed_suffix(target, elapsed)}"
                     )
                     return True, ""
-                if process.returncode == 0 and not killed:
+                if process.returncode == 0:
                     return False, reason
 
-            if killed:
-                r = f"hf_cli_stall_timeout_{self.aria2_stall_timeout_seconds}s"
-                return False, (f"{r} | tail: {' || '.join(tail)}" if tail else r)
             logger.error(f"HF download failed with code {process.returncode}")
             r = f"hf_cli_exit_{process.returncode}"
             return False, (f"{r} | tail: {' || '.join(tail)}" if tail else r)

@@ -7,6 +7,14 @@ from unittest.mock import patch
 from downloader import DownloadManager
 
 
+class _ProcessSequence:
+    def __init__(self, states):
+        self._states = iter(states)
+
+    def poll(self):
+        return next(self._states)
+
+
 class DownloadStagingTests(unittest.TestCase):
     def _manager(self, models_dir: Path) -> DownloadManager:
         manager = DownloadManager.__new__(DownloadManager)
@@ -147,6 +155,31 @@ class DownloadStagingTests(unittest.TestCase):
         download.assert_called_once()
         self.assertEqual(manager.failures, [])
         self.assertFalse(any('retrying' in line for line in captured.output))
+
+    def test_xet_observer_does_not_kill_live_process_on_local_disk_silence(self):
+        manager = self._manager(Path('/tmp/models'))
+        manager._cancelled = False
+        manager.aria2_stall_timeout_seconds = 1
+        state = {'last_progress': 0.0, 'killed': False, 'last_bytes': 0}
+        process = _ProcessSequence([None, 0])
+
+        with patch.object(manager, '_tree_bytes', return_value=(0, 0)), \
+                patch.object(manager, '_terminate_process') as terminate, \
+                patch('downloader.time.sleep'), \
+                patch('downloader.time.monotonic', side_effect=[0.0, 2.0]):
+            manager._run_disk_watchdog(
+                process,
+                Path('/tmp/staging'),
+                Path('/tmp/final'),
+                'model.safetensors',
+                1024,
+                state,
+                terminate_on_stall=False,
+                backend_label='XET',
+            )
+
+        terminate.assert_not_called()
+        self.assertFalse(state['killed'])
 
     def test_deterministic_404_is_not_retried(self):
         manager = self._manager(Path('/tmp/models'))
