@@ -228,6 +228,11 @@ After cancellation, select the same presets and install again:
 - cloned custom nodes resume `requirements.txt` when needed;
 - no second final copy of a model is created.
 
+During custom-node requirements installation, Arrakis forwards every non-empty
+`uv`/`pip` phase line. If the backend is silent, the heartbeat reports process
+tree CPU, I/O, RAM, and child count; it explicitly says when no activity is
+detectable instead of only printing `still working`.
+
 Running `bootstrap.sh` again is also safe. Existing venvs and the checkout are
 reused, ComfyUI is not cloned again when `main.py` exists, and synchronized
 requirements are skipped. Bootstrap may update packages and the checkout, but
@@ -252,9 +257,15 @@ and its confirmation dialog states this before proceeding.
 
 ### Stall warnings and progress
 
-- XET can fetch and reconstruct chunks without continuously growing the local
-  staging file. Arrakis reports this preparation as an informational heartbeat
-  and does not terminate XET because of local disk silence.
+- XET runs in a killable `huggingface_hub` worker and reports its official
+  transfer and reconstruction callbacks as `[XET/rede]` and `[XET/arquivo]`,
+  including bytes, percentage, and speed when available.
+- If a future `huggingface_hub` release changes the progress callback API, the
+  same worker retries without the callback and keeps XET active with the same
+  partial cache. HTTP is used only if the XET download itself fails.
+- Before the first callback, XET may prepare chunks without growing the local
+  staging file. Arrakis reports that phase as an informational heartbeat and
+  does not terminate XET because of local disk silence.
 - HTTP downloads still use the disk-stall timeout (120 seconds by default).
 - HTTP fallback starts only when the XET process exits unsuccessfully.
 - `DOWNLOAD_OVERALL_STALL_SECONDS` remains the hard batch safety limit when no

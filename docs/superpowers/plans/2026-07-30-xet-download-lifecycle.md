@@ -4,7 +4,14 @@
 
 **Goal:** Preserve XET as the fast Hugging Face path, deduplicate model work, make cancellation terminal, and make Shutdown delete only incomplete model data.
 
-**Architecture:** `DownloadManager` remains the single owner of model transfer state. XET keeps the disk observer for progress only, while HTTP retains disk-stall termination. Queue normalization happens before worker submission, and cancellation carries an explicit `delete_partials` policy from the server through `start.py` to the downloader.
+**Architecture:** `DownloadManager` remains the single owner of model transfer
+state. XET runs in a killable `huggingface_hub` subprocess that emits official
+transfer/reconstruction callbacks as structured events; its disk observer is a
+liveness fallback only. If the callback API changes, the worker retries with
+the same XET cache and no callback before considering HTTP. HTTP retains
+disk-stall termination. Queue normalization happens before worker submission,
+and cancellation carries an explicit `delete_partials` policy from the server
+through `start.py` to the downloader.
 
 **Tech Stack:** Python 3.12, `unittest`, `huggingface_hub`/`hf_xet`, browser JavaScript, Git.
 
@@ -506,11 +513,14 @@ checkpoints on `main`.
 - [ ] **Step 4: Provide the pod acceptance check**
 
 The handoff must instruct the user to update/restart Arrakis, select the same
-presets, and verify these log invariants:
+presets, and verify the queue/XET start plus at least one detailed progress or
+preparation heartbeat line:
 
 ```text
-Fila de modelos: 58 entradas, 47 destinos únicos (11 duplicatas removidas)
+Fila de modelos: <entradas> entradas, <destinos> destinos únicos
 HuggingFace [XET]
+arquivo.safetensors [XET/rede]: 1.0GB recebidos @ 100MB/s
+arquivo.safetensors [XET/arquivo]: 50% (5.0GB/10.0GB) @ 200MB/s
 XET ativo; preparando/transferindo sem crescimento visível no staging local
 ```
 

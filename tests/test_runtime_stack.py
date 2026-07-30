@@ -101,7 +101,7 @@ class PipInstallStreamingTests(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertEqual(last_line, '')
         self.assertTrue(
-            any('still working' in message for message in captured.output)
+            any('[silent-node pip] ativo' in message for message in captured.output)
         )
 
     def test_silent_process_is_killed_at_timeout(self):
@@ -119,6 +119,55 @@ class PipInstallStreamingTests(unittest.TestCase):
         self.assertEqual(returncode, -1)
         self.assertLess(time.monotonic() - started_at, 2)
         self.assertTrue(any('timeout after' in message for message in captured.output))
+
+    def test_pip_phase_output_is_not_discarded(self):
+        command = [
+            sys.executable,
+            '-c',
+            "print('Resolved 8 packages', flush=True)",
+        ]
+
+        with self.assertLogs(start.logger, level='INFO') as captured:
+            returncode, _ = start._run_pip_install_streaming(
+                command,
+                'phase-node',
+                heartbeat_interval=1,
+                timeout_sec=2,
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertTrue(
+            any('Resolved 8 packages' in message for message in captured.output)
+        )
+
+    def test_silent_active_process_reports_cpu_or_io_activity(self):
+        command = [
+            sys.executable,
+            '-c',
+            (
+                'import time\n'
+                'end = time.monotonic() + 0.3\n'
+                'value = 0\n'
+                'while time.monotonic() < end:\n'
+                '    value += 1\n'
+            ),
+        ]
+
+        with self.assertLogs(start.logger, level='INFO') as captured:
+            returncode, _ = start._run_pip_install_streaming(
+                command,
+                'active-node',
+                heartbeat_interval=0.05,
+                timeout_sec=2,
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertTrue(
+            any(
+                'CPU +' in message or 'I/O +' in message
+                for message in captured.output
+            )
+        )
 
     def test_active_pip_process_is_stopped_by_install_cancel(self):
         self.assertTrue(start.reserve_install_slot())

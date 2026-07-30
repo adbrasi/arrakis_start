@@ -14,12 +14,17 @@ import time
 import hashlib
 from collections import deque
 from pathlib import Path
-from typing import List, Dict, Optional, Callable, Tuple
+from typing import Any, List, Dict, Optional, Callable, Tuple
 from urllib.parse import urlparse, unquote, parse_qsl, urlencode, urlunparse, urljoin
 import shutil
 import re
 import threading
 import requests
+from hf_xet_worker import (
+    COMPAT_PREFIX as XET_COMPAT_PREFIX,
+    EVENT_PREFIX as XET_PROGRESS_PREFIX,
+)
+
 try:
     from websocket_server import send_download_progress, send_log_message
     HAS_WEBSOCKET = True
@@ -583,8 +588,48 @@ class DownloadManager:
             else:
                 buf += chunk
 
+    @staticmethod
+    def _parse_hf_xet_progress(line: str) -> Optional[Dict[str, Any]]:
+        """Parse one structured progress event emitted by hf_xet_worker.py."""
+        if not line.startswith(XET_PROGRESS_PREFIX):
+            return None
+        try:
+            payload = json.loads(line[len(XET_PROGRESS_PREFIX):])
+            phase = str(payload.get('phase') or '')
+            current = max(0, int(payload.get('current') or 0))
+            total = max(0, int(payload.get('total') or 0))
+            speed = max(0.0, float(payload.get('speed') or 0.0))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+        phase_lower = phase.lower()
+        if 'reconstruct' in phase_lower:
+            kind = 'reconstruction'
+        elif 'download' in phase_lower or 'transfer' in phase_lower:
+            kind = 'transfer'
+        else:
+            kind = 'progress'
+        percent = (current / total * 100.0) if total > 0 else 0.0
+        return {
+            'kind': kind,
+            'current': current,
+            'total': total,
+            'speed': speed,
+            'percent': percent,
+        }
+
+    @staticmethod
+    def _fmt_bytes(size: float) -> str:
+        if size >= 1_073_741_824:
+            return f"{size / 1_073_741_824:.1f}GB"
+        if size >= 1_048_576:
+            return f"{size / 1_048_576:.0f}MB"
+        if size >= 1024:
+            return f"{size / 1024:.0f}KB"
+        return f"{size:.0f}B"
+
     # ------------------------------------------------------------------ #
-    # Robust progress/stall primitives (bytes-on-disk, not stdout scraping)
+    # Robust progress/stall primitives (structured XET + HTTP disk observer)
     # ------------------------------------------------------------------ #
 
     def _hf_python(self) -> str:
@@ -1365,15 +1410,15 @@ class DownloadManager:
             logger.error(reason)
             return False, reason, 'precheck'
 
-        # HuggingFace priority: try HF CLI first (supports hf_xet for max speed).
+        # HuggingFace priority: use the killable hf_xet worker first.
         if 'huggingface.co' in url and self.hf_cli_path:
             result, reason = self._download_hf_direct(url, dest_dir, filename)
-            self._record_attempt(url, 'hf-cli', result, reason)
+            self._record_attempt(url, 'hf-xet', result, reason)
             if result:
-                return True, 'ok', 'hf-cli'
+                return True, 'ok', 'hf-xet'
             if self._cancelled:
                 return False, 'cancelled_by_user', 'cancel'
-            # Fallback to huggingface_hub API before generic downloaders
+            # Only after XET itself fails, use Hub HTTP before generic downloaders.
             hub_ok, hub_reason = self._download_hf_via_python(url, dest_dir, filename)
             self._record_attempt(url, 'hf-hub-python', hub_ok, hub_reason)
             if hub_ok:
@@ -1477,12 +1522,11 @@ class DownloadManager:
         return authenticated_url
     
     def _download_hf_direct(self, url: str, dest_dir: Path, filename: str) -> Tuple[bool, str]:
-        """Download from HuggingFace via `hf download` (hf_xet backend).
+        """Download via a killable huggingface_hub subprocess using hf_xet.
 
-        Local disk bytes provide best-effort progress, but never decide that XET
-        failed: XET may fetch and reconstruct chunks before its local staging path
-        grows. The subprocess exit status is authoritative, while cancellation
-        still uses SIGINT so hf_xet can abort cleanly.
+        The worker supplies an official tqdm-compatible callback that emits
+        structured network/reconstruction progress even though stdout is a pipe.
+        Local disk bytes remain a fallback heartbeat, never a failure signal.
         """
         clean_url = url.split('?', 1)[0]
         match = re.search(r'huggingface\.co/([^/]+/[^/]+)/resolve/([^/]+)/(.+)', clean_url)
@@ -1512,8 +1556,12 @@ class DownloadManager:
         work_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [
-            self.hf_cli_path, 'download', repo_id, file_path,
-            '--revision', branch, '--local-dir', str(work_dir),
+            self._hf_python(),
+            str(ARRAKIS_DIR / 'hf_xet_worker.py'),
+            repo_id,
+            file_path,
+            branch,
+            str(work_dir),
         ]
 
         staging_dir = self._hf_staging_dir(work_dir)
@@ -1543,12 +1591,54 @@ class DownloadManager:
             )
             watchdog.start()
 
-            # Drain stdout so the pipe never blocks; surface only error/auth lines.
-            # Progress and stalls are handled by the disk watchdog (above).
+            last_progress_log = {}
             for line in self._read_lines_cr_aware(process.stdout):
                 stripped = line.strip()
-                if not stripped or stripped.startswith('|') or '%|' in stripped:
+                if not stripped:
                     continue
+                progress = self._parse_hf_xet_progress(stripped)
+                if progress is not None:
+                    if progress['current'] <= 0:
+                        continue
+                    now = time.monotonic()
+                    stall_state['last_progress'] = now
+                    kind = progress['kind']
+                    last_logged = last_progress_log.get(kind, 0.0)
+                    if now - last_logged < 5 and progress['percent'] < 100:
+                        continue
+
+                    speed = self._fmt_speed(progress['speed'])
+                    current = self._fmt_bytes(progress['current'])
+                    if kind == 'reconstruction' and progress['total'] > 0:
+                        total = self._fmt_bytes(progress['total'])
+                        logger.info(
+                            f"  ↓ {filename} [XET/arquivo]: "
+                            f"{progress['percent']:.0f}% "
+                            f"({current}/{total}) @ {speed}"
+                        )
+                        if HAS_WEBSOCKET:
+                            send_download_progress(
+                                filename,
+                                progress['percent'],
+                                speed,
+                                "",
+                            )
+                    else:
+                        logger.info(
+                            f"  ↓ {filename} [XET/rede]: "
+                            f"{current} recebidos @ {speed}"
+                        )
+                    last_progress_log[kind] = now
+                    continue
+
+                if stripped.startswith(XET_COMPAT_PREFIX):
+                    detail = stripped[len(XET_COMPAT_PREFIX):]
+                    logger.info(
+                        f"  ↳ {filename}: API de progresso mudou; "
+                        f"mantendo XET ativo no modo compatível ({detail})"
+                    )
+                    continue
+
                 tail.append(stripped)
                 low = stripped.lower()
                 if any(kw in low for kw in (
@@ -1587,7 +1677,7 @@ class DownloadManager:
                     return False, reason
 
             logger.error(f"HF download failed with code {process.returncode}")
-            r = f"hf_cli_exit_{process.returncode}"
+            r = f"hf_xet_exit_{process.returncode}"
             return False, (f"{r} | tail: {' || '.join(tail)}" if tail else r)
 
         except Exception as e:

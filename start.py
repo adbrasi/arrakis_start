@@ -486,7 +486,7 @@ def _pip_install_argv(args: List[str], target_python: Optional[str] = None) -> L
     py = target_python or _comfy_python()
     uv = shutil.which('uv')
     if uv:
-        return [uv, 'pip', 'install', '--python', py, *args]
+        return [uv, 'pip', 'install', '--color', 'never', '--python', py, *args]
     return [py, '-m', 'pip', 'install', *args]
 
 
@@ -1220,6 +1220,50 @@ def uninstall_preset(preset_name: str) -> Dict[str, Any]:
     }
 
 
+def _process_activity_snapshot(pid: int) -> Optional[Dict[str, float]]:
+    """Aggregate CPU, I/O, RAM, and child count for one process tree."""
+    try:
+        import psutil
+        root = psutil.Process(pid)
+        processes = [root, *root.children(recursive=True)]
+    except Exception:
+        return None
+
+    cpu_seconds = 0.0
+    io_bytes = 0.0
+    rss_bytes = 0.0
+    live_processes = 0
+    for process in processes:
+        try:
+            cpu = process.cpu_times()
+            cpu_seconds += cpu.user + cpu.system
+            io = process.io_counters()
+            storage_io = io.read_bytes + io.write_bytes
+            character_io = io.read_chars + io.write_chars
+            io_bytes += max(storage_io, character_io)
+            rss_bytes += process.memory_info().rss
+            live_processes += 1
+        except Exception:
+            continue
+
+    return {
+        'cpu_seconds': cpu_seconds,
+        'io_bytes': io_bytes,
+        'rss_bytes': rss_bytes,
+        'processes': float(live_processes),
+    }
+
+
+def _format_activity_bytes(size: float) -> str:
+    if size >= 1_073_741_824:
+        return f"{size / 1_073_741_824:.1f}GB"
+    if size >= 1_048_576:
+        return f"{size / 1_048_576:.0f}MB"
+    if size >= 1024:
+        return f"{size / 1024:.0f}KB"
+    return f"{size:.0f}B"
+
+
 def _run_pip_install_streaming(
     cmd: List[str],
     node_name: str,
@@ -1255,6 +1299,7 @@ def _run_pip_install_streaming(
 
     started_at = time.monotonic()
     last_log_at = started_at
+    last_activity = _process_activity_snapshot(proc.pid)
     last_line = ""
     timed_out = False
     cancelled = False
@@ -1295,23 +1340,41 @@ def _run_pip_install_streaming(
                 line = line.rstrip()
                 if line:
                     last_line = line
-                    lower = line.lower()
-                    if any(
-                        keyword in lower
-                        for keyword in (
-                            'error', 'warning', 'fail', 'collecting',
-                            'downloading', 'building'
-                        )
-                    ):
-                        logger.info(f"[{node_name} pip] {line}")
-                        last_log_at = time.monotonic()
+                    logger.info(f"[{node_name} pip] {line}")
+                    last_log_at = time.monotonic()
 
             now = time.monotonic()
             if proc.poll() is None and now - last_log_at >= heartbeat_interval:
-                logger.info(
-                    f"[{node_name} pip] still working... "
-                    f"({now - started_at:.0f}s elapsed)"
-                )
+                activity = _process_activity_snapshot(proc.pid)
+                if activity is not None and last_activity is not None:
+                    cpu_delta = max(
+                        0.0,
+                        activity['cpu_seconds'] - last_activity['cpu_seconds'],
+                    )
+                    io_delta = max(
+                        0.0,
+                        activity['io_bytes'] - last_activity['io_bytes'],
+                    )
+                    if cpu_delta >= 0.01 or io_delta >= 1024:
+                        logger.info(
+                            f"[{node_name} pip] ativo: CPU +{cpu_delta:.1f}s, "
+                            f"I/O +{_format_activity_bytes(io_delta)}, "
+                            f"RAM {_format_activity_bytes(activity['rss_bytes'])}, "
+                            f"processos={int(activity['processes'])} "
+                            f"({now - started_at:.0f}s)"
+                        )
+                    else:
+                        logger.info(
+                            f"[{node_name} pip] ativo, mas sem nova saída/CPU/I/O "
+                            f"detectável nos últimos {heartbeat_interval}s "
+                            f"({now - started_at:.0f}s)"
+                        )
+                else:
+                    logger.info(
+                        f"[{node_name} pip] ativo sem telemetria disponível "
+                        f"({now - started_at:.0f}s)"
+                    )
+                last_activity = activity
                 last_log_at = now
 
             if reader_done.is_set() and output_queue.empty() and proc.poll() is not None:

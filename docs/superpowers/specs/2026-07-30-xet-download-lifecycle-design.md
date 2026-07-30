@@ -24,7 +24,13 @@ contract for incomplete model data.
 
 ### XET
 
-- `hf download` with `hf_xet` remains the first Hugging Face backend.
+- A killable `huggingface_hub` subprocess with `hf_xet` remains the first
+  Hugging Face backend.
+- The worker forwards the official XET transfer and reconstruction callbacks
+  as structured events, so Arrakis can report bytes, percentage, and speed even
+  when subprocess output is piped.
+- A callback `TypeError`/`AttributeError` triggers a compatibility retry without
+  the callback, reusing the same XET partial cache. It does not disable XET.
 - The local disk watchdog may report progress and heartbeat information, but
   it must not terminate XET solely because staging bytes did not grow.
 - HTTP fallback starts only after the XET subprocess exits unsuccessfully.
@@ -69,8 +75,13 @@ cleanup, avoiding deletion while a worker can still write.
 
 ## Logging Contract
 
+- XET network and reconstruction callbacks are reported separately as
+  `[XET/rede]` and `[XET/arquivo]`.
 - XET preparation without local byte growth is logged as an informational
   heartbeat, not a warning or error.
+- Custom-node `uv`/`pip` output is forwarded without discarding resolver and
+  installation phases. Silent heartbeats report CPU, I/O, RAM, and process
+  count, or explicitly state that no activity is detectable.
 - `cancelled_by_user` is terminal and produces no retry message.
 - Cancelled queued work is not counted as a concluded download.
 - Cancellation receives its own summary, separate from success/failure.
@@ -88,7 +99,9 @@ Automated tests will prove:
 5. Cancel preserves partials;
 6. Shutdown deletes partials only after cancellation and preserves completed
    final models;
-7. the complete existing test suite remains green.
+7. structured XET callbacks are parsed into network/reconstruction progress;
+8. pip phases and silent-process telemetry remain visible;
+9. the complete existing test suite remains green.
 
 ## Non-Goals
 

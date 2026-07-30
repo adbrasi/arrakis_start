@@ -181,6 +181,22 @@ class DownloadStagingTests(unittest.TestCase):
         terminate.assert_not_called()
         self.assertFalse(state['killed'])
 
+    def test_parses_structured_xet_reconstruction_progress(self):
+        manager = self._manager(Path('/tmp/models'))
+        line = (
+            'ARRAKIS_XET_PROGRESS '
+            '{"phase":"model.safetensors: reconstructing file",'
+            '"current":52428800,"total":104857600,"speed":10485760}'
+        )
+
+        progress = manager._parse_hf_xet_progress(line)
+
+        self.assertEqual(progress['kind'], 'reconstruction')
+        self.assertEqual(progress['current'], 52_428_800)
+        self.assertEqual(progress['total'], 104_857_600)
+        self.assertEqual(progress['percent'], 50.0)
+        self.assertEqual(progress['speed'], 10_485_760)
+
     def test_cleanup_partials_preserves_completed_models(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             models_dir = Path(temp_dir) / 'models'
