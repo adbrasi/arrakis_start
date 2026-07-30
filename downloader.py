@@ -1022,6 +1022,9 @@ class DownloadManager:
             if ok:
                 return True
 
+            if self._cancelled or stage == 'cancel' or reason == 'cancelled_by_user':
+                return False
+
             retryable = self._is_retryable_failure(stage, reason)
             if attempt < max_retries and retryable:
                 logger.warning(
@@ -1047,6 +1050,48 @@ class DownloadManager:
 
         return False
 
+    @staticmethod
+    def _deduplicate_downloads(downloads: List[Dict]) -> Tuple[List[Dict], int]:
+        """Collapse identical model destinations and reject source conflicts."""
+        unique: List[Dict] = []
+        seen_destinations: Dict[Tuple[str, str], Dict] = {}
+        seen_unnamed_sources = set()
+        removed = 0
+
+        for item in downloads:
+            url = str(item.get('url') or '').strip()
+            directory = str(item.get('dir') or '').strip().replace('\\', '/').strip('/')
+            filename = str(item.get('filename') or '').strip()
+
+            # Content-Disposition downloads do not have a known destination name
+            # yet. They are safe to collapse only when their source is identical.
+            if not filename:
+                source_key = (directory, url.split('?', 1)[0])
+                if source_key in seen_unnamed_sources:
+                    removed += 1
+                    continue
+                seen_unnamed_sources.add(source_key)
+                unique.append(item)
+                continue
+
+            key = (directory, filename)
+            previous = seen_destinations.get(key)
+            if previous is None:
+                seen_destinations[key] = item
+                unique.append(item)
+                continue
+
+            previous_url = str(previous.get('url') or '').strip().split('?', 1)[0]
+            current_url = url.split('?', 1)[0]
+            if previous_url != current_url:
+                raise ValueError(
+                    f"Conflicting model sources for {directory}/{filename}: "
+                    f"{previous_url} != {current_url}"
+                )
+            removed += 1
+
+        return unique, removed
+
     def download_all(self, downloads: List[Dict]) -> bool:
         """Download all files in the list, running up to parallel_downloads at once."""
         from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -1056,6 +1101,19 @@ class DownloadManager:
         skipped = len(downloads) - len(valid_downloads)
         if skipped:
             logger.warning(f"Skipped {skipped} item(s) with no URL")
+
+        raw_total = len(valid_downloads)
+        try:
+            valid_downloads, duplicate_count = self._deduplicate_downloads(valid_downloads)
+        except ValueError as e:
+            logger.error(f"Fila de modelos inválida: {e}")
+            return False
+        if duplicate_count:
+            logger.info(
+                f"Fila de modelos: {raw_total} entradas, "
+                f"{len(valid_downloads)} destinos únicos "
+                f"({duplicate_count} duplicatas removidas)"
+            )
 
         total = len(valid_downloads)
         self.failures = []
@@ -1094,6 +1152,11 @@ class DownloadManager:
         try:
             while pending:
                 done_set, pending = wait(pending, timeout=overall_stall, return_when=FIRST_COMPLETED)
+                if self._cancelled:
+                    for future in pending:
+                        future.cancel()
+                    aborted = True
+                    break
                 if not done_set:
                     # Nothing finished within the window → the rest are stuck.
                     stuck = sorted(future_to_idx[f] for f in pending)
@@ -1138,6 +1201,15 @@ class DownloadManager:
             # On abort, don't block on the stuck worker threads (cancel() killed
             # their subprocesses, so they'll unwind shortly on their own).
             executor.shutdown(wait=not aborted, cancel_futures=True)
+
+        if self._cancelled:
+            self._report_progress(
+                f"Downloads cancelados: {success_count}/{total} modelos concluídos; "
+                "arquivos parciais preservados",
+                success_count,
+                total,
+            )
+            return False
 
         self._report_progress(
             f"Downloaded {success_count}/{total} files successfully", total, total

@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -92,6 +93,60 @@ class DownloadStagingTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertEqual((reason, stage), ('cancelled_by_user', 'cancel'))
             fallback.assert_not_called()
+
+    def test_identical_destinations_are_scheduled_once(self):
+        manager = self._manager(Path('/tmp/models'))
+        item = {
+            'url': 'https://huggingface.co/org/repo/resolve/main/model.safetensors',
+            'dir': 'loras',
+            'filename': 'model.safetensors',
+        }
+
+        unique, removed = manager._deduplicate_downloads([item, dict(item)])
+
+        self.assertEqual(unique, [item])
+        self.assertEqual(removed, 1)
+
+    def test_conflicting_sources_for_one_destination_are_rejected(self):
+        manager = self._manager(Path('/tmp/models'))
+        first = {
+            'url': 'https://example.com/one',
+            'dir': 'loras',
+            'filename': 'same.bin',
+        }
+        second = {
+            'url': 'https://example.com/two',
+            'dir': 'loras',
+            'filename': 'same.bin',
+        }
+
+        with self.assertRaisesRegex(ValueError, 'same.bin'):
+            manager._deduplicate_downloads([first, second])
+
+    def test_cancelled_download_is_not_retried_or_recorded_as_failure(self):
+        manager = self._manager(Path('/tmp/models'))
+        manager._cancelled = False
+        manager._failures_lock = threading.Lock()
+        manager.failures = []
+        manager.progress_callback = None
+
+        def cancelled(*_args):
+            manager._cancelled = True
+            return False, 'cancelled_by_user', 'cancel'
+
+        item = {
+            'url': 'https://example.com/model',
+            'dir': 'loras',
+            'filename': 'model.bin',
+        }
+        with self.assertLogs('downloader', level='INFO') as captured, \
+                patch.object(manager, '_download_file', side_effect=cancelled) as download:
+            result = manager._download_one_with_retry(item, '[1/1]')
+
+        self.assertFalse(result)
+        download.assert_called_once()
+        self.assertEqual(manager.failures, [])
+        self.assertFalse(any('retrying' in line for line in captured.output))
 
     def test_deterministic_404_is_not_retried(self):
         manager = self._manager(Path('/tmp/models'))
