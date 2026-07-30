@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Arrakis Start - Bootstrap Script
 # One-liner entry point for ComfyUI deployment on VastAI/Runpod
+#
+# This file is consumed as `curl -L ... | bash`, so EVERY statement lives inside a
+# function. bash runs each complete command as soon as it arrives from the stream:
+# with a top-level body, a connection that dies halfway through the download would
+# execute the first half of the deploy (including the destructive template cleanup)
+# and still exit 0. The only top-level statement is `main "$@"` on the very last
+# line, which a truncated download can never reach.
 
 set -euo pipefail
 
@@ -15,6 +22,14 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 log_error() { echo -e "${RED}[✗]${NC} $1"; }
+
+# Abort the deploy loudly. Used only for conditions that make everything after it
+# pointless (no ComfyUI, no venv, no repo) — a bootstrap that keeps going after one
+# of those ends with a green "Bootstrap complete!" over a broken instance.
+die() {
+    log_error "$1"
+    exit 1
+}
 
 run_with_progress() {
     local label="$1"
@@ -63,6 +78,41 @@ paths_match() {
     [ "$left" = "$right" ]
 }
 
+# True when $1 is $2 itself or a descendant of it, with both paths resolved.
+path_is_inside() {
+    local inner outer
+    inner="$(path_real "$1")"
+    outer="$(path_real "$2")"
+    [ "$inner" = "$outer" ] && return 0
+    [ "$outer" = "/" ] && return 0
+    case "$inner" in
+        "$outer"/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Emit one entry per line from a ':'- or newline-separated list, dropping empties.
+# Lists of paths are NEVER expanded unquoted: `for d in $VAR` both word-splits (so
+# "/workspace/my ComfyUI" becomes two paths) and glob-expands (so "/workspace/*/
+# ComfyUI" matches — and deletes — everything). ':' is the separator because a
+# space is legal inside a path and a colon is not, in practice.
+list_entries() {
+    local raw="$1"
+    local entry rest
+    rest="${raw//$'\n'/:}"
+    while [ -n "$rest" ]; do
+        entry="${rest%%:*}"
+        if [ "$entry" = "$rest" ]; then
+            rest=""
+        else
+            rest="${rest#*:}"
+        fi
+        if [ -n "$entry" ]; then
+            printf '%s\n' "$entry"
+        fi
+    done
+}
+
 requirements_hash() {
     local req_file="$1"
     sha256sum "$req_file" | awk '{print $1}'
@@ -97,13 +147,32 @@ ensure_uv_installed() {
         return 0
     fi
     log_info "Installing uv (fast Python package installer)..."
-    if curl -LsSf --retry 5 --retry-delay 2 --connect-timeout 15 --max-time 60 \
-        https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null 2>&1; then
+
+    local installer
+    installer="$(mktemp "${TMPDIR:-/tmp}/uv-install.XXXXXX.sh")" || return 1
+    if ! curl -LsSf --retry 5 --retry-delay 2 --connect-timeout 15 --max-time 60 \
+            -o "$installer" https://astral.sh/uv/install.sh; then
+        rm -f "$installer"
+        log_warn "Falha ao baixar o instalador do uv — seguindo com pip padrão (mais lento)"
+        return 1
+    fi
+    # Never hand an unverified download straight to a root shell: curl -f already
+    # fails closed on a partial transfer, and this check rejects the other realistic
+    # body (a captive-portal / CDN error page served with 200).
+    if ! head -n 1 "$installer" | grep -q '^#!.*sh'; then
+        rm -f "$installer"
+        log_warn "Instalador do uv não parece um script shell — seguindo com pip padrão (mais lento)"
+        return 1
+    fi
+
+    if env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh "$installer" >/dev/null 2>&1; then
+        rm -f "$installer"
         if command -v uv >/dev/null 2>&1; then
             log_success "uv instalado ($(uv --version 2>/dev/null || echo unknown))"
             return 0
         fi
     fi
+    rm -f "$installer"
     log_warn "Falha ao instalar uv — seguindo com pip padrão (mais lento)"
     return 1
 }
@@ -141,16 +210,17 @@ pip_install_into() {
     fi
 }
 
-# Pre-download the heavy torch wheels with aria2c (16 parallel streams) BEFORE
+# Pre-download the heavy torch wheels with aria2c (parallel streams) BEFORE
 # comfy-cli touches torch. download.pytorch.org (CloudFront) throttles a SINGLE TCP
 # connection hard — the 0.5-0.8 GB torch wheel crawls at ~300 kB/s on one stream
 # while the nvidia-* wheels (fetched in parallel by pip) already arrive at ~40 MB/s.
-# 16 parallel streams saturate the link. We resolve the exact wheel URLs by reading
+# Parallel streams saturate the link. We resolve the exact wheel URLs by reading
 # the PyTorch simple-index pages (~85 KB each, fast on any link), fetch them with
 # aria2c, then install the local wheels (their deps come from the same index). The
 # caller then passes --skip-torch-or-directml so comfy-cli does NOT re-download torch.
 # Best-effort: ANY failure returns non-zero and the caller falls back to comfy-cli's
 # own torch download. Driver-aware via $TORCH_INDEX_URL (cu130 on 13.x, cu128 on 12.8).
+# Honors ARIA2_CONNECTIONS and DOWNLOAD_SPEED_LIMIT (same names downloader.py uses).
 # Disable with PREFETCH_TORCH=0.
 prefetch_torch_via_aria2c() {
     [ "${PREFETCH_TORCH:-1}" = "1" ] || return 1
@@ -159,21 +229,45 @@ prefetch_torch_via_aria2c() {
     mkdir -p "$wheel_dir" || return 1
     rm -f "$wheel_dir"/torch-*.whl "$wheel_dir"/torchvision-*.whl "$wheel_dir"/torchaudio-*.whl
 
-    log_info "Pré-baixando torch via aria2c (16 conexões) de $TORCH_INDEX_URL..."
+    local conns="${ARIA2_CONNECTIONS:-16}"
+    case "$conns" in
+        ''|*[!0-9]*)
+            log_warn "ARIA2_CONNECTIONS inválido ('${ARIA2_CONNECTIONS:-}'); usando 16"
+            conns=16
+            ;;
+    esac
+    local aria2_opts=(-x"$conns" -s"$conns" -k1M --console-log-level=warn
+                      --auto-file-renaming=false --allow-overwrite=true)
+    local speed_limit="${DOWNLOAD_SPEED_LIMIT:-0}"
+    if [ -n "$speed_limit" ] && [ "$speed_limit" != "0" ]; then
+        aria2_opts+=("--max-download-limit=$speed_limit")
+        log_info "Limite de banda ativo no prefetch do torch: $speed_limit"
+    fi
+
+    log_info "Pré-baixando torch via aria2c (${conns} conexões) de $TORCH_INDEX_URL..."
 
     # 1) Resolve the exact wheel URLs by parsing the PyTorch simple-index pages
     #    (~85 KB each → fast even on a throttled CDN, unlike pip's resolver which can
     #    try to pull whole wheels for metadata and time out). Picks the highest
-    #    cp312/x86_64/linux wheel for torch/torchvision/torchaudio — the index's
-    #    latest-of-each is the compatible combo pip would resolve anyway.
+    #    cp312/x86_64/linux wheel inside the pinned version window of each package,
+    #    so an unattended run can never jump to a future major.
     local urls
-    urls="$(timeout 90 "$COMFY_PYTHON" - "$TORCH_INDEX_URL" <<'PY'
-import re, sys, urllib.request
+    urls="$(ARRAKIS_TORCH_BOUNDS="${TORCH_BOUNDS[*]}" \
+        timeout 90 "$COMFY_PYTHON" - "$TORCH_INDEX_URL" <<'PY'
+import os, re, sys, urllib.request
 base = sys.argv[1].rstrip('/')
+bounds = {}
+for item in os.environ.get("ARRAKIS_TORCH_BOUNDS", "").split():
+    pkg, low, high = item.split(":")
+    bounds[pkg] = (
+        tuple(int(x) for x in low.split(".")),
+        tuple(int(x) for x in high.split(".")),
+    )
 def ver_key(fn, pkg):
     m = re.match(re.escape(pkg) + r'-([0-9]+(?:\.[0-9]+)*)', fn)
     return tuple(int(x) for x in m.group(1).split('.')) if m else ()
 def best(pkg):
+    low, high = bounds.get(pkg, ((), ()))
     try:
         req = urllib.request.Request(f"{base}/{pkg}/", headers={"User-Agent": "arrakis-prefetch"})
         html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
@@ -185,8 +279,10 @@ def best(pkg):
         if not (fn.startswith(pkg + "-") and "cp312-cp312" in fn and "x86_64" in fn
                 and "linux" in fn and fn.endswith(".whl")):
             continue
-        full = u if u.startswith("http") else ("https://download.pytorch.org" + u if u.startswith("/") else f"{base}/{pkg}/{u}")
         v = ver_key(fn, pkg)
+        if not v or (low and not (low <= v < high)):
+            continue
+        full = u if u.startswith("http") else ("https://download.pytorch.org" + u if u.startswith("/") else f"{base}/{pkg}/{u}")
         if v >= bv:
             bv, burl = v, full
     return burl
@@ -198,13 +294,11 @@ PY
 )" || { log_warn "Prefetch torch: resolução de URLs falhou; usando o download padrão do comfy-cli"; return 1; }
     [ -n "$urls" ] || return 1
 
-    # 3) Fetch each wheel with 16 parallel streams (defeats the per-connection throttle).
+    # 3) Fetch each wheel with parallel streams (defeats the per-connection throttle).
     local u
     while IFS= read -r u; do
         [ -n "$u" ] || continue
-        if ! aria2c -x16 -s16 -k1M --console-log-level=warn \
-                --auto-file-renaming=false --allow-overwrite=true \
-                -d "$wheel_dir" "$u"; then
+        if ! aria2c "${aria2_opts[@]}" -d "$wheel_dir" "$u"; then
             log_warn "Prefetch torch: aria2c falhou em $(basename "$u"); usando o download padrão"
             return 1
         fi
@@ -233,30 +327,84 @@ stop_template_comfy_processes() {
     fi
 }
 
-stop_listeners_on_port() {
-    # Stop whatever is LISTENING on a TCP port. Used for template ComfyUIs that
-    # launch as a bare `python main.py --port 8188` (e.g. RunPod comfyui-base),
-    # which the path-based pkill patterns above cannot match. Killing by port is
-    # deterministic and never touches our own ComfyUI (different port).
+# Mirror of process_manager.py::_is_comfy_process — the same policy has to hold
+# here: a port owner that is not part of the ComfyUI stack is never killed.
+process_is_comfyui() {
+    local pid="$1"
+    local cmdline=""
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+    [ -n "$cmdline" ] || return 1
+    case "$cmdline" in
+        *comfyui*) return 0 ;;
+        *"comfy launch"*) return 0 ;;
+        *main.py*--port*) return 0 ;;
+    esac
+    return 1
+}
+
+# True when some process holds a LISTEN socket on this TCP port. Read straight from
+# /proc so it needs no external tool.
+port_has_listener() {
+    local port="$1"
+    local hex
+    hex="$(printf '%04X' "$port")"
+    { cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true; } \
+        | awk -v pat=":${hex}\$" '$4 == "0A" && $2 ~ pat { found = 1 } END { exit !found }'
+}
+
+# PIDs holding a LISTEN socket on a TCP port, one per line.
+listening_pids_on_port() {
     local port="$1"
     local pids=""
 
-    if command -v fuser >/dev/null 2>&1; then
-        pids="$(fuser -n tcp "$port" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)"
-    fi
-    if [ -z "$pids" ] && command -v ss >/dev/null 2>&1; then
+    if command -v ss >/dev/null 2>&1; then
         pids="$(ss -lptnH "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
     fi
     if [ -z "$pids" ] && command -v lsof >/dev/null 2>&1; then
         pids="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
     fi
+    # fuser reports every process holding a socket on the port, listening or not, and
+    # has no way to filter by state — so it is only consulted when the port really has
+    # a listener, otherwise its PIDs are just clients talking to that port.
+    if [ -z "$pids" ] && command -v fuser >/dev/null 2>&1 && port_has_listener "$port"; then
+        pids="$(fuser -n tcp "$port" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)"
+    fi
 
     if [ -n "$pids" ]; then
-        log_warn "Stopping template ComfyUI listening on port $port (pids: $(echo "$pids" | tr '\n' ' '))"
-        for pid in $pids; do kill -TERM "$pid" >/dev/null 2>&1 || true; done
-        sleep 2
-        for pid in $pids; do kill -KILL "$pid" >/dev/null 2>&1 || true; done
+        printf '%s\n' "$pids"
     fi
+    return 0
+}
+
+stop_listeners_on_port() {
+    # Stop a template ComfyUI that is LISTENING on a TCP port. Used for images that
+    # launch a bare `python main.py --port 8188` (e.g. RunPod comfyui-base), which the
+    # path-based pkill patterns above cannot match. Only PIDs whose cmdline belongs to
+    # the ComfyUI stack are signalled; anything else on the port is reported and left
+    # alone (same policy as process_manager.py).
+    local port="$1"
+    local pids=()
+    mapfile -t pids < <(listening_pids_on_port "$port")
+
+    local pid
+    local comfy_pids=()
+    for pid in "${pids[@]}"; do
+        if process_is_comfyui "$pid"; then
+            comfy_pids+=("$pid")
+        else
+            log_warn "Porta $port ocupada pelo PID $pid, que não parece ser ComfyUI; não vou matá-lo."
+        fi
+    done
+
+    if [ ${#comfy_pids[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    log_warn "Stopping template ComfyUI listening on port $port (pids: ${comfy_pids[*]})"
+    for pid in "${comfy_pids[@]}"; do kill -TERM "$pid" >/dev/null 2>&1 || true; done
+    sleep 2
+    for pid in "${comfy_pids[@]}"; do kill -KILL "$pid" >/dev/null 2>&1 || true; done
 }
 
 template_comfy_is_still_running() {
@@ -266,6 +414,69 @@ template_comfy_is_still_running() {
     return 1
 }
 
+# True when models/ holds anything that looks like real weights. What ComfyUI's own
+# tree ships under models/ is placeholder text files and small YAML configs; a single
+# large file means somebody put models there, so the directory is not disposable.
+template_models_hold_user_data() {
+    local template_dir="$1"
+    local models_dir="$template_dir/models"
+    [ -d "$models_dir" ] || return 1
+    local found
+    found="$(find "$models_dir" -type f -size +16M -print -quit 2>/dev/null || true)"
+    [ -n "$found" ]
+}
+
+# A template ComfyUI directory may only be deleted when ALL of these hold:
+#   1. removing it cannot destroy this deployment or the volume: it is not a
+#      filesystem root, not an ancestor of the install dir, not inside $COMFY_BASE;
+#   2. something PROVES it is an image-baked install — the image's supervisor conf
+#      points at it, an explicit sentinel file authorises it, or it has no .git
+#      (every real install of ComfyUI is a git checkout);
+#   3. models/ holds no large files, i.e. nobody has put weights in it.
+# Anything else is somebody's own ComfyUI and is left untouched. This runs
+# unattended and cannot be undone, so silence is never treated as consent.
+template_dir_is_disposable() {
+    local template_dir="$1"
+    local target_dir="$2"
+    local supervisor_conf="$3"
+
+    local real
+    real="$(path_real "$template_dir")"
+
+    if [ "$real" = "/" ]; then
+        log_warn "Alvo de limpeza resolve para a raiz do filesystem ($template_dir); ignorando."
+        return 1
+    fi
+    if path_is_inside "$target_dir" "$real"; then
+        log_warn "Alvo de limpeza ($template_dir) é o diretório de instalação ou o contém ($target_dir); ignorando."
+        return 1
+    fi
+    if path_is_inside "$real" "$COMFY_BASE"; then
+        log_warn "Alvo de limpeza ($template_dir) está dentro de $COMFY_BASE; ignorando."
+        return 1
+    fi
+
+    local sentinel="$template_dir/$TEMPLATE_COMFY_SENTINEL"
+    if [ -f "$sentinel" ]; then
+        log_info "Sentinela $sentinel presente; remoção autorizada explicitamente."
+    elif [ -f "$supervisor_conf" ] && grep -qF -- "$template_dir" "$supervisor_conf" 2>/dev/null; then
+        log_info "Supervisor da imagem ($supervisor_conf) aponta para $template_dir; é instalação de template."
+    elif [ ! -e "$template_dir/.git" ]; then
+        log_info "$template_dir não é um checkout git (sem .git); tratando como instalação de template."
+    else
+        log_warn "$template_dir é um checkout git e nada prova que seja de template; preservando."
+        log_warn "  → para autorizar a remoção, crie o arquivo $sentinel"
+        return 1
+    fi
+
+    if template_models_hold_user_data "$template_dir"; then
+        log_warn "$template_dir/models contém arquivos grandes (modelos de alguém); preservando o diretório."
+        return 1
+    fi
+
+    return 0
+}
+
 cleanup_template_comfyui() {
     local template_dir="$1"
     local target_dir="$2"
@@ -273,7 +484,7 @@ cleanup_template_comfyui() {
 
     log_info "Checking template-managed ComfyUI conflicts..."
 
-    # User requested: only cleanup template when /workspace/ComfyUI exists.
+    # Only cleanup template when the directory actually exists.
     if [ ! -d "$template_dir" ]; then
         log_info "Template ComfyUI directory not found at $template_dir; skipping template cleanup."
         return 0
@@ -300,18 +511,28 @@ cleanup_template_comfyui() {
         fi
     fi
 
-    # 2) Stop leftover processes that may still hold 8818.
+    # 2) Stop leftover processes that may still hold the template port.
     stop_template_comfy_processes "$template_dir/main.py"
     stop_template_comfy_processes "python.*$template_dir/main.py"
     stop_template_comfy_processes "comfy.*--workspace $template_dir"
 
-    # 3) Remove template ComfyUI folder only when it's not our target install dir.
-    if paths_match "$template_dir" "$target_dir"; then
-        log_warn "Template ComfyUI path equals target path ($target_dir); skipping removal."
-    else
+    # 3) Remove the folder only when it is provably a disposable template install.
+    #    The supervisor conf was checked above, so re-read it from the moved-aside
+    #    copy when it has already been disabled.
+    local proof_conf="$template_supervisor_conf"
+    if [ ! -f "$proof_conf" ] && [ -f "${template_supervisor_conf}.arrakis-disabled" ]; then
+        proof_conf="${template_supervisor_conf}.arrakis-disabled"
+    fi
+    if template_dir_is_disposable "$template_dir" "$target_dir" "$proof_conf"; then
         log_warn "Removing template ComfyUI folder: $template_dir"
         rm -rf --one-file-system "$template_dir"
-        log_success "Template ComfyUI folder removed"
+        if [ -d "$template_dir" ]; then
+            log_warn "Template ComfyUI directory still exists after cleanup attempt: $template_dir"
+        else
+            log_success "Template ComfyUI folder removed"
+        fi
+    else
+        log_info "Mantendo $template_dir; apenas os processos/serviços do template foram parados."
     fi
 
     # 4) Soft validation: warn if cleanup was partial, but keep bootstrap running.
@@ -319,15 +540,42 @@ cleanup_template_comfyui() {
         log_warn "Template ComfyUI process still running after cleanup attempt: $template_dir"
     fi
 
-    if [ -d "$template_dir" ] && ! paths_match "$template_dir" "$target_dir"; then
-        log_warn "Template ComfyUI directory still exists after cleanup attempt: $template_dir"
-    fi
-
     if [ -f "$template_supervisor_conf" ]; then
         log_warn "Template supervisor config still active after cleanup attempt: $template_supervisor_conf"
     fi
 
     log_success "Template ComfyUI cleanup attempt completed"
+}
+
+cleanup_template_comfyui_all() {
+    if [ "$DISABLE_TEMPLATE_COMFY" != "1" ]; then
+        log_warn "DISABLE_TEMPLATE_COMFY=0, skipping template ComfyUI cleanup"
+        return 0
+    fi
+
+    # Stop template ComfyUI by port first (handles bare `python main.py --port 8188`
+    # from RunPod comfyui-base). Our own ports are never touched.
+    local tport
+    for tport in "${TEMPLATE_COMFY_PORT_LIST[@]}"; do
+        case "$tport" in
+            ''|*[!0-9]*)
+                log_warn "Porta de template inválida ignorada: '$tport'"
+                continue
+                ;;
+        esac
+        if [ "$tport" = "$COMFY_PORT" ] || [ "$tport" = "$WEB_PORT" ]; then
+            log_info "Porta $tport é nossa (ComfyUI/web selector); não vou parar nada nela."
+            continue
+        fi
+        stop_listeners_on_port "$tport"
+    done
+
+    # Clean every known template ComfyUI dir: old VastAI (/workspace/ComfyUI) and
+    # new RunPod (/workspace/runpod-slim/ComfyUI). Each call no-ops if absent.
+    local tdir
+    for tdir in "${TEMPLATE_COMFY_DIRS[@]}"; do
+        cleanup_template_comfyui "$tdir" "$COMFY_DIR" "$TEMPLATE_COMFY_SUPERVISOR_CONF"
+    done
 }
 
 gpu_is_present() {
@@ -407,419 +655,599 @@ elif gpu_present and not torch.cuda.is_available():
 PY
 }
 
-# Configuration
-COMFY_BASE="${COMFY_BASE:-/workspace/comfy}"
-COMFY_DIR="$COMFY_BASE/ComfyUI"
-ARRAKIS_DIR="$COMFY_BASE/arrakis_start"
-COMFY_VENV_DIR="$COMFY_BASE/.venv"
-ARRAKIS_VENV_DIR="$ARRAKIS_DIR/.venv"
-COMFY_PYTHON="$COMFY_VENV_DIR/bin/python"
-COMFY_CLI="$COMFY_VENV_DIR/bin/comfy"
-ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
-COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
-TEMPLATE_COMFY_DIR="${TEMPLATE_COMFY_DIR:-/workspace/ComfyUI}"
-# Extra template ComfyUI install dirs to clean. Newer images keep ComfyUI
-# elsewhere — e.g. RunPod comfyui-base ships it at /workspace/runpod-slim/ComfyUI
-# and launches `python main.py --port 8188` directly (no supervisor).
-TEMPLATE_COMFY_EXTRA_DIRS="${TEMPLATE_COMFY_EXTRA_DIRS:-/workspace/runpod-slim/ComfyUI}"
-# Ports a template ComfyUI may be listening on. We stop these by port (never our
-# own $COMFY_PORT) so the template instance does not keep competing for VRAM.
-TEMPLATE_COMFY_PORTS="${TEMPLATE_COMFY_PORTS:-8188}"
-# Our own ComfyUI port (mirrors start.py default). Used only to avoid self-kill
-# in the template-port cleanup above.
-COMFY_PORT="${COMFY_PORT:-8818}"
-TEMPLATE_COMFY_SUPERVISOR_CONF="${TEMPLATE_COMFY_SUPERVISOR_CONF:-/etc/supervisor/conf.d/comfyui.conf}"
-DISABLE_TEMPLATE_COMFY="${DISABLE_TEMPLATE_COMFY:-1}"
-# Torch wheel index for the standard (non-Sage) runtime, DERIVED FROM THE DRIVER.
-# A torch wheel only fails when its CUDA toolkit is NEWER than the driver supports,
-# so we pick the newest build the driver can actually run: cu130 on CUDA 13.x drivers
-# (unlocks Blackwell NVFP4 + FlashAttention-4), cu128 on CUDA 12.8 drivers (still
-# ships sm_120 kernels and runs on any R570+ host). comfy-cli's own install
-# auto-detects the same way; this var only governs the fallback torch repair below
-# when an incompatible wheel slips in. Override by exporting TORCH_INDEX_URL.
-if [ -z "${TORCH_INDEX_URL:-}" ]; then
-    case "$(detect_driver_max_cuda)" in
-        13.*|14.*) TORCH_INDEX_URL="https://download.pytorch.org/whl/cu130" ;;
-        *)         TORCH_INDEX_URL="https://download.pytorch.org/whl/cu128" ;;
-    esac
-fi
+# Fix conflicting APT sources from template images (e.g. VastAI templates that ship
+# duplicate MEGA repo entries with different Signed-By keys), then retry once.
+apt_update_with_repair() {
+    if apt-get update -qq 2>/dev/null; then
+        log_success "APT indices atualizados"
+        return 0
+    fi
 
-export DEBIAN_FRONTEND=noninteractive
-export GIT_TERMINAL_PROMPT=0
-export PIP_ROOT_USER_ACTION=ignore
-export HF_HOME="/workspace/.hf"
-export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
-# TRANSFORMERS_CACHE is deprecated in Transformers v5+; prefer HF_HOME only
-unset TRANSFORMERS_CACHE || true
-export TMPDIR="/workspace/.tmp"
-export GIT_LFS_SKIP_SMUDGE=1
-export MAX_JOBS="${MAX_JOBS:-32}"
-export HF_HUB_ENABLE_HF_TRANSFER=1
-export HF_TRANSFER_CONCURRENCY="${HF_TRANSFER_CONCURRENCY:-16}"
-export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:---threads 8}"
-# PyTorch 2.9+ renamed PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF (backend-agnostic).
-# Export both so old and new torch builds work without warnings.
-export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}}"
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-$PYTORCH_ALLOC_CONF}"
-
-# uv/pip resilience on RunPod's /workspace network volume. Without these, uv's cache
-# (on the container overlay) and the venv (on the network mount) live on different
-# devices, so uv falls back to slow cross-device copies (uv #10051); and uv's 30s
-# read timeout with no-retry-on-timeout (uv #17697) aborts large wheel pulls over
-# PyPI's CDN — the exact "4 retries in 130.2s" failure seen in production. Co-locate
-# the cache with the venv, force copy mode, raise the timeout, and add retries.
-export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
-export UV_CACHE_DIR="${UV_CACHE_DIR:-/workspace/.cache/uv}"
-export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
-export UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}"
-export UV_CONCURRENT_DOWNLOADS="${UV_CONCURRENT_DOWNLOADS:-8}"
-export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-300}"
-export PIP_RETRIES="${PIP_RETRIES:-5}"
-export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/workspace/.cache/pip}"
-
-# Create directories
-mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR" "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
-
-log_info "========================================="
-log_info " Arrakis Start - ComfyUI Deployment"
-log_info "========================================="
-
-if [ "$DISABLE_TEMPLATE_COMFY" = "1" ]; then
-    # Stop template ComfyUI by port first (handles bare `python main.py --port
-    # 8188` from RunPod comfyui-base). Skip our own port so we never self-kill.
-    for tport in $TEMPLATE_COMFY_PORTS; do
-        if [ "$tport" != "$COMFY_PORT" ]; then
-            stop_listeners_on_port "$tport"
-        fi
-    done
-    # Clean every known template ComfyUI dir: old VastAI (/workspace/ComfyUI) and
-    # new RunPod (/workspace/runpod-slim/ComfyUI). Each call no-ops if absent.
-    for tdir in "$TEMPLATE_COMFY_DIR" $TEMPLATE_COMFY_EXTRA_DIRS; do
-        cleanup_template_comfyui "$tdir" "$COMFY_DIR" "$TEMPLATE_COMFY_SUPERVISOR_CONF"
-    done
-else
-    log_warn "DISABLE_TEMPLATE_COMFY=0, skipping template ComfyUI cleanup"
-fi
-
-# 1. Install system dependencies
-log_info "[1/4] Installing system dependencies..."
-
-# Fix conflicting APT sources from template images (e.g. VastAI templates
-# that ship with duplicate MEGA repo entries using different Signed-By keys).
-# This causes "Conflicting values set for option Signed-By" and makes
-# apt-get update fail with exit 100, aborting the entire bootstrap.
-if ! apt-get update -qq 2>/dev/null; then
     log_warn "apt-get update falhou — verificando sources conflitantes..."
-    # Remove duplicate/conflicting MEGA repo entries
-    conflicting_sources=()
+    local conflicting_sources=()
+    local f
     while IFS= read -r f; do
         conflicting_sources+=("$f")
     done < <(grep -rl 'mega\.nz' /etc/apt/sources.list.d/ 2>/dev/null || true)
 
     if [ ${#conflicting_sources[@]} -gt 0 ]; then
         log_warn "Removendo ${#conflicting_sources[@]} source(s) conflitante(s) do MEGA:"
+        local src
         for src in "${conflicting_sources[@]}"; do
             log_warn "  → $src"
             rm -f "$src"
         done
     fi
 
-    # Also check for other common conflicts: duplicate Signed-By for any repo
-    # Try again after cleanup
     run_with_progress "Atualizando indices do APT (apos limpeza)" apt-get update -qq
-else
-    log_success "APT indices atualizados"
-fi
-run_with_progress "Instalando dependencias de sistema" apt-get install -y -qq --no-install-recommends \
-    python3-venv \
-    python3-pip \
-    aria2 \
-    git \
-    wget \
-    curl
+}
 
-# Install Cloudflared
-if ! command -v cloudflared &>/dev/null; then
+# Cloudflared is optional — start.py keeps the tunnel off by default — so a Cloudflare
+# repo/CDN hiccup must never abort the deploy. Every network call is bounded (retries
+# + timeouts) and wrapped in run_with_progress, so a stalled TCP connection cannot
+# hang an unattended run silently.
+install_cloudflared() {
+    if command -v cloudflared >/dev/null 2>&1; then
+        return 0
+    fi
     log_info "Installing Cloudflared..."
-    install -d -m 0755 /usr/share/keyrings
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" | tee /etc/apt/sources.list.d/cloudflared.list
-    run_with_progress "Atualizando indices para instalar cloudflared" apt-get update -qq
-    run_with_progress "Instalando cloudflared" apt-get install -y cloudflared
-fi
 
-apt-get clean
-rm -rf /var/lib/apt/lists/*
+    local keyring="/usr/share/keyrings/cloudflare-main.gpg"
+    local keyring_tmp="${keyring}.arrakis-tmp"
+    local sources_list="/etc/apt/sources.list.d/cloudflared.list"
 
-# Install uv — speeds up every subsequent pip-like operation by ~5-10x.
-# Safe to call even if uv is already present; it is a no-op in that case.
-ensure_uv_installed || true
-
-log_success "System dependencies installed"
-
-# 2. Setup ComfyUI Python environment
-log_info "[2/5] Setting up ComfyUI Python environment..."
-
-if [ ! -d "$COMFY_VENV_DIR/bin" ]; then
-    python3 -m venv "$COMFY_VENV_DIR"
-    COMFY_VENV_CREATED=1
-    log_success "ComfyUI virtual environment created"
-else
-    COMFY_VENV_CREATED=0
-    log_info "ComfyUI virtual environment already exists"
-fi
-
-if [ "$COMFY_VENV_CREATED" -eq 1 ]; then
-    run_with_progress "Instalando tooling base do venv ComfyUI (pip/wheel/setuptools/comfy-cli)" \
-        pip_install_into "$COMFY_PYTHON" --upgrade pip wheel setuptools comfy-cli
-elif [ ! -x "$COMFY_CLI" ]; then
-    log_warn "comfy-cli não encontrado no venv; instalando..."
-    run_with_progress "Instalando comfy-cli no venv ComfyUI" \
-        pip_install_into "$COMFY_PYTHON" --upgrade comfy-cli
-else
-    log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
-fi
-
-# Configure hf_xet for MAXIMUM download speed.
-# HF_XET_HIGH_PERFORMANCE: saturates network/CPU; HF docs warn it allocates
-#   multi-GB buffers and should only be used with >=64GB RAM. Below that it
-#   can degrade performance. We auto-detect via total MemTotal.
-# HF_XET_NUM_CONCURRENT_RANGE_GETS: parallel chunk reads (default oficial: 16)
-HF_XET_HP_MIN_RAM_GB="${HF_XET_HP_MIN_RAM_GB:-48}"
-if [ -z "${HF_XET_HIGH_PERFORMANCE:-}" ]; then
-    mem_total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-    mem_total_gb=$((mem_total_kb / 1024 / 1024))
-    if [ "$mem_total_gb" -ge "$HF_XET_HP_MIN_RAM_GB" ]; then
-        export HF_XET_HIGH_PERFORMANCE=1
-        log_info "HF_XET_HIGH_PERFORMANCE=1 ativado (RAM=${mem_total_gb}GB >= ${HF_XET_HP_MIN_RAM_GB}GB)"
-    else
-        log_info "HF_XET_HIGH_PERFORMANCE desativado (RAM=${mem_total_gb}GB < ${HF_XET_HP_MIN_RAM_GB}GB); usando adaptive concurrency"
+    install -d -m 0755 /usr/share/keyrings || return 1
+    if ! run_with_progress "Baixando chave GPG do Cloudflare" \
+            curl -fsSL --retry 5 --retry-delay 2 --connect-timeout 15 --max-time 60 \
+            -o "$keyring_tmp" https://pkg.cloudflare.com/cloudflare-main.gpg; then
+        rm -f "$keyring_tmp"
+        return 1
     fi
-fi
-export HF_XET_NUM_CONCURRENT_RANGE_GETS="${HF_XET_NUM_CONCURRENT_RANGE_GETS:-32}"
-export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-60}"
+    if [ ! -s "$keyring_tmp" ]; then
+        rm -f "$keyring_tmp"
+        log_warn "Chave GPG do Cloudflare veio vazia"
+        return 1
+    fi
+    mv "$keyring_tmp" "$keyring"
+    chmod 0644 "$keyring"
+    printf 'deb [signed-by=%s] https://pkg.cloudflare.com/cloudflared any main\n' \
+        "$keyring" > "$sources_list"
 
-log_success "ComfyUI Python environment ready"
-
-# Make the workspace venv the active virtualenv BEFORE comfy-cli install.
-# comfy-cli resolves its target Python from VIRTUAL_ENV first (resolve_python.py),
-# so without this it installs ComfyUI's deps into the RunPod template's /venv/main
-# (pre-exported VIRTUAL_ENV) — a venv that is never used at runtime, forcing a full
-# reinstall later and downloading torch twice.
-export VIRTUAL_ENV="$COMFY_VENV_DIR"
-export PATH="$COMFY_VENV_DIR/bin:$PATH"
-
-# 3. Install ComfyUI
-log_info "[3/5] Installing ComfyUI..."
-
-if [ -f "$COMFY_DIR/main.py" ]; then
-    log_warn "ComfyUI already exists, skipping installation"
-else
-    # Beat the single-connection CDN throttle on the torch wheel: pre-fetch it with
-    # aria2c (16 streams), then tell comfy-cli to skip its own (single-stream) torch
-    # download. Best-effort — on any failure comfy-cli downloads torch itself as before.
-    _comfy_install_extra=()
-    if prefetch_torch_via_aria2c; then
-        log_success "PyTorch pré-instalado via aria2c (multi-conexão); comfy-cli vai pular o torch"
-        _comfy_install_extra+=(--skip-torch-or-directml)
+    if run_with_progress "Atualizando indices para instalar cloudflared" apt-get update -qq \
+        && run_with_progress "Instalando cloudflared" apt-get install -y -qq cloudflared; then
+        return 0
     fi
 
-    # comfy-cli auto-detects the CUDA build from the driver (cu130 on CUDA 13.x drivers,
-    # cu128 on 12.8) — its detection is correct; we only fix the mechanics. NO
-    # --fast-deps: at bootstrap there are no custom nodes yet (start.py clones them
-    # later) so its cross-node dedup buys nothing, while it couples torch+everything
-    # into one all-or-nothing uv resolution that a single slow wheel can abort, and it
-    # has a torch>=2.11 CUDA-runtime regression (comfy-cli #413). Non-fatal with a
-    # timeout + one retry: downstream steps reinstall core requirements and a
-    # driver-compatible torch into the workspace venv, so a flaky network or a single
-    # slow PyPI wheel never blocks the web UI from starting.
-    if run_with_progress "Instalando ComfyUI (comfy-cli)" \
-        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia "${_comfy_install_extra[@]}"; then
-        log_success "ComfyUI installed"
-    elif run_with_progress "Reinstalando ComfyUI (comfy-cli, retry)" \
-        timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia "${_comfy_install_extra[@]}"; then
-        log_success "ComfyUI installed (retry)"
+    # Leave APT usable for every later call instead of a repo that breaks `apt-get update`.
+    rm -f "$sources_list"
+    return 1
+}
+
+# Install what the bootstrap needs from APT, then check the tools themselves. APT is
+# best-effort: base images routinely ship a broken index, and the tools are often
+# already baked in — aborting at "[1/5]" over apt would leave the instance billing
+# with nothing installed. Only a genuinely missing required tool is fatal.
+ensure_system_packages() {
+    if apt_update_with_repair; then
+        run_with_progress "Instalando dependencias de sistema" \
+            apt-get install -y -qq --no-install-recommends \
+            python3-venv \
+            python3-pip \
+            aria2 \
+            git \
+            wget \
+            curl \
+            || log_warn "apt-get install falhou — validando as ferramentas já presentes na imagem"
     else
-        log_warn "comfy-cli install falhou/expirou após retry — seguindo; as etapas seguintes reinstalam deps core/torch no venv correto."
-        if [ ! -f "$COMFY_DIR/main.py" ]; then
-            log_error "Repo ComfyUI não foi clonado; ComfyUI não vai iniciar. Verifique a rede."
+        log_warn "APT indisponível — validando as ferramentas já presentes na imagem"
+    fi
+
+    install_cloudflared \
+        || log_warn "Cloudflared não instalado (opcional: o túnel vem desligado por padrão no start.py)"
+
+    apt-get clean || true
+    rm -rf /var/lib/apt/lists/* || true
+
+    local missing_required=()
+    local missing_optional=()
+    python3 -m venv --help >/dev/null 2>&1 || missing_required+=("python3 -m venv (pacote python3-venv)")
+    command -v git >/dev/null 2>&1 || missing_required+=("git")
+    command -v curl >/dev/null 2>&1 || missing_required+=("curl")
+    command -v aria2c >/dev/null 2>&1 || missing_optional+=("aria2c (downloads de modelos ficam muito mais lentos)")
+    command -v wget >/dev/null 2>&1 || missing_optional+=("wget")
+    python3 -m pip --version >/dev/null 2>&1 || missing_optional+=("pip do sistema (cada venv traz o seu)")
+
+    local item
+    for item in "${missing_optional[@]}"; do
+        log_warn "Ferramenta opcional ausente: $item"
+    done
+    if [ ${#missing_required[@]} -gt 0 ]; then
+        for item in "${missing_required[@]}"; do
+            log_error "Ferramenta obrigatória ausente: $item"
+        done
+        die "Dependências de sistema obrigatórias ausentes e o APT não conseguiu instalá-las."
+    fi
+}
+
+venv_python_works() {
+    local python_bin="$1"
+    [ -x "$python_bin" ] || return 1
+    "$python_bin" -c 'import sys' >/dev/null 2>&1
+}
+
+# Ensure $1 is a usable venv. An existing bin/ directory proves nothing: on a
+# persistent volume whose base Python was replaced by an image change, bin/python is
+# a dangling symlink — so the interpreter is probed and the venv rebuilt with --clear
+# when it cannot run. Returns 0 when the venv was (re)created, 1 when a working one
+# was reused; dies when it cannot be created at all.
+ensure_venv() {
+    local venv_dir="$1"
+    local label="$2"
+
+    if venv_python_works "$venv_dir/bin/python"; then
+        log_info "$label virtual environment already exists"
+        return 1
+    fi
+    if [ -e "$venv_dir" ]; then
+        log_warn "venv $label existe mas o interpretador não executa; recriando com --clear"
+    fi
+    run_with_progress "Criando venv $label" python3 -m venv --clear "$venv_dir" \
+        || die "Não foi possível criar o venv $label em $venv_dir"
+    venv_python_works "$venv_dir/bin/python" \
+        || die "venv $label criado, mas $venv_dir/bin/python não executa"
+    log_success "$label virtual environment created"
+    return 0
+}
+
+# Run git with a hard timeout and, when a GitHub token is configured, with auth passed
+# out-of-band. The token goes into GIT_CONFIG_* of a short-lived subshell: it never
+# appears in argv (readable in /proc) and is never written to .git/config, which lives
+# at mode 644 on the persistent volume and is captured by every volume snapshot.
+git_run() {
+    local timeout_s="$1"
+    shift
+
+    if [ -z "${ARRAKIS_GIT_AUTH_HEADER:-}" ]; then
+        timeout "$timeout_s" git "$@"
+        return
+    fi
+    (
+        export GIT_CONFIG_COUNT=1
+        export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+        export GIT_CONFIG_VALUE_0="$ARRAKIS_GIT_AUTH_HEADER"
+        exec timeout "$timeout_s" git "$@"
+    )
+}
+
+# Clone the repo into a staging dir on the same filesystem and move it into place only
+# after a complete clone. Retried with backoff: by the time this runs, apt, both venvs,
+# ComfyUI and a multi-GB torch download have already been paid for, so a transient
+# DNS/GitHub failure must not throw all of it away.
+install_arrakis_repo() {
+    local dest="$1"
+    local url="$2"
+    local attempt stage_dir backup
+    local cloned=0
+
+    for attempt in 1 2 3; do
+        stage_dir="$(mktemp -d "${dest}.stage.XXXXXX")" || return 1
+        if run_with_progress "Clonando repositorio Arrakis Start (tentativa $attempt/3)" \
+                git_run 60 clone --depth 1 "$url" "$stage_dir"; then
+            cloned=1
+            break
+        fi
+        rm -rf "$stage_dir"
+        stage_dir=""
+        if [ "$attempt" -lt 3 ]; then
+            log_warn "Clone falhou; nova tentativa em $((attempt * 5))s"
+            sleep "$((attempt * 5))"
+        fi
+    done
+
+    if [ "$cloned" -ne 1 ]; then
+        return 1
+    fi
+
+    if [ -e "$dest" ]; then
+        backup="${dest}.broken.$(date +%Y%m%d%H%M%S)"
+        mv "$dest" "$backup"
+        log_warn "Diretório existente sem repositório git movido para $backup"
+    fi
+    mv "$stage_dir" "$dest"
+    return 0
+}
+
+# Store the HF token the way huggingface_hub and hf_xet read it: $HF_HOME/token.
+# Written directly instead of via `hf auth login --token <secret>`, which would put
+# the secret in argv (world-readable in /proc). The old file is removed and the new
+# one created under umask 077, so the token is never readable by another process —
+# not even in the window a create-then-chmod leaves open.
+store_hf_token() {
+    local token_file="$HF_HOME/token"
+    mkdir -p "$HF_HOME"
+    (
+        umask 077
+        rm -f "$token_file"
+        printf '%s' "$HF_TOKEN" > "$token_file"
+    ) || return 1
+
+    if [ ! -s "$token_file" ]; then
+        log_error "Token HuggingFace não foi gravado em $token_file — modelos gated vão falhar!"
+        return 1
+    fi
+    log_success "Token HuggingFace armazenado em $token_file (modelos gated habilitados)"
+    return 0
+}
+
+main() {
+    # ------------------------------------------------------------------ Configuration
+    COMFY_BASE="${COMFY_BASE:-/workspace/comfy}"
+    COMFY_DIR="$COMFY_BASE/ComfyUI"
+    ARRAKIS_DIR="$COMFY_BASE/arrakis_start"
+    COMFY_VENV_DIR="$COMFY_BASE/.venv"
+    ARRAKIS_VENV_DIR="$ARRAKIS_DIR/.venv"
+    COMFY_PYTHON="$COMFY_VENV_DIR/bin/python"
+    COMFY_CLI="$COMFY_VENV_DIR/bin/comfy"
+    ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
+    COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
+    ARRAKIS_REPO_URL="https://github.com/adbrasi/arrakis_start.git"
+
+    # Template ComfyUI cleanup targets. ${VAR-default} (NOT ${VAR:-default}) so that
+    # exporting a var empty really disables that part of the cleanup — with :- an
+    # empty value silently re-defaults and there is no way to opt out. Lists are
+    # ':'-separated and read into arrays; see list_entries().
+    TEMPLATE_COMFY_DIR="${TEMPLATE_COMFY_DIR-/workspace/ComfyUI}"
+    # Extra template ComfyUI install dirs to clean. Newer images keep ComfyUI
+    # elsewhere — e.g. RunPod comfyui-base ships it at /workspace/runpod-slim/ComfyUI
+    # and launches `python main.py --port 8188` directly (no supervisor).
+    TEMPLATE_COMFY_EXTRA_DIRS="${TEMPLATE_COMFY_EXTRA_DIRS-/workspace/runpod-slim/ComfyUI}"
+    # Ports a template ComfyUI may be listening on. We stop these by port (never our
+    # own $COMFY_PORT / $WEB_PORT) so the template instance does not keep competing
+    # for VRAM.
+    TEMPLATE_COMFY_PORTS="${TEMPLATE_COMFY_PORTS-8188}"
+    # Drop this file inside a directory to authorise its removal explicitly.
+    TEMPLATE_COMFY_SENTINEL="${TEMPLATE_COMFY_SENTINEL:-.arrakis-template}"
+    TEMPLATE_COMFY_SUPERVISOR_CONF="${TEMPLATE_COMFY_SUPERVISOR_CONF:-/etc/supervisor/conf.d/comfyui.conf}"
+    DISABLE_TEMPLATE_COMFY="${DISABLE_TEMPLATE_COMFY:-1}"
+
+    TEMPLATE_COMFY_DIRS=()
+    mapfile -t TEMPLATE_COMFY_DIRS < <(list_entries "${TEMPLATE_COMFY_DIR}:${TEMPLATE_COMFY_EXTRA_DIRS}")
+    _ports_raw="${TEMPLATE_COMFY_PORTS// /:}"
+    _ports_raw="${_ports_raw//,/:}"
+    TEMPLATE_COMFY_PORT_LIST=()
+    mapfile -t TEMPLATE_COMFY_PORT_LIST < <(list_entries "$_ports_raw")
+
+    # Our own ports (mirror start.py defaults). Used only to never stop ourselves in
+    # the template-port cleanup.
+    COMFY_PORT="${COMFY_PORT:-8818}"
+    WEB_PORT="${WEB_PORT:-8090}"
+
+    # comfy-cli: pinned to the 1.7 line and below 2.0. 1.7+ is what ships the Manager
+    # as the comfyui_manager pip package (the step below depends on that layout), and
+    # the upper bound keeps a breaking major — like the torch>=2.11 CUDA-runtime
+    # regression in comfy-cli #413 — from landing on an unattended deploy.
+    COMFY_CLI_SPEC="comfy-cli>=1.7,<2.0"
+
+    # Known-good version windows for the torch triple, as "<pkg>:<min>:<max-exclusive>".
+    # torch 2.7 is the first stable release with cu128/sm_120 (Blackwell) kernels; the
+    # upper bounds keep a future major (torch 3.x / torchvision 1.x) from being pulled
+    # in unattended. Single source of truth: both the pip specs below and the wheel
+    # resolver in prefetch_torch_via_aria2c filter on these bounds.
+    TORCH_BOUNDS=("torch:2.7:3.0" "torchvision:0.22:1.0" "torchaudio:2.7:3.0")
+    TORCH_PIP_SPECS=()
+    for _bound in "${TORCH_BOUNDS[@]}"; do
+        IFS=: read -r _pkg _min _max <<< "$_bound"
+        TORCH_PIP_SPECS+=("${_pkg}>=${_min},<${_max}")
+    done
+
+    # Torch wheel index for the standard (non-Sage) runtime, DERIVED FROM THE DRIVER.
+    # A torch wheel only fails when its CUDA toolkit is NEWER than the driver supports,
+    # so we pick the newest build the driver can actually run: cu130 on CUDA 13.x drivers
+    # (unlocks Blackwell NVFP4 + FlashAttention-4), cu128 on CUDA 12.8 drivers (still
+    # ships sm_120 kernels and runs on any R570+ host). comfy-cli's own install
+    # auto-detects the same way; this var only governs the fallback torch repair below
+    # when an incompatible wheel slips in. Override by exporting TORCH_INDEX_URL.
+    if [ -z "${TORCH_INDEX_URL:-}" ]; then
+        case "$(detect_driver_max_cuda)" in
+            13.*|14.*) TORCH_INDEX_URL="https://download.pytorch.org/whl/cu130" ;;
+            *)         TORCH_INDEX_URL="https://download.pytorch.org/whl/cu128" ;;
+        esac
+    fi
+
+    export DEBIAN_FRONTEND=noninteractive
+    export GIT_TERMINAL_PROMPT=0
+    export PIP_ROOT_USER_ACTION=ignore
+    export HF_HOME="/workspace/.hf"
+    export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+    # TRANSFORMERS_CACHE is deprecated in Transformers v5+; prefer HF_HOME only
+    unset TRANSFORMERS_CACHE || true
+    export TMPDIR="/workspace/.tmp"
+    export GIT_LFS_SKIP_SMUDGE=1
+    export MAX_JOBS="${MAX_JOBS:-32}"
+    export HF_HUB_ENABLE_HF_TRANSFER=1
+    export HF_TRANSFER_CONCURRENCY="${HF_TRANSFER_CONCURRENCY:-16}"
+    export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:---threads 8}"
+    # PyTorch 2.9+ renamed PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF (backend-agnostic).
+    # Export both so old and new torch builds work without warnings.
+    export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}}"
+    export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-$PYTORCH_ALLOC_CONF}"
+
+    # uv/pip resilience on RunPod's /workspace network volume. Without these, uv's cache
+    # (on the container overlay) and the venv (on the network mount) live on different
+    # devices, so uv falls back to slow cross-device copies (uv #10051); and uv's 30s
+    # read timeout with no-retry-on-timeout (uv #17697) aborts large wheel pulls over
+    # PyPI's CDN — the exact "4 retries in 130.2s" failure seen in production. Co-locate
+    # the cache with the venv, force copy mode, raise the timeout, and add retries.
+    export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
+    export UV_CACHE_DIR="${UV_CACHE_DIR:-/workspace/.cache/uv}"
+    export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-300}"
+    export UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}"
+    export UV_CONCURRENT_DOWNLOADS="${UV_CONCURRENT_DOWNLOADS:-8}"
+    export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-300}"
+    export PIP_RETRIES="${PIP_RETRIES:-5}"
+    export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/workspace/.cache/pip}"
+
+    # GitHub auth for private custom-node repos / this repo. Built once here; printf is
+    # a bash builtin, so the token never lands in another process's argv.
+    GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    ARRAKIS_GIT_AUTH_HEADER=""
+    if [ -n "$GITHUB_TOKEN" ]; then
+        ARRAKIS_GIT_AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+    fi
+
+    # Create directories
+    mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR" "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
+
+    log_info "========================================="
+    log_info " Arrakis Start - ComfyUI Deployment"
+    log_info "========================================="
+
+    # --------------------------------------------------- 1. System dependencies
+    log_info "[1/5] Installing system dependencies..."
+    ensure_system_packages
+
+    # Install uv — speeds up every subsequent pip-like operation by ~5-10x.
+    # Safe to call even if uv is already present; it is a no-op in that case.
+    ensure_uv_installed || true
+
+    log_success "System dependencies installed"
+
+    # ------------------------------------------- 2. ComfyUI Python environment
+    log_info "[2/5] Setting up ComfyUI Python environment..."
+
+    if ensure_venv "$COMFY_VENV_DIR" "ComfyUI"; then
+        COMFY_VENV_CREATED=1
+    else
+        COMFY_VENV_CREATED=0
+    fi
+
+    if [ "$COMFY_VENV_CREATED" -eq 1 ]; then
+        run_with_progress "Instalando tooling base do venv ComfyUI (pip/wheel/setuptools/comfy-cli)" \
+            pip_install_into "$COMFY_PYTHON" --upgrade pip wheel setuptools "$COMFY_CLI_SPEC"
+    elif [ ! -x "$COMFY_CLI" ]; then
+        log_warn "comfy-cli não encontrado no venv; instalando..."
+        run_with_progress "Instalando comfy-cli no venv ComfyUI" \
+            pip_install_into "$COMFY_PYTHON" --upgrade "$COMFY_CLI_SPEC"
+    else
+        log_info "ComfyUI venv já pronto; pulando upgrade de tooling Python"
+    fi
+
+    # Configure hf_xet for MAXIMUM download speed.
+    # HF_XET_HIGH_PERFORMANCE: saturates network/CPU; HF docs warn it allocates
+    #   multi-GB buffers and should only be used with >=64GB RAM. Below that it
+    #   can degrade performance. We auto-detect via total MemTotal.
+    # HF_XET_NUM_CONCURRENT_RANGE_GETS: parallel chunk reads (default oficial: 16)
+    HF_XET_HP_MIN_RAM_GB="${HF_XET_HP_MIN_RAM_GB:-48}"
+    if [ -z "${HF_XET_HIGH_PERFORMANCE:-}" ]; then
+        mem_total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+        mem_total_gb=$((mem_total_kb / 1024 / 1024))
+        if [ "$mem_total_gb" -ge "$HF_XET_HP_MIN_RAM_GB" ]; then
+            export HF_XET_HIGH_PERFORMANCE=1
+            log_info "HF_XET_HIGH_PERFORMANCE=1 ativado (RAM=${mem_total_gb}GB >= ${HF_XET_HP_MIN_RAM_GB}GB)"
+        else
+            log_info "HF_XET_HIGH_PERFORMANCE desativado (RAM=${mem_total_gb}GB < ${HF_XET_HP_MIN_RAM_GB}GB); usando adaptive concurrency"
         fi
     fi
-fi
+    export HF_XET_NUM_CONCURRENT_RANGE_GETS="${HF_XET_NUM_CONCURRENT_RANGE_GETS:-32}"
+    export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-60}"
 
-# Ensure ComfyUI Python dependencies are present even if ComfyUI folder already existed.
-# This is required when /workspace/comfy/.venv is recreated from scratch.
-if [ -f "$COMFY_DIR/requirements.txt" ]; then
-    if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
-        log_info "Syncing ComfyUI core requirements..."
-        run_with_progress "Instalando dependencias core do ComfyUI" \
-            pip_install_into "$COMFY_PYTHON" --upgrade -r "$COMFY_DIR/requirements.txt"
-        mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
-        log_success "ComfyUI core requirements synced"
+    log_success "ComfyUI Python environment ready"
+
+    # Make the workspace venv the active virtualenv BEFORE comfy-cli install.
+    # comfy-cli resolves its target Python from VIRTUAL_ENV first (resolve_python.py),
+    # so without this it installs ComfyUI's deps into the RunPod template's /venv/main
+    # (pre-exported VIRTUAL_ENV) — a venv that is never used at runtime, forcing a full
+    # reinstall later and downloading torch twice.
+    export VIRTUAL_ENV="$COMFY_VENV_DIR"
+    export PATH="$COMFY_VENV_DIR/bin:$PATH"
+
+    # --------------------------------------------------------- 3. Install ComfyUI
+    log_info "[3/5] Installing ComfyUI..."
+
+    if [ -f "$COMFY_DIR/main.py" ]; then
+        log_warn "ComfyUI already exists, skipping installation"
     else
-        log_info "ComfyUI core requirements já sincronizados; pulando"
-    fi
-else
-    log_warn "ComfyUI requirements.txt not found, skipping dependency sync"
-fi
+        # Beat the single-connection CDN throttle on the torch wheel: pre-fetch it with
+        # aria2c (parallel streams), then tell comfy-cli to skip its own (single-stream)
+        # torch download. Best-effort — on any failure comfy-cli downloads torch itself.
+        _comfy_install_extra=()
+        if prefetch_torch_via_aria2c; then
+            log_success "PyTorch pré-instalado via aria2c (multi-conexão); comfy-cli vai pular o torch"
+            _comfy_install_extra+=(--skip-torch-or-directml)
+        fi
 
-# Install ComfyUI-Manager v4+ pip package into workspace venv.
-# comfy-cli v1.7+ installs the Manager as a pip package (comfyui_manager) rather
-# than cloning it into custom_nodes/.  We ensure it lives in OUR venv so the
-# runtime Python can find it.
-if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
-    if ! "$COMFY_PYTHON" -c 'import comfyui_manager' 2>/dev/null; then
-        log_info "Installing ComfyUI-Manager pip package into workspace venv..."
-        run_with_progress "Instalando comfyui-manager pip" \
-            pip_install_into "$COMFY_PYTHON" -r "$COMFY_DIR/manager_requirements.txt"
-        log_success "ComfyUI-Manager pip package installed"
+        # comfy-cli auto-detects the CUDA build from the driver (cu130 on CUDA 13.x drivers,
+        # cu128 on 12.8) — its detection is correct; we only fix the mechanics. NO
+        # --fast-deps: at bootstrap there are no custom nodes yet (start.py clones them
+        # later) so its cross-node dedup buys nothing, while it couples torch+everything
+        # into one all-or-nothing uv resolution that a single slow wheel can abort, and it
+        # has a torch>=2.11 CUDA-runtime regression (comfy-cli #413). One retry, and the
+        # repo itself is verified below: the later steps can repair missing deps, but not
+        # a missing ComfyUI.
+        if run_with_progress "Instalando ComfyUI (comfy-cli)" \
+            timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia "${_comfy_install_extra[@]}"; then
+            log_success "ComfyUI installed"
+        elif run_with_progress "Reinstalando ComfyUI (comfy-cli, retry)" \
+            timeout 2400 "$COMFY_CLI" --skip-prompt --workspace "$COMFY_DIR" install --nvidia "${_comfy_install_extra[@]}"; then
+            log_success "ComfyUI installed (retry)"
+        else
+            log_warn "comfy-cli install falhou/expirou após retry — seguindo; as etapas seguintes reinstalam deps core/torch no venv correto."
+        fi
+    fi
+
+    # A missing main.py means there is no ComfyUI at all: every step after this would
+    # install dependencies (including multi-GB torch) for something that cannot start,
+    # and the run would still end with a green "Bootstrap complete!".
+    if [ ! -f "$COMFY_DIR/main.py" ]; then
+        log_error "ComfyUI não foi instalado: $COMFY_DIR/main.py não existe."
+        log_error "As duas tentativas do comfy-cli falharam (rede, PyPI ou GitHub)."
+        die "Abortando antes de gastar mais tempo pago. Verifique a rede da instância e rode o bootstrap novamente."
+    fi
+
+    # Template cleanup runs ONLY after our own ComfyUI is verified present. It deletes
+    # directories, so it must never happen before the first steps that can legitimately
+    # fail (a broken APT index used to abort the run with the template already gone and
+    # nothing installed). It is also a convenience, never a requirement: whatever it
+    # cannot do, it reports — it must not take the deploy down with it.
+    cleanup_template_comfyui_all \
+        || log_warn "Limpeza do ComfyUI de template incompleta; seguindo com o deploy."
+
+    # Ensure ComfyUI Python dependencies are present even if ComfyUI folder already existed.
+    # This is required when /workspace/comfy/.venv is recreated from scratch.
+    if [ -f "$COMFY_DIR/requirements.txt" ]; then
+        if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
+            log_info "Syncing ComfyUI core requirements..."
+            run_with_progress "Instalando dependencias core do ComfyUI" \
+                pip_install_into "$COMFY_PYTHON" --upgrade -r "$COMFY_DIR/requirements.txt"
+            mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
+            log_success "ComfyUI core requirements synced"
+        else
+            log_info "ComfyUI core requirements já sincronizados; pulando"
+        fi
     else
-        log_info "ComfyUI-Manager pip package already present in workspace venv"
+        log_warn "ComfyUI requirements.txt not found, skipping dependency sync"
     fi
-fi
 
-# Ensure a PyTorch build that THIS driver can actually run is present in the
-# ComfyUI runtime. torch_runtime_is_ready only reinstalls when the wheel's CUDA
-# toolkit is strictly newer than the driver supports (e.g. a cu13 wheel on a
-# CUDA 12.8-only host), so a perfectly good torch is never thrown away.
-_driver_max_cuda="$(detect_driver_max_cuda)"
-log_info "Driver CUDA máx.: ${_driver_max_cuda:-desconhecido} | torch build: $("$COMFY_PYTHON" -c 'import torch;print(getattr(torch.version,"cuda","?") or "cpu")' 2>/dev/null || echo 'ausente')"
-if torch_runtime_is_ready; then
-    log_info "PyTorch compatível com o driver atual já presente no runtime; pulando reinstall"
-else
-    log_info "PyTorch ausente/incompatível com o driver; instalando build compatível ($TORCH_INDEX_URL)..."
-    run_with_progress "Instalando PyTorch compatível com o driver ($TORCH_INDEX_URL)" \
-        pip_install_into "$COMFY_PYTHON" --upgrade --force-reinstall \
-        torch torchvision torchaudio \
-        --index-url "$TORCH_INDEX_URL"
+    # Install ComfyUI-Manager v4+ pip package into workspace venv.
+    # comfy-cli v1.7+ installs the Manager as a pip package (comfyui_manager) rather
+    # than cloning it into custom_nodes/.  We ensure it lives in OUR venv so the
+    # runtime Python can find it.
+    if [ -f "$COMFY_DIR/manager_requirements.txt" ]; then
+        if ! "$COMFY_PYTHON" -c 'import comfyui_manager' 2>/dev/null; then
+            log_info "Installing ComfyUI-Manager pip package into workspace venv..."
+            run_with_progress "Instalando comfyui-manager pip" \
+                pip_install_into "$COMFY_PYTHON" -r "$COMFY_DIR/manager_requirements.txt"
+            log_success "ComfyUI-Manager pip package installed"
+        else
+            log_info "ComfyUI-Manager pip package already present in workspace venv"
+        fi
+    fi
 
-    # Validation is advisory, NOT fatal: never abort the whole bootstrap over it.
-    # If torch still doesn't validate (e.g. a driver capped below CUDA 12.8, or a
-    # transient probe miss), warn with an actionable hint and let ComfyUI start —
-    # it will surface the real error itself if there genuinely is one.
+    # Ensure a PyTorch build that THIS driver can actually run is present in the
+    # ComfyUI runtime. torch_runtime_is_ready only reinstalls when the wheel's CUDA
+    # toolkit is strictly newer than the driver supports, so a perfectly good torch is
+    # never thrown away.
+    _driver_max_cuda="$(detect_driver_max_cuda)"
+    log_info "Driver CUDA máx.: ${_driver_max_cuda:-desconhecido} | torch build: $("$COMFY_PYTHON" -c 'import torch;print(getattr(torch.version,"cuda","?") or "cpu")' 2>/dev/null || echo 'ausente')"
     if torch_runtime_is_ready; then
-        log_success "PyTorch instalado e compatível com o driver ($TORCH_INDEX_URL)"
+        log_info "PyTorch compatível com o driver atual já presente no runtime; pulando reinstall"
     else
-        log_warn "PyTorch reinstalado, mas a validação ainda não confirma CUDA utilizável."
-        log_warn "Seguindo mesmo assim — o ComfyUI vai iniciar e reportar o erro real se houver."
-        log_warn "Se esta GPU exige outro índice CUDA (driver máx.: ${_driver_max_cuda:-desconhecido}),"
-        log_warn "  defina TORCH_INDEX_URL manualmente, ex.: https://download.pytorch.org/whl/cu126"
+        log_info "PyTorch ausente/incompatível com o driver; instalando build compatível ($TORCH_INDEX_URL)..."
+        run_with_progress "Instalando PyTorch compatível com o driver ($TORCH_INDEX_URL)" \
+            pip_install_into "$COMFY_PYTHON" --upgrade --force-reinstall \
+            "${TORCH_PIP_SPECS[@]}" \
+            --index-url "$TORCH_INDEX_URL"
+
+        # Validation is advisory, NOT fatal: never abort the whole bootstrap over it.
+        # If torch still doesn't validate (e.g. a driver capped below CUDA 12.8, or a
+        # transient probe miss), warn with an actionable hint and let ComfyUI start —
+        # it will surface the real error itself if there genuinely is one.
+        if torch_runtime_is_ready; then
+            log_success "PyTorch instalado e compatível com o driver ($TORCH_INDEX_URL)"
+        else
+            log_warn "PyTorch reinstalado, mas a validação ainda não confirma CUDA utilizável."
+            log_warn "Seguindo mesmo assim — o ComfyUI vai iniciar e reportar o erro real se houver."
+            log_warn "Se esta GPU exige outro índice CUDA (driver máx.: ${_driver_max_cuda:-desconhecido}),"
+            log_warn "  defina TORCH_INDEX_URL manualmente, ex.: https://download.pytorch.org/whl/cu126"
+        fi
     fi
-fi
 
-# 4. Clone/update Arrakis Start
-log_info "[4/5] Setting up Arrakis Start..."
+    # ------------------------------------------------ 4. Clone/update Arrakis Start
+    log_info "[4/5] Setting up Arrakis Start..."
 
-# Build authenticated GitHub URL if GITHUB_TOKEN is set
-GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-if [ -n "$GITHUB_TOKEN" ]; then
-    ARRAKIS_CLONE_URL="https://${GITHUB_TOKEN}@github.com/adbrasi/arrakis_start.git"
-    log_info "GitHub token detected — using authenticated clone URL"
-else
-    ARRAKIS_CLONE_URL="https://github.com/adbrasi/arrakis_start.git"
-fi
+    if [ -n "$ARRAKIS_GIT_AUTH_HEADER" ]; then
+        log_info "GitHub token detected — authenticating out-of-band (nothing is written to .git/config)"
+    fi
 
-if [ -d "$ARRAKIS_DIR/.git" ]; then
-    log_info "Updating Arrakis Start..."
-    # Configure remote URL with token (if available) before pulling
-    git -C "$ARRAKIS_DIR" remote set-url origin "$ARRAKIS_CLONE_URL" 2>/dev/null || true
-    if run_with_progress "Atualizando repositorio Arrakis Start (git pull)" \
-        timeout 45 git -C "$ARRAKIS_DIR" pull --ff-only; then
-        log_success "Arrakis Start atualizado"
+    if [ -d "$ARRAKIS_DIR/.git" ]; then
+        log_info "Updating Arrakis Start..."
+        # Keep the stored remote token-free. Older bootstraps embedded the token in
+        # this URL, so this also scrubs a leaked credential from existing volumes.
+        git -C "$ARRAKIS_DIR" remote set-url origin "$ARRAKIS_REPO_URL" 2>/dev/null || true
+        if run_with_progress "Atualizando repositorio Arrakis Start (git pull)" \
+            git_run 45 -C "$ARRAKIS_DIR" pull --ff-only; then
+            log_success "Arrakis Start atualizado"
+        else
+            log_warn "Update pulado (timeout, rede ou bloqueio de git). Continuando com versão local."
+        fi
     else
-        log_warn "Update pulado (timeout, rede ou bloqueio de git). Continuando com versão local."
-    fi
-else
-    log_info "Cloning Arrakis Start..."
-    if run_with_progress "Clonando repositorio Arrakis Start" \
-        timeout 45 git clone --depth 1 "$ARRAKIS_CLONE_URL" "$ARRAKIS_DIR"; then
+        log_info "Cloning Arrakis Start..."
+        install_arrakis_repo "$ARRAKIS_DIR" "$ARRAKIS_REPO_URL" \
+            || die "Não foi possível clonar o Arrakis Start após 3 tentativas (rede/DNS/GitHub). Verifique a rede da instância e rode o bootstrap novamente."
         log_success "Arrakis Start clonado"
-    else
-        # Fallback: if repo doesn't exist yet, copy from current directory
-        if [ -f "$(dirname "$0")/start.py" ]; then
-            cp -r "$(dirname "$0")" "$ARRAKIS_DIR"
-            log_warn "Usando fallback local para Arrakis Start"
-        else
-            log_error "Could not find Arrakis Start files"
-            exit 1
-        fi
     fi
-fi
 
-log_success "Arrakis Start ready"
+    [ -f "$ARRAKIS_DIR/start.py" ] \
+        || die "Checkout do Arrakis Start incompleto: $ARRAKIS_DIR/start.py não existe."
 
-# 5. Setup Arrakis orchestrator Python environment
-log_info "[5/5] Setting up Arrakis orchestrator environment..."
+    log_success "Arrakis Start ready"
 
-if [ ! -d "$ARRAKIS_VENV_DIR/bin" ]; then
-    python3 -m venv "$ARRAKIS_VENV_DIR"
-    log_success "Arrakis virtual environment created"
-else
-    log_info "Arrakis virtual environment already exists"
-fi
+    # -------------------------------- 5. Arrakis orchestrator Python environment
+    log_info "[5/5] Setting up Arrakis orchestrator environment..."
 
-run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptools)" \
-    pip_install_into "$ARRAKIS_PYTHON" --upgrade pip wheel setuptools
-# HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps).
-# Since huggingface_hub>=1.0 the `hf` CLI is bundled by default and the [cli]
-# extra was removed — installing it would emit a pointless warning.
-run_with_progress "Instalando huggingface_hub + hf_xet no venv Arrakis" \
-    pip_install_into "$ARRAKIS_PYTHON" --upgrade "huggingface_hub>=1.3.0,<2.0" hf_xet
+    ensure_venv "$ARRAKIS_VENV_DIR" "Arrakis" || true
 
-# Store HF token so hf_xet backend and gated model downloads work correctly.
-# hf auth login caches the token at $HF_HOME/token, which hf_xet reads directly
-# (it does NOT rely on the HF_TOKEN env var for auth in all code paths).
-HF_TOKEN="${HF_TOKEN:-}"
-if [ -n "$HF_TOKEN" ]; then
-    HF_CLI="$ARRAKIS_VENV_DIR/bin/hf"
-    if [ -x "$HF_CLI" ]; then
-        if "$HF_CLI" auth login --token "$HF_TOKEN" --add-to-git-credential 2>&1; then
-            log_success "HuggingFace token stored via hf auth login (gated models enabled)"
-        else
-            log_warn "hf auth login failed, writing token file directly as fallback"
-            mkdir -p "$HF_HOME"
-            printf '%s' "$HF_TOKEN" > "$HF_HOME/token"
-            chmod 600 "$HF_HOME/token"
-            log_success "HuggingFace token stored at $HF_HOME/token (fallback)"
-        fi
+    run_with_progress "Atualizando tooling base do venv Arrakis (pip/wheel/setuptools)" \
+        pip_install_into "$ARRAKIS_PYTHON" --upgrade pip wheel setuptools
+    # HF CLI/XET live in orchestrator venv (isolated from ComfyUI runtime deps).
+    # Since huggingface_hub>=1.0 the `hf` CLI is bundled by default and the [cli]
+    # extra was removed — installing it would emit a pointless warning.
+    run_with_progress "Instalando huggingface_hub + hf_xet no venv Arrakis" \
+        pip_install_into "$ARRAKIS_PYTHON" --upgrade "huggingface_hub>=1.3.0,<2.0" hf_xet
+
+    # Store HF token so hf_xet backend and gated model downloads work correctly.
+    # $HF_HOME/token is the cache huggingface_hub reads (it does NOT rely on the
+    # HF_TOKEN env var in all code paths), so we write exactly that file.
+    HF_TOKEN="${HF_TOKEN:-}"
+    if [ -n "$HF_TOKEN" ]; then
+        store_hf_token || log_warn "Seguindo sem token HF armazenado — downloads de modelos gated vão falhar."
     else
-        # hf CLI not available yet — write token file directly
-        mkdir -p "$HF_HOME"
-        printf '%s' "$HF_TOKEN" > "$HF_HOME/token"
-        chmod 600 "$HF_HOME/token"
-        log_success "HuggingFace token stored at $HF_HOME/token (gated models enabled)"
+        log_warn "HF_TOKEN not set — gated model downloads will fail. Set HF_TOKEN in your environment."
     fi
-    # Verify token is actually stored
-    if [ -f "$HF_HOME/token" ]; then
-        STORED_TAIL=$(tail -c 6 "$HF_HOME/token")
-        log_info "HF token stored OK (tail: ...${STORED_TAIL})"
-    else
-        log_error "HF token file NOT found at $HF_HOME/token after login — gated models will fail!"
-    fi
-else
-    log_warn "HF_TOKEN not set — gated model downloads will fail. Set HF_TOKEN in your environment."
-fi
 
-run_with_progress "Instalando requirements do Arrakis" \
-    pip_install_into "$ARRAKIS_PYTHON" --upgrade -r "$ARRAKIS_DIR/requirements.txt"
-log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
+    run_with_progress "Instalando requirements do Arrakis" \
+        pip_install_into "$ARRAKIS_PYTHON" --upgrade -r "$ARRAKIS_DIR/requirements.txt"
+    log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
 
-log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
+    log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
 
-# Final message
-log_info "========================================="
-log_success "Bootstrap complete!"
-log_info "Starting web selector on port 8090..."
-log_info "Access via VastAI/Runpod port forwarding"
-log_info "========================================="
+    # Final message
+    log_info "========================================="
+    log_success "Bootstrap complete!"
+    log_info "Starting web selector on port $WEB_PORT..."
+    log_info "Access via VastAI/Runpod port forwarding"
+    log_info "========================================="
 
-# Start Arrakis Start
-cd "$ARRAKIS_DIR"
-export COMFY_PYTHON="$COMFY_PYTHON"
-export COMFY_CLI="$COMFY_CLI"
-# Ensure the workspace venv is the active virtualenv for all child processes.
-# Without this, cloud templates may have /venv/main on PATH and comfy-cli launch
-# would pick up the wrong Python (with stale PyTorch / missing node deps).
-export VIRTUAL_ENV="$COMFY_VENV_DIR"
-export PATH="$COMFY_VENV_DIR/bin:$PATH"
-exec "$ARRAKIS_PYTHON" start.py --web-only
+    # Start Arrakis Start
+    cd "$ARRAKIS_DIR"
+    export COMFY_PYTHON="$COMFY_PYTHON"
+    export COMFY_CLI="$COMFY_CLI"
+    # Ensure the workspace venv is the active virtualenv for all child processes.
+    # Without this, cloud templates may have /venv/main on PATH and comfy-cli launch
+    # would pick up the wrong Python (with stale PyTorch / missing node deps).
+    export VIRTUAL_ENV="$COMFY_VENV_DIR"
+    export PATH="$COMFY_VENV_DIR/bin:$PATH"
+    exec "$ARRAKIS_PYTHON" start.py --web-only
+}
+
+main "$@"
