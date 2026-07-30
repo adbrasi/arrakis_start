@@ -31,11 +31,25 @@ contract for incomplete model data.
   when subprocess output is piped.
 - A callback `TypeError`/`AttributeError` triggers a compatibility retry without
   the callback, reusing the same XET partial cache. It does not disable XET.
-- The local disk watchdog may report progress and heartbeat information, but
-  it must not terminate XET solely because staging bytes did not grow.
-- HTTP fallback starts only after the XET subprocess exits unsuccessfully.
+- The local disk watchdog may report heartbeat information, but it must not
+  terminate XET solely because staging bytes did not grow, and it must not
+  publish progress for XET at all: XET owns progress reporting on its own path,
+  and a second disk-derived stream disagrees with it by construction.
+- XET liveness is judged on *delivered bytes*, taken from the worker's own
+  progress events rather than from disk. A healthy transfer legitimately starts
+  at tens of KB/s before accelerating, so a plain rate threshold is not a valid
+  failure signal. Two rules apply, both env-tunable and both deliberately
+  generous enough that a normal slow start never reaches them:
+  - delivered bytes stop growing entirely for `XET_NO_PROGRESS_SECONDS`
+    (default 240) — the transfer is dead, terminate and fall back;
+  - after `XET_RATE_GRACE_SECONDS` (default 600), the average delivered rate is
+    still below `XET_MIN_BYTES_PER_SEC` (default 100 KB/s) — the transfer is
+    crawling long past any warm-up, terminate and fall back.
+- HTTP fallback starts after the XET subprocess exits unsuccessfully, including
+  when the liveness rules above terminated it.
 - The existing global no-completion timeout remains the hard safety boundary
-  for a genuinely stuck batch.
+  for a genuinely stuck batch. It is a last resort, not the primary guard, and
+  it is reported as its own outcome — never as a user cancellation.
 - Cancellation remains an immediate terminal result and never starts fallback
   or retry.
 
@@ -44,8 +58,14 @@ contract for incomplete model data.
 - Normalize each requested model to `(destination directory, filename)` before
   scheduling workers.
 - Identical destination and source entries collapse into one queue item.
+- The destination name is derived the same way the downloader derives it, so an
+  entry with an empty `filename` participates in the same destination check as a
+  named one.
 - Two different sources targeting the same destination are a configuration
-  conflict and must fail before downloads start.
+  conflict. It is reported as a failure and the first source wins, but it must
+  never cancel the unrelated downloads queued alongside it: aborting the batch
+  produced zero downloads with zero recorded failures, which the installer then
+  reported as a successful install.
 - Progress totals use the deduplicated queue size.
 
 ## Cancellation and Shutdown

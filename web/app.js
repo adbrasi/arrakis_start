@@ -27,10 +27,84 @@ function showToast(message, type = 'info') {
 async function pollStatus() {
     try {
         const response = await fetch('/api/status');
+        if (!response.ok) {
+            // A server error is not the same as "ComfyUI stopped" — say so.
+            updateStatusUI({ running: false, status: 'unreachable' });
+            return;
+        }
         const data = await response.json();
         updateStatusUI(data);
     } catch {
-        updateStatusUI({ running: false, status: 'unknown' });
+        updateStatusUI({ running: false, status: 'unreachable' });
+    }
+}
+
+function formatBytes(bytes) {
+    if (!bytes || bytes < 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+function renderProgress(progress) {
+    const panel = document.getElementById('progress-panel');
+    if (!panel) return;
+
+    if (!progress || (!progress.active?.length && !progress.total && !progress.detail)) {
+        panel.hidden = true;
+        return;
+    }
+    panel.hidden = false;
+
+    const stageEl = document.getElementById('progress-stage');
+    if (stageEl) {
+        const counts = progress.total
+            ? ` (${progress.done}/${progress.total})`
+            : '';
+        stageEl.textContent = `${progress.stage || ''}${counts}${progress.detail ? ' — ' + progress.detail : ''}`;
+    }
+
+    const list = document.getElementById('progress-files');
+    if (!list) return;
+    list.textContent = '';
+    for (const file of progress.active || []) {
+        const row = document.createElement('div');
+        row.className = 'progress-row';
+
+        const name = document.createElement('span');
+        name.className = 'progress-name';
+        name.textContent = file.filename + (file.backend ? ` [${file.backend}]` : '');
+        row.appendChild(name);
+
+        const bar = document.createElement('div');
+        bar.className = 'progress-bar';
+        const fill = document.createElement('div');
+        fill.className = 'progress-fill';
+        // No total means no percentage — show bytes rather than a fake 0%.
+        if (file.total > 0) {
+            const pct = Math.min(100, (file.current / file.total) * 100);
+            fill.style.width = `${pct}%`;
+        } else {
+            fill.style.width = '0%';
+            bar.classList.add('indeterminate');
+        }
+        bar.appendChild(fill);
+        row.appendChild(bar);
+
+        const stats = document.createElement('span');
+        stats.className = 'progress-stats';
+        const speed = file.speed_bps ? ` @ ${formatBytes(file.speed_bps)}/s` : '';
+        stats.textContent = file.total > 0
+            ? `${formatBytes(file.current)} / ${formatBytes(file.total)}${speed}`
+            : `${formatBytes(file.current)}${speed}`;
+        row.appendChild(stats);
+
+        list.appendChild(row);
     }
 }
 
@@ -38,27 +112,54 @@ function updateStatusUI(data) {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     const restartBtn = document.getElementById('restart-btn');
+    const cancelBtn = document.getElementById('cancel-btn');
+    const startBtn = document.getElementById('start-btn');
 
     // Remove all status classes
     dot.classList.remove('running', 'stopped', 'starting', 'error');
 
-    if (data.running) {
-        dot.classList.add('running');
-        text.textContent = `ComfyUI: Rodando (porta ${data.port || 8818})`;
-        restartBtn.disabled = isRestarting;
-    } else if (data.status === 'starting') {
+    // An install in progress is authoritative and survives a page reload, so it
+    // is checked before the ComfyUI state: module flags reset on reload, which
+    // used to show "Parado" with the Install button live during a running install.
+    if (data.installing) {
+        isInstalling = true;
         dot.classList.add('starting');
-        text.textContent = 'ComfyUI: Iniciando...';
+        text.textContent = 'Instalando...';
         restartBtn.disabled = true;
-    } else if (data.status === 'error') {
-        dot.classList.add('error');
-        text.textContent = 'ComfyUI: Erro';
-        restartBtn.disabled = isRestarting;
+        if (startBtn) startBtn.disabled = true;
+        if (cancelBtn) cancelBtn.hidden = false;
     } else {
-        dot.classList.add('stopped');
-        text.textContent = 'ComfyUI: Parado';
-        restartBtn.disabled = isRestarting;
+        if (isInstalling) {
+            // The install finished while this tab was not the one that started it.
+            isInstalling = false;
+            if (startBtn) startBtn.disabled = false;
+            if (cancelBtn) cancelBtn.hidden = true;
+        }
+
+        if (data.running) {
+            dot.classList.add('running');
+            text.textContent = `ComfyUI: Rodando (porta ${data.port || 8818})`;
+            restartBtn.disabled = isRestarting;
+        } else if (data.status === 'starting') {
+            dot.classList.add('starting');
+            text.textContent = 'ComfyUI: Iniciando...';
+            restartBtn.disabled = true;
+        } else if (data.status === 'error') {
+            dot.classList.add('error');
+            text.textContent = 'ComfyUI: Erro';
+            restartBtn.disabled = isRestarting;
+        } else if (data.status === 'unreachable') {
+            dot.classList.add('error');
+            text.textContent = 'Servidor inacessível';
+            restartBtn.disabled = true;
+        } else {
+            dot.classList.add('stopped');
+            text.textContent = 'ComfyUI: Parado';
+            restartBtn.disabled = isRestarting;
+        }
     }
+
+    renderProgress(data.progress);
 }
 
 function startStatusPolling() {
@@ -140,10 +241,20 @@ async function loadPresets() {
 
         // Render preset cards
         container.innerHTML = '';
+        // Drop selections whose preset no longer exists (e.g. it was deleted or
+        // renamed), otherwise the button counts presets that are not on screen.
+        const availableNames = new Set(data.presets.map(p => p.name));
+        selectedPresets = selectedPresets.filter(name => availableNames.has(name));
         data.presets.forEach(preset => {
             const card = createPresetCard(preset);
             container.appendChild(card);
         });
+        // Re-rendering rebuilds the DOM, so restore the selection state that
+        // lives in `selectedPresets` — otherwise the checkboxes render unchecked
+        // while the array still drives the install.
+        restoreSelectionUI();
+        updateAllOrderBadges();
+        updateStartButton();
 
     } catch (error) {
         console.error('Falha ao carregar presets:', error);
@@ -241,6 +352,17 @@ function createPresetCard(preset) {
     });
 
     return card;
+}
+
+function restoreSelectionUI() {
+    // `selectedPresets` is the source of truth; the DOM is rebuilt on every
+    // render and must be re-synced to it.
+    for (const name of selectedPresets) {
+        const checkbox = document.getElementById(`preset-${name}`);
+        if (!checkbox) continue;
+        checkbox.checked = true;
+        checkbox.closest('.preset-card')?.classList.add('selected');
+    }
 }
 
 function updateAllOrderBadges() {
@@ -487,12 +609,21 @@ async function startWithPresets() {
                 }
             }, 3000);
         } else {
-            throw new Error('Falha na requisicao de instalacao');
+            // Surface the server's own reason (e.g. the 409 for a concurrent
+            // install) instead of a generic failure the user cannot act on.
+            let serverMessage = '';
+            try {
+                const body = await response.json();
+                serverMessage = body.error || '';
+            } catch {
+                // Non-JSON body; fall through to the generic message.
+            }
+            throw new Error(serverMessage || 'Falha na requisicao de instalacao');
         }
 
     } catch (error) {
         console.error('Erro na instalacao:', error);
-        showToast('Instalacao falhou. Verifique o console para detalhes.', 'error');
+        showToast(error.message || 'Instalacao falhou. Verifique o console para detalhes.', 'error');
         isInstalling = false;
         const cb = document.getElementById('cancel-btn');
         if (cb) cb.hidden = true;

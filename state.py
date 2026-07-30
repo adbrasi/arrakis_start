@@ -29,17 +29,35 @@ class StateManager:
         self.state = self._load_state()
 
     def _load_state(self) -> Dict:
-        """Load state from disk"""
+        """Load state from disk.
+
+        A corrupt file is preserved as ``state.json.corrupt`` rather than being
+        silently replaced by defaults: adopting defaults makes every installed
+        preset and model disappear, and the first subsequent write makes that
+        loss permanent — triggering a full re-download of every model.
+        """
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
                     loaded = json.load(f)
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"state root is {type(loaded).__name__}, not object")
                 # Merge with defaults so new keys are always present
                 defaults = self._default_state()
                 defaults.update(loaded)
                 return defaults
             except Exception as e:
-                logger.error(f"Failed to load state: {e}")
+                backup = self.state_file.with_suffix('.json.corrupt')
+                try:
+                    os.replace(self.state_file, backup)
+                    preserved = f"; arquivo preservado em {backup}"
+                except Exception as move_err:
+                    preserved = f"; não foi possível preservar o arquivo ({move_err})"
+                logger.error(
+                    f"state.json ilegível ({e}){preserved}. Partindo do estado "
+                    "padrão: presets e modelos instalados podem precisar ser "
+                    "redetectados."
+                )
 
         return self._default_state()
 
@@ -52,15 +70,30 @@ class StateManager:
             "installed_nodes": [],
             "comfyui_status": "stopped",
             "comfyui_pid": None,
+            # Process start time of comfyui_pid. A PID alone is not an identity:
+            # it survives container restarts in this file and gets recycled, so
+            # killing "the tracked PID" can hit an unrelated process.
+            "comfyui_pid_create_time": None,
             "comfyui_flags": [],
-            "comfyui_port": 8818,
+            # None means "never recorded", which is distinguishable from a real
+            # recorded 8818 — the caller can then fall back to COMFY_PORT.
+            "comfyui_port": None,
             "runtime_stack": "unknown",
             "last_install": None,
             "version": "2.0"
         }
 
-    def _save_state(self):
-        """Save state to disk atomically (write to temp, then os.replace)"""
+    def _save_state(self) -> bool:
+        """Save state to disk atomically (write to temp, fsync, then os.replace).
+
+        The fsync calls are not optional. Cloud instances are terminated
+        abruptly, and on ext4 ``data=ordered`` the rename metadata can commit
+        while the data blocks are still unwritten — leaving a zero-length
+        state.json that the next boot cannot read.
+
+        Returns True on success. Callers that must not silently diverge from
+        disk should check it.
+        """
         import tempfile
         try:
             temp_fd, temp_path = tempfile.mkstemp(
@@ -71,13 +104,29 @@ class StateManager:
             try:
                 with os.fdopen(temp_fd, 'w') as f:
                     json.dump(self.state, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.replace(temp_path, self.state_file)
+                # Durably record the rename itself.
+                try:
+                    dir_fd = os.open(str(self.state_file.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass
+                return True
             except Exception:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 raise
         except Exception as e:
-            logger.error(f"Failed to save state: {e}")
+            logger.error(
+                f"Falha ao gravar state.json ({e}); o estado em memória divergiu "
+                "do disco"
+            )
+            return False
 
     # Preset tracking
     def add_preset(self, preset_name: str):
@@ -119,6 +168,30 @@ class StateManager:
                 "size": size,
                 "installed_at": datetime.now().isoformat()
             }
+            self._save_state()
+
+    def add_models(self, models: List[Dict]) -> None:
+        """Track many installed models with a single disk write.
+
+        Recording them one at a time rewrites the whole state file per model —
+        32 full rewrites when re-installing a 32-model preset.
+
+        Each item: ``{'filename': str, 'dir': str, 'url': str, 'size': int}``.
+        """
+        if not models:
+            return
+        with self._lock:
+            now = datetime.now().isoformat()
+            for model in models:
+                filename = model.get('filename')
+                if not filename:
+                    continue
+                self.state["installed_models"][filename] = {
+                    "dir": model.get('dir', ''),
+                    "url": model.get('url', ''),
+                    "size": int(model.get('size') or 0),
+                    "installed_at": now,
+                }
             self._save_state()
 
     def is_model_installed(self, filename: str) -> bool:
@@ -184,18 +257,33 @@ class StateManager:
 
     # ComfyUI status
     def set_comfyui_status(self, status: str, pid: Optional[int] = None,
-                          flags: Optional[List[str]] = None, port: int = 8818,
-                          clear_pid: bool = False):
-        """Update ComfyUI status"""
+                          flags: Optional[List[str]] = None,
+                          port: Optional[int] = None,
+                          clear_pid: bool = False,
+                          pid_create_time: Optional[float] = None):
+        """Update ComfyUI status.
+
+        ``pid_create_time`` is stored alongside the PID so a later stop can
+        prove the PID still refers to the same process instead of signalling
+        whatever recycled it. It is cleared together with the PID.
+
+        ``port`` is only overwritten when given, so a status update that does
+        not know the port cannot clobber a recorded one.
+        """
         with self._lock:
             self.state["comfyui_status"] = status
             if clear_pid:
                 self.state["comfyui_pid"] = None
+                self.state["comfyui_pid_create_time"] = None
             elif pid is not None:
                 self.state["comfyui_pid"] = pid
+                self.state["comfyui_pid_create_time"] = pid_create_time
+            elif pid_create_time is not None:
+                self.state["comfyui_pid_create_time"] = pid_create_time
             if flags is not None:
                 self.state["comfyui_flags"] = flags
-            self.state["comfyui_port"] = port
+            if port is not None:
+                self.state["comfyui_port"] = port
             self._save_state()
 
     def get_comfyui_status(self) -> Dict:
@@ -204,6 +292,7 @@ class StateManager:
             return {
                 "status": self.state["comfyui_status"],
                 "pid": self.state["comfyui_pid"],
+                "pid_create_time": self.state.get("comfyui_pid_create_time"),
                 "flags": list(self.state["comfyui_flags"]),
                 "port": self.state["comfyui_port"]
             }

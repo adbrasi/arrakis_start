@@ -688,3 +688,85 @@ section {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+/* ============================================
+   Progresso de download/instalacao
+   ============================================ */
+.progress-panel {
+    margin-top: 1rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.25);
+}
+
+.progress-stage {
+    font-size: 0.85rem;
+    opacity: 0.85;
+    margin-bottom: 0.6rem;
+}
+
+.progress-files {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.progress-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 6rem minmax(0, auto);
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.8rem;
+}
+
+.progress-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.progress-bar {
+    position: relative;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #b06ab3, #4568dc);
+    transition: width 0.4s ease;
+}
+
+/* Unknown total: animate instead of showing a misleading 0%. */
+.progress-bar.indeterminate::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 35%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, transparent, #b06ab3, transparent);
+    animation: progress-sweep 1.4s linear infinite;
+}
+
+@keyframes progress-sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(300%); }
+}
+
+.progress-stats {
+    text-align: right;
+    opacity: 0.75;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .progress-row {
+        grid-template-columns: minmax(0, 1fr) 4rem;
+    }
+    .progress-stats { grid-column: 1 / -1; text-align: left; }
+}

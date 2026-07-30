@@ -6,6 +6,7 @@ Serves web UI and handles installation requests
 
 import json
 import logging
+import os
 import signal
 import threading
 from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -20,6 +21,31 @@ logger = logging.getLogger(__name__)
 _presets_callback = None
 _state_manager = None
 
+# COMFY_PORT is the single source of truth for which port ComfyUI uses; a
+# recorded value wins only when one was actually recorded.
+try:
+    COMFY_PORT = int(os.environ.get('COMFY_PORT', '8818'))
+    if COMFY_PORT <= 0:
+        raise ValueError(COMFY_PORT)
+except ValueError:
+    logger.warning("COMFY_PORT inválido; usando 8818")
+    COMFY_PORT = 8818
+
+try:
+    import progress as progress_registry
+    HAS_PROGRESS = True
+except ImportError:
+    HAS_PROGRESS = False
+
+
+def _comfy_port(state) -> int:
+    """Recorded port if there is one, else COMFY_PORT."""
+    try:
+        recorded = state.get_comfyui_status().get('port')
+    except Exception:
+        recorded = None
+    return int(recorded) if recorded else COMFY_PORT
+
 
 def _shutdown_runtime():
     """Cancel active work destructively, then stop ComfyUI."""
@@ -31,7 +57,7 @@ def _shutdown_runtime():
     pm = ProcessManager(state)
     if pm.is_running():
         logger.info("Stopping ComfyUI before shutdown...")
-        pm.ensure_stopped(timeout=15)
+        pm.ensure_stopped(port=_comfy_port(state), timeout=15)
 
 
 class PresetHandler(SimpleHTTPRequestHandler):
@@ -42,6 +68,23 @@ class PresetHandler(SimpleHTTPRequestHandler):
         web_dir = Path(__file__).parent / 'web'
         super().__init__(*args, directory=str(web_dir), **kwargs)
     
+    def _send_json_error(self, code: int, message: str):
+        """Reply with a JSON error carrying no internal detail.
+
+        `send_error(500, str(e))` returned raw exception text — absolute
+        filesystem paths, internal types — to unauthenticated clients, defeating
+        the project's log-sanitization convention.
+        """
+        body = json.dumps({'error': message}).encode()
+        try:
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            pass
+
     def log_message(self, format, *args):
         """Silence ALL HTTP request logs - user doesn't want to see them"""
         pass  # Don't log any HTTP requests
@@ -127,7 +170,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
         
         except Exception as e:
             logger.error(f"Failed to get presets: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
     
     def _handle_get_workflow(self, filename):
         """Serve a workflow file from the workflows/ directory"""
@@ -154,7 +197,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Failed to serve workflow {filename}: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
 
     def _handle_get_status(self):
         """Return ComfyUI status"""
@@ -171,22 +214,39 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps({
+            payload = {
                 'running': is_running,
                 'status': status_data.get('status', 'unknown'),
-                'port': status_data.get('port', 8818),
+                'port': _comfy_port(state),
                 'installed_presets': state.get_installed_presets(),
                 **install_data,
-            }).encode())
+            }
+            # Download/install progress rides on this endpoint: the UI already
+            # polls it, and cloud hosts expose only this port, so a separate
+            # WebSocket listener could never reach the browser.
+            if HAS_PROGRESS:
+                payload['progress'] = progress_registry.snapshot()
+            self.wfile.write(json.dumps(payload).encode())
         except Exception as e:
             logger.error(f"Failed to get status: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Falha ao obter status")
 
     def _handle_restart(self):
         """Handle ComfyUI restart request (kill + start with last preset flags)"""
         try:
             from process_manager import ProcessManager
+            from start import get_install_status, get_active_downloader
             state = _state_manager or get_state_manager()
+
+            # Restarting mid-install runs a second pip in the same venv (the
+            # start path can force-reinstall torch), and pip is not concurrent-safe
+            # in one environment. The client-side guard is per-tab and lost on
+            # reload, so it has to be enforced here.
+            if get_install_status().get('installing') or get_active_downloader() is not None:
+                self._send_json_error(
+                    409, "Instalação em andamento; reinicie o ComfyUI depois que ela terminar."
+                )
+                return
 
             def do_restart():
                 try:
@@ -194,7 +254,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     logger.info("Restart requested via web UI")
 
                     # Stop ComfyUI
-                    if not pm.ensure_stopped(timeout=20):
+                    if not pm.ensure_stopped(port=_comfy_port(state), timeout=20):
                         logger.error("Failed to stop ComfyUI for restart")
                         return
 
@@ -223,7 +283,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
             }).encode())
         except Exception as e:
             logger.error(f"Restart error: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
 
     def _handle_install(self):
         """Handle preset installation request"""
@@ -272,7 +332,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
                     # STEP 1: Always ensure ComfyUI is stopped (including stale PID state)
                     logger.info("Ensuring ComfyUI is stopped before installation...")
-                    if not pm.ensure_stopped(timeout=20):
+                    if not pm.ensure_stopped(port=_comfy_port(state), timeout=20):
                         print("\n" + "="*60)
                         print("\033[1;31m❌ ERRO AO PARAR COMFYUI ❌\033[0m")
                         print("="*60 + "\n")
@@ -339,7 +399,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
         
         except Exception as e:
             logger.error(f"Installation error: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
 
     def _handle_cancel(self):
         """Cancel an in-progress installation (interrupts active downloads)."""
@@ -357,7 +417,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
             }).encode())
         except Exception as e:
             logger.error(f"Cancel error: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
 
     def _handle_uninstall(self):
         """Handle preset uninstall request — deletes models specific to a preset"""
@@ -406,7 +466,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Uninstall error: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
 
     def _handle_shutdown(self):
         """Handle Arrakis Start shutdown request"""
@@ -438,7 +498,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
         except Exception as e:
             logger.error(f"Shutdown error: {e}")
-            self.send_error(500, str(e))
+            self._send_json_error(500, "Erro interno do servidor")
 
 
 def run_server(port: int = 8090, presets_callback: Callable = None):
@@ -449,7 +509,14 @@ def run_server(port: int = 8090, presets_callback: Callable = None):
 
     # ThreadingHTTPServer handles concurrent API requests; daemon_threads lets
     # handler threads die with the process.
-    server = ThreadingHTTPServer(('0.0.0.0', port), PresetHandler)
+    try:
+        server = ThreadingHTTPServer(('0.0.0.0', port), PresetHandler)
+    except OSError as e:
+        logger.error(
+            f"Não foi possível abrir a porta {port} ({e}). Provavelmente outro "
+            "Arrakis Start já está rodando; pare-o antes de subir este."
+        )
+        raise SystemExit(1)
     server.daemon_threads = True
     
     # Colorful startup banner

@@ -39,10 +39,10 @@ No test suite or linter is configured.
 | `server.py` | HTTP server (port 8090) serving the web UI and REST API (`/api/presets`, `/api/install`, etc.). |
 | `process_manager.py` | ComfyUI lifecycle (start/stop/restart/health check) via comfy-cli with psutil fallback. |
 | `state.py` | Thread-safe persistent state in JSON (`installed_presets`, `installed_models`, `comfyui_status`, etc.) written atomically via `tempfile` + `os.replace`. |
-| `websocket_server.py` | Real-time progress/log broadcasting to browser clients. |
+| `progress.py` | In-process progress registry (downloads, phases) served through `/api/status`, which the web UI polls. |
 | `web/` | Frontend UI (vanilla HTML/CSS/JS, Portuguese) — preset selector, install progress, ComfyUI controls. |
 
-**Data flow:** Web UI → `server.py` API → `start.py` orchestrator → `downloader.py` + node installer → `state.py` persistence, with `websocket_server.py` streaming progress back to the UI.
+**Data flow:** Web UI → `server.py` API → `start.py` orchestrator → `downloader.py` + node installer → `state.py` persistence. Progress flows back the other way through `progress.py`, which `/api/status` serves to the polling UI — cloud hosts expose only the web port, so a second socket could not reach the browser.
 
 **Runtime stack selection:** When any active preset sets `use_sage_attention: true`, `start.py` runs the unified SageAttention installer (`SAGEATTENTION_INSTALLER_URL`) and passes `--use-sage-attention` to ComfyUI. If the downloaded wheel cannot import against the active PyTorch ABI, it rebuilds SageAttention from source and publishes the compatible wheel when `HF_TOKEN` is available. Otherwise it installs the standard torch wheel selected for the detected driver.
 
@@ -71,9 +71,11 @@ When both workflow keys are present, the local `workflow` file wins. The web UI 
 | `DOWNLOAD_SPEED_LIMIT` | aria2c bandwidth throttle (e.g. `50M`; default off). |
 | `ARIA2_CONNECTIONS` / `ARIA2_HF_CONNECTIONS` | Parallel connections per download (defaults: 16 / 8). |
 | `HF_XET_HIGH_PERFORMANCE` | Toggle HF Xet high-perf mode; auto-disabled below `HF_XET_HP_MIN_RAM_GB` (default 48). |
+| `XET_NO_PROGRESS_SECONDS` | Abandon XET for the HTTP fallback after this long with no delivered bytes at all (default 240). A slow-but-growing warm-up never trips it. |
+| `XET_MIN_BYTES_PER_SEC` / `XET_RATE_GRACE_SECONDS` | Long-window throughput floor for XET, applied only after the grace window (defaults 100 KB/s after 600 s) to catch a transfer still crawling long past any warm-up. |
 | `TORCH_INDEX_URL` | Torch wheel index (default: CUDA 12.8 build). |
 | `DISABLE_TEMPLATE_COMFY` / `TEMPLATE_COMFY_DIR` | Bootstrap cleanup of pre-existing template ComfyUI at `/workspace/ComfyUI` (enabled by default). |
-| `TEMPLATE_COMFY_EXTRA_DIRS` / `TEMPLATE_COMFY_PORTS` | Extra template ComfyUI dirs/ports to clean. Defaults cover RunPod comfyui-base (`/workspace/runpod-slim/ComfyUI`, port `8188`). Template instances are stopped by port so they stop competing for VRAM. |
+| `TEMPLATE_COMFY_EXTRA_DIRS` / `TEMPLATE_COMFY_PORTS` | Extra template ComfyUI dirs/ports to clean, `:`- or newline-separated (whitespace splitting cannot represent a path containing a space). Defaults cover RunPod comfyui-base (`/workspace/runpod-slim/ComfyUI`, port `8188`). Set to empty to disable. A directory is only removed when it proves to be a template (sentinel, matching supervisor conf, or no `.git`) and its `models/` holds no large files; ports are only freed when the listener is actually ComfyUI. |
 
 ## Conventions
 

@@ -1422,13 +1422,20 @@ class DownloadManager:
         logger.info("Download cancelled by user")
     
     def _report_progress(self, message: str, current: int = 0, total: int = 0):
-        """Report progress via callback"""
+        """Report progress via callback and to the shared registry."""
         if self.progress_callback:
             self.progress_callback({
                 'message': message,
                 'current': current,
                 'total': total
             })
+        if HAS_PROGRESS:
+            try:
+                progress_registry.set_stage('models', message)
+                if total:
+                    progress_registry.set_counts(current, total)
+            except Exception:
+                pass
         logger.info(message)
         # Force flush for real-time output
         sys.stdout.flush()
@@ -1442,9 +1449,14 @@ class DownloadManager:
         """
         with self._inflight_cv:
             self._inflight += 1
+        ok = False
         try:
-            return self._download_one_with_retry_inner(item, label)
+            ok = self._download_one_with_retry_inner(item, label)
+            return ok
         finally:
+            # Take the file out of the active set so the UI stops showing it.
+            name = item.get('filename') or self._extract_filename(item.get('url', ''))
+            self._finish_progress(name, ok)
             with self._inflight_cv:
                 self._inflight -= 1
                 self._inflight_cv.notify_all()
