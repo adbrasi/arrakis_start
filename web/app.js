@@ -614,6 +614,16 @@ async function startWithPresets() {
                         const cb = document.getElementById('cancel-btn');
                         if (cb) cb.hidden = true;
                         updateStartButton();
+                        // Launchable but incomplete: ComfyUI is up, and the
+                        // preset stays pending so a re-run resumes only what
+                        // is missing.
+                        if (statusData.install_status === 'completed_with_failures') {
+                            showToast(
+                                'ComfyUI iniciado, mas alguns itens não baixaram. ' +
+                                'Veja os erros no log e execute novamente para retomar só o que falta.',
+                                'info'
+                            );
+                        }
                     }
                 } catch {
                     // Keep polling on network errors

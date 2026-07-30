@@ -1304,13 +1304,33 @@ def install_pip_commands(pip_commands: List[Any]) -> bool:
     return True
 
 
+# Install outcomes. "Every artifact landed" and "ComfyUI can be launched" are
+# different questions, so a single boolean cannot express the common case of a
+# usable install with a few missing files.
+INSTALL_COMPLETED = 'completed'
+INSTALL_COMPLETED_WITH_FAILURES = 'completed_with_failures'
+INSTALL_FAILED = 'failed'
+INSTALL_CANCELLED = 'cancelled'
+
+# Download failure stages that mean the install produced nothing usable, as
+# opposed to a per-file problem (a gated repo, a dead mirror) that leaves the
+# rest of the install perfectly workable.
+FATAL_DOWNLOAD_STAGES = {'precheck', 'config'}
+
+
 def install_presets(
     preset_names: List[str],
     include_base: bool = True,
     _slot_reserved: bool = False,
     _keep_slot: bool = False,
 ) -> bool:
-    """Run one installation at a time and publish its terminal status."""
+    """Run one installation at a time and publish its terminal status.
+
+    Returns whether ComfyUI can be launched, which is NOT the same as "every
+    artifact landed": an install that is missing a gated LoRA is still perfectly
+    usable, and the pending preset already records what to resume. The precise
+    outcome is published through the install status.
+    """
     if not _slot_reserved and not reserve_install_slot():
         logger.error("Já existe uma instalação em andamento")
         return False
@@ -1318,18 +1338,19 @@ def install_presets(
         logger.error("Installer slot was not reserved")
         return False
 
-    result = False
+    outcome = INSTALL_FAILED
     try:
         if _install_cancel_event.is_set():
             logger.warning("Instalação cancelada antes de iniciar")
+            outcome = INSTALL_CANCELLED
             return False
-        result = _install_presets_impl(preset_names, include_base=include_base)
-        return result
+        outcome = _install_presets_impl(preset_names, include_base=include_base)
+        return outcome in (INSTALL_COMPLETED, INSTALL_COMPLETED_WITH_FAILURES)
     finally:
         if _install_cancel_event.is_set():
-            terminal_status = 'cancelled'
+            terminal_status = INSTALL_CANCELLED
         else:
-            terminal_status = 'completed' if result else 'failed'
+            terminal_status = outcome
         if _keep_slot:
             _set_install_status(terminal_status)
         else:
@@ -1359,7 +1380,7 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     except RuntimeError as e:
         logger.error(str(e))
         _set_progress_stage('erro', 'venv do ComfyUI ausente')
-        return False
+        return INSTALL_FAILED
 
     # Auto-include base preset unless explicitly disabled
     if include_base and 'Base' not in preset_names:
@@ -1383,7 +1404,7 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
             "Atualize a página e selecione novamente."
         )
         _set_progress_stage('erro', f"presets inexistentes: {', '.join(unknown_presets)}")
-        return False
+        return INSTALL_FAILED
 
     # Collect all downloads, nodes, flags, and preset pip commands
     downloads = []
@@ -1396,7 +1417,7 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     for preset_name in preset_names:
         if _install_cancel_event.is_set():
             logger.warning("Instalação cancelada ao preparar presets")
-            return False
+            return INSTALL_CANCELLED
         if preset_name in processed_presets:
             continue
         processed_presets.append(preset_name)
@@ -1439,12 +1460,12 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
 
     # 1. Configure runtime stack before preset-specific pip commands.
     if _install_cancel_event.is_set():
-        return False
+        return INSTALL_CANCELLED
     _set_progress_stage('runtime', 'configurando runtime stack')
     if not configure_runtime_stack(use_sage_attention=use_sage_attention):
         logger.error("Installation failed during runtime stack configuration")
         _set_progress_stage('erro', 'falha ao configurar runtime stack')
-        return False
+        return INSTALL_FAILED
 
     # 2. Run preset-specific pip commands
     if pip_commands:
@@ -1453,11 +1474,11 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
         if not install_pip_commands(pip_commands):
             logger.error("Installation failed during preset pip commands")
             _set_progress_stage('erro', 'falha nos comandos pip do preset')
-            return False
+            return INSTALL_FAILED
 
     # 3. Execute downloads and node installs in parallel
     if _install_cancel_event.is_set():
-        return False
+        return INSTALL_CANCELLED
     # Stage name matches what downloader.py publishes while it streams files.
     _set_progress_stage(
         'models',
@@ -1509,7 +1530,17 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
             "Instalação cancelada. Arquivos concluídos foram preservados e "
             "downloads parciais serão retomados na próxima execução."
         )
-        return False
+        return INSTALL_CANCELLED
+
+    # A queue/config error records nothing but means the batch never ran, so an
+    # empty failure list on a failed batch is itself fatal.
+    fatal_download_error = (not download_success) and (
+        not downloader_failures
+        or any(
+            str(f.get('stage', '')).lower() in FATAL_DOWNLOAD_STAGES
+            for f in downloader_failures
+        )
+    )
 
     # A failed batch is a failed install, with or without a populated failure
     # list: download_all() also returns False for queue-level errors (e.g. two
@@ -1540,7 +1571,7 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     # requirements may have pulled a CUDA wheel newer than the driver supports;
     # repair to a driver-appropriate build before ComfyUI is (re)started.
     if _install_cancel_event.is_set():
-        return False
+        return INSTALL_CANCELLED
     _set_progress_stage('finalizando', 'verificando runtime')
     _ensure_torch_driver_compatible()
 
@@ -1554,7 +1585,7 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     # partial preset is finished, and leaving it pending makes the next run
     # resume only the missing artifacts.
     if _install_cancel_event.is_set():
-        return False
+        return INSTALL_CANCELLED
     failed_node_names = set(nodes_result.get('failed', []))
     for preset_name in processed_presets:
         issues = _preset_install_issues(
@@ -1581,18 +1612,36 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     # runtime-stack flag ComfyUI needs to actually use SageAttention.
     _persist_comfyui_flags(state, preset_map)
 
-    all_ok = download_success and nodes_result["success"] and runtime_ok
-    if all_ok:
+    # "Did every artifact land?" and "is ComfyUI launchable?" are different
+    # questions. A missing LoRA or a node that failed its requirements answers
+    # no to the first and yes to the second: the user still wants ComfyUI up to
+    # work with everything that did land, and the pending preset already records
+    # what to resume. Only a broken runtime, or a configuration error that means
+    # nothing usable was produced, actually blocks the launch.
+    everything_landed = download_success and nodes_result["success"]
+    launchable = runtime_ok and not fatal_download_error
+
+    if everything_landed and launchable:
         logger.info("All presets installed successfully!")
         _set_progress_stage('concluído', 'instalação finalizada')
-    else:
-        logger.error(
-            "Instalação terminou com falhas (veja os erros acima). ComfyUI não será "
-            "iniciado automaticamente; corrija os erros e execute novamente — apenas "
-            "o que falta será retomado."
+        return INSTALL_COMPLETED
+
+    if launchable:
+        logger.warning(
+            "Instalação concluída com pendências (veja os erros acima). O ComfyUI "
+            "será iniciado assim mesmo com o que já está disponível; execute "
+            "novamente para retomar apenas o que falta."
         )
-        _set_progress_stage('erro', 'instalação incompleta')
-    return all_ok
+        _set_progress_stage('concluído com pendências', 'itens faltando')
+        return INSTALL_COMPLETED_WITH_FAILURES
+
+    logger.error(
+        "Instalação falhou de forma que impede o uso (runtime quebrado ou erro de "
+        "configuração). ComfyUI não será iniciado; corrija os erros e execute "
+        "novamente — apenas o que falta será retomado."
+    )
+    _set_progress_stage('erro', 'instalação inviável')
+    return INSTALL_FAILED
 
 
 def _revalidate_sageattention_runtime(state) -> bool:

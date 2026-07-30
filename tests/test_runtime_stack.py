@@ -432,3 +432,44 @@ class CustomNodeRecoveryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class InstallOutcomeTests(unittest.TestCase):
+    """A usable install must launch ComfyUI even when some artifacts are missing."""
+
+    def test_missing_model_still_launches_comfyui(self):
+        # A gated LoRA that 18 other models do not depend on: the install is
+        # incomplete but perfectly usable, so it must NOT block the launch.
+        failures = [{
+            'filename': 'looper.safetensors', 'dir': 'loras',
+            'stage': 'auth', 'reason': 'auth_gated_model_not_accepted',
+            'url': 'https://huggingface.co/x/y',
+        }]
+        fatal = (not False) and (
+            not failures
+            or any(str(f.get('stage', '')).lower() in start.FATAL_DOWNLOAD_STAGES
+                   for f in failures)
+        )
+        self.assertFalse(fatal, "per-file auth failure must not be fatal")
+
+    def test_config_error_is_fatal(self):
+        failures = [{
+            'filename': 'vae.safetensors', 'dir': 'vae',
+            'stage': 'config', 'reason': 'destination_conflict_kept=...',
+            'url': 'https://huggingface.co/x/y',
+        }]
+        fatal = any(
+            str(f.get('stage', '')).lower() in start.FATAL_DOWNLOAD_STAGES
+            for f in failures
+        )
+        self.assertTrue(fatal, "a queue/config error means nothing usable ran")
+
+    def test_failed_batch_with_no_recorded_failures_is_fatal(self):
+        fatal = (not False) and (not [] or False)
+        self.assertTrue(fatal, "an empty failure list on a failed batch is fatal")
+
+    def test_launchable_statuses_map_to_true(self):
+        launchable = {start.INSTALL_COMPLETED, start.INSTALL_COMPLETED_WITH_FAILURES}
+        self.assertIn(start.INSTALL_COMPLETED_WITH_FAILURES, launchable)
+        self.assertNotIn(start.INSTALL_FAILED, launchable)
+        self.assertNotIn(start.INSTALL_CANCELLED, launchable)

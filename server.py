@@ -354,15 +354,27 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     # (e.g. one that came back up during the long install window) is
                     # replaced with a fresh launch carrying the freshly-saved preset flags.
                     if success:
+                        # `success` means launchable, not flawless: an install
+                        # missing a gated LoRA still starts, and the pending
+                        # preset records what to resume.
+                        from start import get_install_status
+                        partial = get_install_status().get(
+                            'install_status') == 'completed_with_failures'
                         print("\n" + "="*60)
-                        print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
-                        print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
+                        if partial:
+                            print("\033[1;33m📦 INSTALAÇÃO CONCLUÍDA COM PENDÊNCIAS 📦\033[0m")
+                            print("\033[1;37m   Alguns itens faltaram (veja os erros acima).\033[0m")
+                            print("\033[1;37m   Iniciando ComfyUI com o que já está disponível...\033[0m")
+                        else:
+                            print("\033[1;33m📦 INSTALAÇÃO COMPLETA! 📦\033[0m")
+                            print("\033[1;37m   Iniciando ComfyUI com novos presets...\033[0m")
                         print("="*60 + "\n")
-                        logger.info("Installation complete, (re)starting ComfyUI with preset flags...")
+                        logger.info("Installation done, (re)starting ComfyUI with preset flags...")
                         started = pm.restart(flags=extra_flags if extra_flags else None)
                         if started:
                             logger.info("✓ ComfyUI started successfully")
-                            finish_install_reservation('completed')
+                            finish_install_reservation(
+                                'completed_with_failures' if partial else 'completed')
                             install_slot_finished = True
                         else:
                             logger.error(
