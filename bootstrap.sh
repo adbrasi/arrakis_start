@@ -800,23 +800,54 @@ ensure_venv() {
 }
 
 # Run git with a hard timeout and, when a GitHub token is configured, with auth passed
-# out-of-band. The token goes into GIT_CONFIG_* of a short-lived subshell: it never
-# appears in argv (readable in /proc) and is never written to .git/config, which lives
-# at mode 644 on the persistent volume and is captured by every volume snapshot.
+# out-of-band: the token reaches git through the environment of the child process only,
+# so it never appears in argv (readable in /proc) and is never written to .git/config,
+# which lives at mode 644 on the persistent volume and is captured by volume snapshots.
+#
+# Credentials are supplied LAZILY, through an askpass helper git consults only when the
+# server actually challenges. An `http.*.extraheader` is eager: it is attached to every
+# request, so a token GitHub rejects turns a *public* clone — which needs no credentials
+# at all — into a hard 401 ("could not read Username", prompts disabled). This mirrors
+# how start.py authenticates custom-node clones.
+ARRAKIS_GIT_ASKPASS=""
+
+setup_git_credentials() {
+    ARRAKIS_GIT_ASKPASS=""
+    [ -n "${GITHUB_TOKEN:-}" ] || return 0
+
+    local dir
+    dir="$(mktemp -d)" || return 0
+    cat > "$dir/askpass.sh" <<'ASKPASS'
+#!/bin/sh
+case "$1" in
+  *[Uu]sername*) printf '%s\n' "x-access-token" ;;
+  *) printf '%s\n' "$ARRAKIS_GIT_TOKEN" ;;
+esac
+ASKPASS
+    chmod 700 "$dir/askpass.sh"
+    ARRAKIS_GIT_ASKPASS="$dir/askpass.sh"
+}
+
+cleanup_git_credentials() {
+    [ -n "$ARRAKIS_GIT_ASKPASS" ] || return 0
+    rm -rf "$(dirname "$ARRAKIS_GIT_ASKPASS")"
+    ARRAKIS_GIT_ASKPASS=""
+}
+
 git_run() {
     local timeout_s="$1"
     shift
 
-    if [ -z "${ARRAKIS_GIT_AUTH_HEADER:-}" ]; then
-        timeout "$timeout_s" git "$@"
+    if [ -z "$ARRAKIS_GIT_ASKPASS" ]; then
+        GIT_TERMINAL_PROMPT=0 timeout "$timeout_s" git "$@"
         return
     fi
-    (
-        export GIT_CONFIG_COUNT=1
-        export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-        export GIT_CONFIG_VALUE_0="$ARRAKIS_GIT_AUTH_HEADER"
-        exec timeout "$timeout_s" git "$@"
-    )
+    # Prefix assignments scope the variables to this one child, so no subshell
+    # and no leakage into the caller's environment.
+    GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS="$ARRAKIS_GIT_ASKPASS" \
+    ARRAKIS_GIT_TOKEN="$GITHUB_TOKEN" \
+        timeout "$timeout_s" git "$@"
 }
 
 # Clone the repo into a staging dir on the same filesystem and move it into place only
@@ -987,13 +1018,11 @@ main() {
     export PIP_RETRIES="${PIP_RETRIES:-5}"
     export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/workspace/.cache/pip}"
 
-    # GitHub auth for private custom-node repos / this repo. Built once here; printf is
-    # a bash builtin, so the token never lands in another process's argv.
+    # GitHub auth for private custom-node repos / this repo. The helper is only
+    # consulted when a server challenges, so a public clone is never affected by
+    # the presence (or invalidity) of a token.
     GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-    ARRAKIS_GIT_AUTH_HEADER=""
-    if [ -n "$GITHUB_TOKEN" ]; then
-        ARRAKIS_GIT_AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-    fi
+    setup_git_credentials
 
     # Create directories
     mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR" "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
@@ -1175,8 +1204,8 @@ main() {
     # ------------------------------------------------ 4. Clone/update Arrakis Start
     log_info "[4/5] Setting up Arrakis Start..."
 
-    if [ -n "$ARRAKIS_GIT_AUTH_HEADER" ]; then
-        log_info "GitHub token detected — authenticating out-of-band (nothing is written to .git/config)"
+    if [ -n "$ARRAKIS_GIT_ASKPASS" ]; then
+        log_info "GitHub token disponível se o repositório exigir (nada é escrito em .git/config)"
     fi
 
     if [ -d "$ARRAKIS_DIR/.git" ]; then
@@ -1230,6 +1259,9 @@ main() {
     log_success "Arrakis orchestrator environment ready (hf_xet enabled)"
 
     log_info "Runtime stack (torch / sageattention) será configurada por preset na instalação."
+
+    # All git work is done; start.py manages its own credentials for node clones.
+    cleanup_git_credentials
 
     # Final message
     log_info "========================================="
