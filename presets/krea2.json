@@ -25,9 +25,9 @@
       "filename": "adapter_model.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/k2-context-rush-ofc-beta1/resolve/main/checkpoints/step4000/adapter_model.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/k2-context-rush-ofc-beta1/resolve/main/checkpoints/step9000/adapter_model.safetensors?download=true",
       "dir": "loras",
-      "filename": "ctx_rush_oficial.safetensors"
+      "filename": "ctx_rush_oficial_9000steps.safetensors"
     },
     {
       "url": "https://huggingface.co/AdwolfCzar/animateka/resolve/main/ctx_rushado_adapter_model.safetensors",
@@ -81,7 +81,8 @@
     }
   ],
   "nodes": [
-    "https://github.com/adbrasi/ctxrush-edit"
+    "https://github.com/adbrasi/ctxrush-edit",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public"
   ],
   "workflow": "krea2_turbo_t2i.json"
 }
