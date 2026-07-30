@@ -18,6 +18,7 @@ from typing import Any, List, Dict, Optional, Callable, Tuple
 from urllib.parse import urlparse, unquote, parse_qsl, urlencode, urlunparse, urljoin
 import shutil
 import re
+import tempfile
 import threading
 import requests
 from hf_xet_worker import (
@@ -25,11 +26,15 @@ from hf_xet_worker import (
     EVENT_PREFIX as XET_PROGRESS_PREFIX,
 )
 
+# Progress is published into an in-process registry that /api/status serves.
+# The previous WebSocket transport was never reachable: nothing started the
+# server and the frontend had no client, so every progress event accumulated in
+# a queue with no consumer.
 try:
-    from websocket_server import send_download_progress, send_log_message
-    HAS_WEBSOCKET = True
+    import progress as progress_registry
+    HAS_PROGRESS = True
 except ImportError:
-    HAS_WEBSOCKET = False
+    HAS_PROGRESS = False
 
 logger = logging.getLogger(__name__)
 HTTP_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ArrakisStart/2.0"
@@ -205,6 +210,29 @@ class DownloadManager:
         self._active_procs: "set[subprocess.Popen]" = set()
         self._process_lock = threading.Lock()
         self._failures_lock = threading.Lock()
+        # In-flight worker accounting, so destructive shutdown cleanup can wait
+        # for workers to unwind instead of racing them.
+        self._inflight = 0
+        self._inflight_cv = threading.Condition()
+
+        # XET liveness policy. A healthy XET transfer can legitimately start at
+        # tens of KB/s before it accelerates, so neither default may punish a
+        # slow start: the first only fires when delivered bytes stop moving
+        # entirely, and the second only after a long grace window.
+        self.xet_no_progress_seconds = max(
+            0, int(os.environ.get('XET_NO_PROGRESS_SECONDS', '240') or '240')
+        )
+        self.xet_rate_grace_seconds = max(
+            0, int(os.environ.get('XET_RATE_GRACE_SECONDS', '600') or '600')
+        )
+        self.xet_min_rate_bps = max(
+            0, int(os.environ.get('XET_MIN_BYTES_PER_SEC', str(100 * 1024)) or 0)
+        )
+        logger.info(
+            f"XET liveness: sem-progresso={self.xet_no_progress_seconds}s, "
+            f"piso={self._fmt_speed(self.xet_min_rate_bps)} após "
+            f"{self.xet_rate_grace_seconds}s"
+        )
 
         # Keep partial Hugging Face payloads outside ComfyUI's model folders.
         # Each source/target pair gets a stable private directory so parallel
@@ -298,6 +326,110 @@ class DownloadManager:
             return "missing"
         return f"...{token[-6:]}" if len(token) > 6 else "(short/invalid)"
 
+    @staticmethod
+    def _parse_size_token(token: str) -> int:
+        """Convert an aria2c/wget size token ('27MiB', '110KB', '1.5GiB') to bytes."""
+        if not token:
+            return 0
+        match = re.match(r'\s*([\d\.]+)\s*([KMGTP]?)(i?)B?\s*$', str(token), re.IGNORECASE)
+        if not match:
+            return 0
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            return 0
+        base = 1024 if match.group(3) else 1000
+        exponent = {'': 0, 'K': 1, 'M': 2, 'G': 3, 'T': 4, 'P': 5}[match.group(2).upper()]
+        return int(value * (base ** exponent))
+
+    def _publish_progress(self, filename: str, current: int, total: Optional[int],
+                          speed_bps: float, backend: str = "") -> None:
+        """Publish byte-level progress for one file to the shared registry.
+
+        Bytes are published rather than a precomputed percentage: a download
+        whose total size is unknown must render "N GB @ speed" instead of a
+        fabricated 0%.
+        """
+        if not HAS_PROGRESS:
+            return
+        try:
+            progress_registry.set_download(
+                filename, current, total, speed_bps, backend
+            )
+        except Exception as e:
+            logger.debug(f"progress publish failed: {e}")
+
+    def _finish_progress(self, filename: str, ok: bool, reason: str = "") -> None:
+        if not HAS_PROGRESS:
+            return
+        try:
+            progress_registry.finish_download(filename, ok, self._sanitize_log(reason))
+        except Exception as e:
+            logger.debug(f"progress finish failed: {e}")
+
+    def _make_secret_argfile(self, prefix: str, content: str) -> Path:
+        """Write ``content`` to a 0600 temp file so secrets stay out of argv.
+
+        Credentials passed as ``--header 'Authorization: Bearer ...'`` (or inside
+        a Civitai URL) are readable via ``/proc/<pid>/cmdline`` and ``ps`` for the
+        whole duration of a multi-hour download — by any process in the container,
+        including the third-party ComfyUI nodes this installer clones and runs.
+        aria2c and wget both accept the same values from a file instead.
+        """
+        fd, path = tempfile.mkstemp(prefix=f'arrakis-{prefix}-', suffix='.conf')
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                handle.write(content)
+        except Exception:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            raise
+        return Path(path)
+
+    @staticmethod
+    def _remove_secret_argfile(path: Optional[Path]) -> None:
+        if path is None:
+            return
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.debug(f"Could not remove credential file: {e}")
+
+    def _sanitize_log(self, text: str) -> str:
+        """Redact every known credential from a string bound for a log or report.
+
+        Subprocess output is captured verbatim into failure reasons, and wget
+        echoes the full request URL on its first line — which for Civitai carries
+        ``?token=<CIVITAI_TOKEN>``. Without this, any failed Civitai download
+        writes the token into the installer log at ERROR level.
+        """
+        if not text:
+            return ''
+        result = str(text)
+        for secret in (self.hf_token, self.civitai_token):
+            if secret and len(str(secret)) >= 8:
+                result = result.replace(str(secret), '<redacted>')
+        # Catch tokens embedded in query strings even if the value differs from
+        # the ones we hold (e.g. a pre-signed URL echoed back by the server).
+        result = re.sub(
+            r'((?:token|api[_-]?key|access_token)=)[^&\s"\']+',
+            r'\1<redacted>',
+            result,
+            flags=re.IGNORECASE,
+        )
+        result = re.sub(
+            r'(Authorization:\s*Bearer\s+)\S+',
+            r'\1<redacted>',
+            result,
+            flags=re.IGNORECASE,
+        )
+        return result
+
     def _ensure_hf_token_stored(self):
         """Store HF_TOKEN to disk so hf CLI and hf_xet can read it for gated models.
 
@@ -336,13 +468,18 @@ class DownloadManager:
             logger.info(f"HF token on disk matches env ({token_file})")
     
     def _record_failure(self, item: Dict, reason: str, stage: str):
-        """Track a failed download item with context (thread-safe)."""
+        """Track a failed download item with context (thread-safe).
+
+        ``reason`` carries captured subprocess output, so it is sanitized here —
+        the single choke point through which every failure reaches the log, the
+        summary and the installer's report.
+        """
         entry = {
             'filename': item.get('filename') or self._extract_filename(item.get('url', '')),
             'dir': item.get('dir', ''),
-            'url': item.get('url', ''),
+            'url': self._sanitize_log(item.get('url', '')),
             'stage': stage,
-            'reason': reason
+            'reason': self._sanitize_log(reason),
         }
         with self._failures_lock:
             self.failures.append(entry)
@@ -808,17 +945,63 @@ class DownloadManager:
             process.kill()
         except Exception:
             pass
+        # Reap the child. Without this the zombie keeps the reader thread's pipe
+        # fd alive, so a worker blocked in read(1) never sees EOF and the
+        # ThreadPoolExecutor atexit hook can hang interpreter shutdown forever.
+        try:
+            process.wait(timeout=grace)
+        except Exception:
+            pass
+        try:
+            if process.stdout is not None:
+                process.stdout.close()
+        except Exception:
+            pass
+
+    def _effective_hf_token(self) -> str:
+        """Token from env, falling back to the one bootstrap.sh stored on disk.
+
+        ``hf auth login`` writes ``$HF_HOME/token`` and huggingface_hub reads it,
+        so the worker can authenticate while an env-only check cannot. Without
+        this fallback an authorized download is paired with an unauthorized HEAD.
+        """
+        if self.hf_token:
+            return self.hf_token
+        try:
+            hf_home = os.environ.get('HF_HOME')
+            if not hf_home:
+                return ''
+            token_file = Path(hf_home) / 'token'
+            if token_file.is_file():
+                return token_file.read_text(encoding='utf-8').strip()
+        except Exception:
+            pass
+        return ''
 
     def _hf_remote_size(self, repo_id: str, branch: str, file_path: str) -> Optional[int]:
         """Best-effort total file size via a HEAD on the resolve URL (for % display).
-        Non-fatal: returns None on any problem (we then report bytes/speed only)."""
+        Non-fatal: returns None on any problem (we then report bytes/speed only).
+
+        The status code MUST be checked: an error response carries its own tiny
+        Content-Length (a 404 body is 15 bytes, a 401 body 136), and treating
+        that as the model size pins the UI at 100% from the first tick and makes
+        the ``st_size >= expected_size`` completeness gate accept any truncated
+        payload as a finished model.
+        """
         try:
             from urllib.parse import quote
             url = f"https://huggingface.co/{repo_id}/resolve/{branch}/{quote(file_path)}"
             headers = {'User-Agent': HTTP_USER_AGENT, 'Accept-Encoding': 'identity'}
-            if self.hf_token:
-                headers['Authorization'] = f'Bearer {self.hf_token}'
+            token = self._effective_hf_token()
+            if token:
+                headers['Authorization'] = f'Bearer {token}'
             resp = requests.head(url, headers=headers, allow_redirects=True, timeout=15)
+            if resp.status_code >= 400:
+                logger.debug(
+                    f"HEAD {repo_id}/{file_path} devolveu HTTP {resp.status_code}; "
+                    "tamanho total desconhecido"
+                )
+                return None
             size = resp.headers.get('x-linked-size') or resp.headers.get('Content-Length')
             return int(size) if size and str(size).isdigit() else None
         except Exception:
@@ -830,31 +1013,60 @@ class DownloadManager:
         """Observe local download bytes and optionally enforce an HTTP stall limit.
 
         HTTP writes continuously to its local ``*.incomplete`` payload, so disk
-        silence is a valid stall signal there. XET may fetch/reconstruct chunks
-        before the local staging path grows, so its observer reports liveness but
-        leaves failure detection to the XET subprocess and the batch hard timeout.
+        silence is a valid stall signal there.
+
+        XET differs in two ways this loop must respect:
+
+        * it fetches and reconstructs chunks outside the watched staging tree, so
+          local disk silence alone is NOT a failure signal (that is why
+          ``terminate_on_stall=False`` exists); and
+        * a healthy XET transfer legitimately starts slow — tens of KB/s — and
+          then accelerates sharply, so a plain rate threshold would kill it
+          during a perfectly normal warm-up.
+
+        So for XET the failure signal is *delivered bytes not growing at all*,
+        measured from the worker's own progress events (which a warming-up
+        transfer keeps emitting), plus a deliberately generous long-window rate
+        floor that only catches a transfer still crawling long after any warm-up
+        would be over. Both are env-tunable and default to values a normal slow
+        start never reaches.
         """
         to = self.aria2_stall_timeout_seconds
         warn_after = max(30, to // 4) if to > 0 else 0
         poll = 3.0
+        # XET owns its own progress reporting via structured events, so this
+        # observer must not emit a second, disagreeing progress stream for the
+        # same file (the disk view lags XET's reconstruction by design).
+        is_xet = not terminate_on_stall
         prev_size, prev_alloc = self._tree_bytes(staging_dir, final_path)
         stall_state['last_bytes'] = prev_size
         now0 = time.monotonic()
+        started_at = now0
         last_emit_ts = now0
         last_emit_bytes = prev_size
         warned = False
+        best_bytes = prev_size
+        last_growth_ts = now0
         while True:
             time.sleep(poll)
             if process.poll() is not None or self._cancelled:
                 return
             size, alloc = self._tree_bytes(staging_dir, final_path)
             now = time.monotonic()
+
+            # Delivered bytes = whichever source is further along. For XET the
+            # event stream leads; for HTTP only the disk moves.
+            delivered = max(size, int(stall_state.get('event_bytes') or 0))
+            if delivered > best_bytes:
+                best_bytes = delivered
+                last_growth_ts = now
+
             if size > prev_size or alloc > prev_alloc:
                 stall_state['last_progress'] = now
                 stall_state['last_bytes'] = size
                 warned = False
                 prev_size, prev_alloc = size, alloc
-                if now - last_emit_ts >= 5:
+                if not is_xet and now - last_emit_ts >= 5:
                     dt = now - last_emit_ts
                     speed_bps = max(0, size - last_emit_bytes) / dt if dt > 0 else 0
                     speed = self._fmt_speed(speed_bps)
@@ -862,8 +1074,9 @@ class DownloadManager:
                     pct = (display_size / expected_size * 100.0) if expected_size else 0.0
                     eta = self._fmt_eta((expected_size - display_size) / speed_bps) \
                         if (expected_size and speed_bps > 0) else ""
-                    if HAS_WEBSOCKET:
-                        send_download_progress(filename, pct, speed, eta)
+                    self._publish_progress(
+                        filename, display_size, expected_size, speed_bps, backend_label
+                    )
                     if expected_size:
                         logger.info(
                             f"  ↓ {filename}: {pct:.0f}% "
@@ -898,35 +1111,83 @@ class DownloadManager:
                     self._terminate_process(process)
                     return
 
+            if is_xet:
+                idle = now - last_growth_ts
+                if self.xet_no_progress_seconds > 0 and idle > self.xet_no_progress_seconds:
+                    stall_state['killed'] = True
+                    logger.error(
+                        f"{backend_label} travado em {filename}: nenhum byte novo "
+                        f"(disco nem eventos) há {idle:.0f}s — encerrando e caindo "
+                        "para o fallback HTTP"
+                    )
+                    self._terminate_process(process)
+                    return
+                elapsed = now - started_at
+                if (self.xet_min_rate_bps > 0
+                        and self.xet_rate_grace_seconds > 0
+                        and elapsed > self.xet_rate_grace_seconds
+                        and (best_bytes / elapsed) < self.xet_min_rate_bps):
+                    stall_state['killed'] = True
+                    logger.error(
+                        f"{backend_label} arrastando em {filename}: "
+                        f"{self._fmt_speed(best_bytes / elapsed)} de média em "
+                        f"{elapsed:.0f}s (piso "
+                        f"{self._fmt_speed(self.xet_min_rate_bps)}) — encerrando e "
+                        "caindo para o fallback HTTP"
+                    )
+                    self._terminate_process(process)
+                    return
+
     def _finalize_hf_file(self, dest_dir: Path, file_path: str, filename: str,
                           target: Path, downloaded: Path,
                           expected_size: Optional[int]) -> Tuple[bool, str]:
         """Move the HF-downloaded file (placed at <dest_dir>/<repo_path>) to the
         requested <dest_dir>/<filename>, prune empty repo subdirs, and sanity-check
-        the size. Returns (ok, reason)."""
+        the size. Returns (ok, reason).
+
+        The size is validated BEFORE the payload reaches the final model path.
+        huggingface_hub does not verify length after an xet transfer, so a short
+        output used to be moved onto the real destination and only then rejected —
+        leaving a truncated file that the next run's ``_is_invalid_existing_file``
+        check (which skips any HF file over 256 KB) reports as "already exists",
+        making the corruption permanent.
+        """
         try:
+            source: Optional[Path] = None
             if downloaded.exists():
-                if downloaded.resolve() != target.resolve():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(downloaded), str(target))
-                    parent = downloaded.parent
-                    while parent != dest_dir and parent.exists():
-                        try:
-                            parent.rmdir()
-                        except OSError:
-                            break
-                        parent = parent.parent
+                source = downloaded
             elif not target.exists():
                 flat = dest_dir / Path(file_path).name
                 if flat.exists() and flat.resolve() != target.resolve():
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(flat), str(target))
+                    source = flat
                 else:
                     return False, f"hf_download_missing_output: expected '{downloaded}' or '{target}'"
+
+            if source is not None:
+                if source.resolve() == target.resolve():
+                    source = None
+
+            # Validate while the payload is still in the staging location.
+            check_path = source if source is not None else target
+            if not check_path.exists():
+                return False, "hf_download_missing_output"
+            actual_size = check_path.stat().st_size
+            if expected_size and actual_size < expected_size:
+                return False, f"hf_download_incomplete_{actual_size}_of_{expected_size}"
+
+            if source is not None:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(target))
+                parent = source.parent
+                while parent != dest_dir and parent.exists():
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    parent = parent.parent
+
             if not target.exists():
                 return False, "hf_download_missing_output"
-            if expected_size and target.stat().st_size < expected_size:
-                return False, f"hf_download_incomplete_{target.stat().st_size}_of_{expected_size}"
             return True, ""
         except Exception as e:
             return False, f"hf_finalize_error: {e}"
@@ -996,18 +1257,14 @@ class DownloadManager:
         default HTTP transfers.
         """
         self.has_hf_xet = False
+        self.has_hf_hub = False
 
-        if not self.hf_cli_path:
-            return
-
-        # Determine the python executable in the same venv as the HF CLI
-        cli_bin_dir = Path(self.hf_cli_path).resolve().parent
-        hf_python = cli_bin_dir / 'python'
-        if not hf_python.exists():
-            hf_python = cli_bin_dir / 'python3'
-        if not hf_python.exists():
-            # Fallback: just use current python
-            hf_python = Path(sys.executable)
+        # The worker is `<python> hf_xet_worker.py`, so what matters is an
+        # importable huggingface_hub in that interpreter — NOT the presence of
+        # the `hf` console script. Gating on the script disabled both HF backends
+        # whenever the venv was built without entry points, silently dropping
+        # every model to aria2c with no log explaining why.
+        hf_python = Path(self._hf_python())
 
         # Check huggingface_hub version and hf_xet availability in that env
         check_script = "\n".join([
@@ -1045,6 +1302,7 @@ class DownloadManager:
         hf_hub_ver = info.get('hf_hub_version', 'unknown')
         has_xet = info.get('hf_xet', False)
         has_transfer = info.get('hf_transfer', False)
+        self.has_hf_hub = hf_hub_ver not in ('not_found', 'unknown')
 
         logger.info(
             f"HF CLI env: huggingface_hub={hf_hub_ver}, "
@@ -1052,6 +1310,11 @@ class DownloadManager:
             f"hf_transfer={'✓' if has_transfer else '✗'}, "
             f"python={hf_python}"
         )
+        if not self.has_hf_hub:
+            logger.warning(
+                "huggingface_hub não é importável no interpretador do worker — "
+                "downloads do HuggingFace usarão aria2c/wget"
+            )
 
         if has_xet:
             self.has_hf_xet = True
@@ -1110,18 +1373,51 @@ class DownloadManager:
             self.hf_partial_root,
         )
 
-    def cancel(self, delete_partials: bool = False):
-        """Cancel downloads, optionally deleting their resumable partial files."""
-        self._cancelled = True
+    def _terminate_active_processes(self) -> None:
+        """Kill every tracked download subprocess WITHOUT flagging a cancellation.
+
+        The batch stall backstop needs this: calling ``cancel()`` there would set
+        ``_cancelled`` and make the run report itself as a user cancellation,
+        hiding the real stall failures behind "downloads cancelados".
+        """
         with self._process_lock:
             active = list(self._active_procs)
         for proc in active:
-            logger.warning("Interrompendo download ativo com segurança...")
             try:
                 self._terminate_process(proc, grace=3)
             except Exception as e:
                 logger.error(f"Failed to kill process: {e}")
+
+    def _wait_for_workers(self, timeout: float) -> bool:
+        """Block until no download worker is in flight. True if the queue drained.
+
+        Partial cleanup must not race a worker that is between its ``_cancelled``
+        check and its ``Popen``: such a worker recreates the staging directory
+        after the sweep removed it, leaving a fresh partial behind.
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._inflight_cv:
+            while self._inflight > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        f"{self._inflight} worker(s) de download ainda ativos após "
+                        f"{timeout:.0f}s; prosseguindo com a limpeza"
+                    )
+                    return False
+                self._inflight_cv.wait(timeout=min(remaining, 0.5))
+        return True
+
+    def cancel(self, delete_partials: bool = False):
+        """Cancel downloads, optionally deleting their resumable partial files."""
+        self._cancelled = True
+        if self._active_procs:
+            logger.warning("Interrompendo downloads ativos com segurança...")
+        self._terminate_active_processes()
         if delete_partials:
+            # Wait for workers to unwind first, otherwise one of them recreates
+            # the staging tree right after it is deleted.
+            self._wait_for_workers(timeout=30.0)
             self.cleanup_partials()
         logger.info("Download cancelled by user")
     
@@ -1144,6 +1440,16 @@ class DownloadManager:
         Designed to run inside a ThreadPoolExecutor worker. All shared state
         access (failures list, active processes) is protected by locks.
         """
+        with self._inflight_cv:
+            self._inflight += 1
+        try:
+            return self._download_one_with_retry_inner(item, label)
+        finally:
+            with self._inflight_cv:
+                self._inflight -= 1
+                self._inflight_cv.notify_all()
+
+    def _download_one_with_retry_inner(self, item: Dict, label: str) -> bool:
         url = item.get('url', '')
         target_dir = item.get('dir', '')
         filename = item.get('filename', '')
@@ -1190,21 +1496,42 @@ class DownloadManager:
 
         return False
 
-    @staticmethod
-    def _deduplicate_downloads(downloads: List[Dict]) -> Tuple[List[Dict], int]:
-        """Collapse identical model destinations and reject source conflicts."""
+    def _deduplicate_downloads(self, downloads: List[Dict]) -> Tuple[List[Dict], int, int]:
+        """Collapse identical model destinations and resolve source conflicts.
+
+        Two different sources for one destination is a preset configuration
+        error and is reported as such — but it must never cancel the unrelated
+        downloads queued alongside it. The first entry wins, the loser is
+        recorded as a failure so it appears in the failure summary, and the rest
+        of the queue proceeds.
+
+        The destination name is derived the same way ``_download_file`` derives
+        it, so an entry with an empty ``filename`` participates in the same
+        destination check as a named one. Without that, two entries landing on
+        the same final path would both be scheduled and race: on the aria2c path
+        they share one ``.arrakis.part`` and corrupt it, and on the HF path both
+        ``shutil.move`` onto the same target and both report success.
+
+        Returns ``(unique_items, duplicates_removed, conflicts_dropped)``.
+        """
         unique: List[Dict] = []
         seen_destinations: Dict[Tuple[str, str], Dict] = {}
         seen_unnamed_sources = set()
         removed = 0
+        conflicts = 0
 
         for item in downloads:
             url = str(item.get('url') or '').strip()
             directory = str(item.get('dir') or '').strip().replace('\\', '/').strip('/')
             filename = str(item.get('filename') or '').strip()
+            if not filename:
+                try:
+                    filename = self._extract_filename(url)
+                except Exception:
+                    filename = ''
 
-            # Content-Disposition downloads do not have a known destination name
-            # yet. They are safe to collapse only when their source is identical.
+            # Still unknown (a Content-Disposition-only source): the destination
+            # cannot be compared, so collapse by source alone.
             if not filename:
                 source_key = (directory, url.split('?', 1)[0])
                 if source_key in seen_unnamed_sources:
@@ -1224,13 +1551,21 @@ class DownloadManager:
             previous_url = str(previous.get('url') or '').strip().split('?', 1)[0]
             current_url = url.split('?', 1)[0]
             if previous_url != current_url:
-                raise ValueError(
-                    f"Conflicting model sources for {directory}/{filename}: "
-                    f"{previous_url} != {current_url}"
+                conflicts += 1
+                logger.error(
+                    f"Conflito de configuração em {directory}/{filename}: dois "
+                    f"presets pedem fontes diferentes para o mesmo destino. "
+                    f"Mantendo {previous_url} e ignorando {current_url}."
                 )
+                self._record_failure(
+                    {'url': url, 'dir': directory, 'filename': filename},
+                    reason=f'destination_conflict_kept={previous_url}',
+                    stage='config',
+                )
+                continue
             removed += 1
 
-        return unique, removed
+        return unique, removed, conflicts
 
     def download_all(self, downloads: List[Dict]) -> bool:
         """Download all files in the list, running up to parallel_downloads at once."""
@@ -1243,23 +1578,32 @@ class DownloadManager:
             logger.warning(f"Skipped {skipped} item(s) with no URL")
 
         raw_total = len(valid_downloads)
-        try:
-            valid_downloads, duplicate_count = self._deduplicate_downloads(valid_downloads)
-        except ValueError as e:
-            logger.error(f"Fila de modelos inválida: {e}")
-            return False
-        if duplicate_count:
+        # Reset the report BEFORE deduplication, so configuration conflicts found
+        # there survive into the failure summary instead of being wiped.
+        with self._failures_lock:
+            self.failures = []
+        self.attempt_logs = []
+
+        valid_downloads, duplicate_count, conflict_count = self._deduplicate_downloads(
+            valid_downloads
+        )
+        if duplicate_count or conflict_count:
             logger.info(
                 f"Fila de modelos: {raw_total} entradas, "
                 f"{len(valid_downloads)} destinos únicos "
-                f"({duplicate_count} duplicatas removidas)"
+                f"({duplicate_count} duplicatas removidas, "
+                f"{conflict_count} conflitos de configuração ignorados)"
             )
 
         total = len(valid_downloads)
-        self.failures = []
-        self.attempt_logs = []
 
         if total == 0:
+            if conflict_count:
+                self._report_progress(
+                    "Nenhum download restou após os conflitos de configuração", 0, 0
+                )
+                self._log_failure_summary()
+                return False
             self._report_progress("No downloads requested", 0, 0)
             return True
 
@@ -1289,6 +1633,7 @@ class DownloadManager:
 
         pending = set(future_to_idx)
         aborted = False
+        stalled_out = False
         try:
             while pending:
                 done_set, pending = wait(pending, timeout=overall_stall, return_when=FIRST_COMPLETED)
@@ -1298,13 +1643,18 @@ class DownloadManager:
                     aborted = True
                     break
                 if not done_set:
-                    # Nothing finished within the window → the rest are stuck.
-                    stuck = sorted(future_to_idx[f] for f in pending)
+                    # Nothing finished within the window. Only the futures that
+                    # actually started are stuck — the rest never got a worker
+                    # slot, so reporting them as stalled would blame downloads
+                    # that were never attempted.
+                    running = {f for f in pending if f.running()} or set(pending)
+                    queued = pending - running
+                    stuck = sorted(future_to_idx[f] for f in running)
                     logger.error(
-                        f"{len(pending)} download(s) sem NENHUMA conclusão há >{overall_stall}s — "
-                        f"abandonando travado(s) e seguindo: {', '.join(str(i) for i in stuck)}"
+                        f"{len(running)} download(s) sem NENHUMA conclusão há >{overall_stall}s — "
+                        f"abortando o lote: {', '.join(str(i) for i in stuck)}"
                     )
-                    for f in pending:
+                    for f in running:
                         idx = future_to_idx[f]
                         item = valid_downloads[idx - 1]
                         self._record_failure(
@@ -1316,8 +1666,28 @@ class DownloadManager:
                         with success_lock:
                             completed += 1
                             done = completed
-                        self._report_progress(f"[{idx}/{total}] download travado — pulado", done, total)
-                    self.cancel()  # kill active subprocesses so worker threads can exit
+                        self._report_progress(f"[{idx}/{total}] download travado — abortado", done, total)
+                    if queued:
+                        not_attempted = sorted(future_to_idx[f] for f in queued)
+                        logger.error(
+                            f"{len(queued)} download(s) não chegaram a ser tentados: "
+                            f"{', '.join(str(i) for i in not_attempted)}"
+                        )
+                        for f in queued:
+                            idx = future_to_idx[f]
+                            item = valid_downloads[idx - 1]
+                            self._record_failure(
+                                {'url': item.get('url', ''), 'dir': item.get('dir', ''),
+                                 'filename': item.get('filename', '')},
+                                reason='not_attempted_batch_aborted',
+                                stage='aborted'
+                            )
+                            f.cancel()
+                    # Kill the stuck subprocesses so the worker threads unwind,
+                    # but do NOT call cancel(): this is a stall, not a user
+                    # cancellation, and it must not be reported as one.
+                    self._terminate_active_processes()
+                    stalled_out = True
                     aborted = True
                     break
                 for future in done_set:
@@ -1351,19 +1721,37 @@ class DownloadManager:
             )
             return False
 
+        if stalled_out:
+            # A stall abort is its own outcome: it is neither a clean run nor a
+            # user cancellation, and it must print the real failure reasons.
+            self._report_progress(
+                f"Downloads abortados por travamento: {success_count}/{total} "
+                "modelos concluídos",
+                success_count,
+                total,
+            )
+            self._log_failure_summary()
+            return False
+
         self._report_progress(
             f"Downloaded {success_count}/{total} files successfully", total, total
         )
-        if self.failures:
-            logger.error("Download failure summary:")
-            with self._failures_lock:
-                failures_snapshot = list(self.failures)
-            for idx, failure in enumerate(failures_snapshot, 1):
-                logger.error(
-                    f"[{idx}] file={failure['filename']} dir={failure['dir']} "
-                    f"stage={failure['stage']} reason={failure['reason']} url={failure['url']}"
-                )
+        self._log_failure_summary()
         return success_count == total
+
+    def _log_failure_summary(self) -> None:
+        """Print every recorded failure with its stage and reason."""
+        with self._failures_lock:
+            failures_snapshot = list(self.failures)
+        if not failures_snapshot:
+            return
+        logger.error("Download failure summary:")
+        for idx, failure in enumerate(failures_snapshot, 1):
+            logger.error(
+                f"[{idx}] file={failure['filename']} dir={failure['dir']} "
+                f"stage={failure['stage']} reason={failure['reason']} "
+                f"url={self._sanitize_log(failure['url'])}"
+            )
     
     def _download_file(self, url: str, target_dir: str, filename: str = '') -> Tuple[bool, str, str]:
         """Download a single file"""
@@ -1410,8 +1798,11 @@ class DownloadManager:
             logger.error(reason)
             return False, reason, 'precheck'
 
-        # HuggingFace priority: use the killable hf_xet worker first.
-        if 'huggingface.co' in url and self.hf_cli_path:
+        # HuggingFace priority: use the killable hf_xet worker first. Gated on an
+        # importable huggingface_hub, not on the `hf` console script.
+        if self._cancelled:
+            return False, 'cancelled_by_user', 'cancel'
+        if 'huggingface.co' in url and getattr(self, 'has_hf_hub', False):
             result, reason = self._download_hf_direct(url, dest_dir, filename)
             self._record_attempt(url, 'hf-xet', result, reason)
             if result:
@@ -1579,7 +1970,13 @@ class DownloadManager:
             self._register_process(process)
             download_start_ts = time.monotonic()
             tail = deque(maxlen=12)
-            stall_state = {'last_progress': time.monotonic(), 'killed': False, 'last_bytes': 0}
+            stall_state = {
+                'last_progress': time.monotonic(),
+                'killed': False,
+                'last_bytes': 0,
+                # Bytes the backend itself reports, fed by the reader loop.
+                'event_bytes': 0,
+            }
             watchdog = threading.Thread(
                 target=self._run_disk_watchdog,
                 args=(process, staging_dir, final_path, filename, expected_size, stall_state),
@@ -1602,30 +1999,46 @@ class DownloadManager:
                         continue
                     now = time.monotonic()
                     stall_state['last_progress'] = now
+                    # Authoritative delivered-byte count for the liveness floor:
+                    # XET reconstructs chunks outside the watched staging tree, so
+                    # the disk observer alone cannot tell a warming-up transfer
+                    # from a dead one.
+                    prev_event_bytes = int(stall_state.get('event_bytes') or 0)
+                    if progress['current'] > prev_event_bytes:
+                        stall_state['event_bytes'] = progress['current']
                     kind = progress['kind']
+
+                    # This is the ONLY progress emitter for the XET path (the disk
+                    # observer stays silent for it), so publish before throttling
+                    # the log line.
+                    self._publish_progress(
+                        filename,
+                        progress['current'],
+                        progress['total'] or expected_size,
+                        progress['speed'],
+                        'XET',
+                    )
+
                     last_logged = last_progress_log.get(kind, 0.0)
                     if now - last_logged < 5 and progress['percent'] < 100:
                         continue
 
                     speed = self._fmt_speed(progress['speed'])
                     current = self._fmt_bytes(progress['current'])
-                    if kind == 'reconstruction' and progress['total'] > 0:
-                        total = self._fmt_bytes(progress['total'])
+                    # Percent depends only on a known total — never on an English
+                    # phase substring. `phase` is huggingface_hub's tqdm `desc`,
+                    # whose wording varies by version, so keying behaviour off it
+                    # made this branch reachable on one release and dead on another.
+                    total_bytes = progress['total'] or (expected_size or 0)
+                    if total_bytes > 0:
+                        pct = min(100.0, progress['current'] / total_bytes * 100.0)
                         logger.info(
-                            f"  ↓ {filename} [XET/arquivo]: "
-                            f"{progress['percent']:.0f}% "
-                            f"({current}/{total}) @ {speed}"
+                            f"  ↓ {filename} [XET/{kind}]: {pct:.0f}% "
+                            f"({current}/{self._fmt_bytes(total_bytes)}) @ {speed}"
                         )
-                        if HAS_WEBSOCKET:
-                            send_download_progress(
-                                filename,
-                                progress['percent'],
-                                speed,
-                                "",
-                            )
                     else:
                         logger.info(
-                            f"  ↓ {filename} [XET/rede]: "
+                            f"  ↓ {filename} [XET/{kind}]: "
                             f"{current} recebidos @ {speed}"
                         )
                     last_progress_log[kind] = now
@@ -1645,9 +2058,9 @@ class DownloadManager:
                     'error', 'denied', 'forbidden', 'unauthorized', 'gated',
                     'requires', 'not found', 'failed', 'traceback', 'restricted',
                 )):
-                    logger.info(f"  [hf] {stripped}")
+                    logger.info(f"  [hf] {self._sanitize_log(stripped)}")
                 else:
-                    logger.debug(f"  [hf] {stripped}")
+                    logger.debug(f"  [hf] {self._sanitize_log(stripped)}")
 
             process.wait()
             if watchdog is not None:
@@ -1739,7 +2152,13 @@ class DownloadManager:
             self._register_process(process)
             start = time.monotonic()
             tail = deque(maxlen=20)
-            stall_state = {'last_progress': time.monotonic(), 'killed': False, 'last_bytes': 0}
+            stall_state = {
+                'last_progress': time.monotonic(),
+                'killed': False,
+                'last_bytes': 0,
+                # Bytes the backend itself reports, fed by the reader loop.
+                'event_bytes': 0,
+            }
             watchdog = threading.Thread(
                 target=self._run_disk_watchdog,
                 args=(process, staging_dir, final_path, filename, expected_size, stall_state),
@@ -1832,30 +2251,34 @@ class DownloadManager:
             '--dir', str(dest_dir),
         ]
         
-        # Add HF token header if needed
-        if 'huggingface.co' in url and self.hf_token:
-            cmd.extend(['--header', f'Authorization: Bearer {self.hf_token}'])
-        if 'huggingface.co' in url:
-            cmd.extend(['--header', f'User-Agent: {HTTP_USER_AGENT}'])
-        
-        # Add Civitai headers to reduce auth/redirect issues
-        if 'civitai.com' in url:
-            if self.civitai_token:
-                cmd.extend(['--header', f'Authorization: Bearer {self.civitai_token}'])
-            cmd.extend(['--header', f'User-Agent: {HTTP_USER_AGENT}'])
-            cmd.extend(['--header', 'Accept: application/octet-stream,*/*'])
-            cmd.extend(['--header', 'Referer: https://civitai.com/'])
-        
         # Add speed limit if configured (I7: bandwidth throttling)
         if self.speed_limit != '0':
             cmd.extend(['--max-download-limit', self.speed_limit])
-        
-        # Always write to a stable partial name. The final model path only
-        # appears after exit 0 + verification, so cancellation can never leave
-        # a truncated .safetensors that a later run mistakes for complete.
-        cmd.extend(['--out', partial_path.name])
 
-        cmd.append(url)
+        # The URI and every credential-bearing header go into a 0600 input file
+        # instead of argv, so neither the bearer token nor the Civitai `?token=`
+        # query parameter is visible in `ps` / `/proc/<pid>/cmdline`.
+        entry_options = [
+            # Always write to a stable partial name. The final model path only
+            # appears after exit 0 + verification, so cancellation can never
+            # leave a truncated .safetensors that a later run mistakes for
+            # complete.
+            f'out={partial_path.name}',
+        ]
+        if 'huggingface.co' in url:
+            if self.hf_token:
+                entry_options.append(f'header=Authorization: Bearer {self.hf_token}')
+            entry_options.append(f'header=User-Agent: {HTTP_USER_AGENT}')
+        if 'civitai.com' in url:
+            if self.civitai_token:
+                entry_options.append(f'header=Authorization: Bearer {self.civitai_token}')
+            entry_options.append(f'header=User-Agent: {HTTP_USER_AGENT}')
+            entry_options.append('header=Accept: application/octet-stream,*/*')
+            entry_options.append('header=Referer: https://civitai.com/')
+
+        input_body = url + '\n' + ''.join(f'  {opt}\n' for opt in entry_options)
+        input_file = self._make_secret_argfile('aria2', input_body)
+        cmd.extend(['-i', str(input_file)])
 
         process: Optional[subprocess.Popen] = None
         try:
@@ -1892,8 +2315,19 @@ class DownloadManager:
                     now = time.monotonic()
                     speed_is_zero = match.group(2).startswith("0B")
 
-                    if HAS_WEBSOCKET:
-                        send_download_progress(filename, percent, speed, eta)
+                    # Publish bytes, not a bare percentage, so the UI can render a
+                    # real "N of M" even when the size was unknown up front.
+                    bytes_match = re.search(
+                        r'([\d\.]+[KMGTi]*B)/([\d\.]+[KMGTi]*B)\(', stripped
+                    )
+                    if bytes_match:
+                        self._publish_progress(
+                            filename,
+                            self._parse_size_token(bytes_match.group(1)),
+                            self._parse_size_token(bytes_match.group(2)),
+                            self._parse_size_token(match.group(2)),
+                            'aria2c',
+                        )
 
                     # Warn when speed drops to zero
                     if speed_is_zero and not last_speed_zero_warned:
@@ -1921,9 +2355,9 @@ class DownloadManager:
                     if not stripped.startswith('[#') and not stripped.startswith('***'):
                         line_lower = stripped.lower()
                         if any(kw in line_lower for kw in ('error', 'download', 'redirect', 'connect', 'warning', 'exception')):
-                            logger.info(f"  [aria2c] {stripped}")
+                            logger.info(f"  [aria2c] {self._sanitize_log(stripped)}")
                         else:
-                            logger.debug(f"  [aria2c] {stripped}")
+                            logger.debug(f"  [aria2c] {self._sanitize_log(stripped)}")
 
                 # Guard against stalled aria2c sessions (e.g., DL:0B forever)
                 now = time.monotonic()
@@ -1980,9 +2414,11 @@ class DownloadManager:
                 except Exception:
                     pass
             self._unregister_process(process)
-            logger.error(f"aria2c error: {e}")
+            logger.error(f"aria2c error: {self._sanitize_log(str(e))}")
             return False, str(e)
-    
+        finally:
+            self._remove_secret_argfile(input_file)
+
     def _download_wget(
         self,
         url: str,
@@ -2008,23 +2444,31 @@ class DownloadManager:
             '--waitretry=3',
         ]
         
-        # Add HF token header if needed
-        if 'huggingface.co' in url and self.hf_token:
-            cmd.extend(['--header', f'Authorization: Bearer {self.hf_token}'])
-        if 'huggingface.co' in url:
-            cmd.extend(['--user-agent', HTTP_USER_AGENT])
-        
-        if 'civitai.com' in url:
-            if self.civitai_token:
-                cmd.extend(['--header', f'Authorization: Bearer {self.civitai_token}'])
-            cmd.extend(['--user-agent', HTTP_USER_AGENT])
-            cmd.extend(['--header', 'Referer: https://civitai.com/'])
-        
         # Match aria2c's staging file so wget can continue the same partial
         # payload after a fallback, without ever exposing a truncated final.
         cmd.extend(['-O', str(partial_path)])
 
-        cmd.append(url)
+        # Credentials and the URL (which for Civitai carries `?token=`) go into
+        # 0600 files rather than argv, so they never appear in `ps`.
+        wgetrc_lines = []
+        if 'huggingface.co' in url:
+            if self.hf_token:
+                wgetrc_lines.append(f'header = Authorization: Bearer {self.hf_token}')
+            wgetrc_lines.append(f'user_agent = {HTTP_USER_AGENT}')
+        if 'civitai.com' in url:
+            if self.civitai_token:
+                wgetrc_lines.append(f'header = Authorization: Bearer {self.civitai_token}')
+            wgetrc_lines.append(f'user_agent = {HTTP_USER_AGENT}')
+            wgetrc_lines.append('header = Referer: https://civitai.com/')
+
+        url_file = self._make_secret_argfile('wget-url', url + '\n')
+        cmd.extend(['-i', str(url_file)])
+        wgetrc_file: Optional[Path] = None
+        if wgetrc_lines:
+            wgetrc_file = self._make_secret_argfile(
+                'wgetrc', '\n'.join(wgetrc_lines) + '\n'
+            )
+            cmd.insert(1, f'--config={wgetrc_file}')
 
         process: Optional[subprocess.Popen] = None
         try:
@@ -2058,8 +2502,25 @@ class DownloadManager:
                     eta = match.group(3)
                     now = time.monotonic()
 
-                    if HAS_WEBSOCKET:
-                        send_download_progress(dest_path.name, percent, speed, eta)
+                    # wget reports absolute bytes received; the total is only
+                    # derivable from its percentage, so publish bytes when we can
+                    # and leave the total unknown otherwise.
+                    received_match = re.search(r'\]\s*([\d,]+)\s', stripped)
+                    received = (
+                        int(received_match.group(1).replace(',', ''))
+                        if received_match else 0
+                    )
+                    derived_total = (
+                        int(received / (percent / 100.0))
+                        if (received and percent > 0) else None
+                    )
+                    self._publish_progress(
+                        dest_path.name,
+                        received,
+                        derived_total,
+                        self._parse_size_token(speed.replace('/s', '')),
+                        'wget',
+                    )
 
                     # Log every ~10% or every 30s
                     if percent - last_logged_pct >= 10 or (now - last_log_ts) > 30:
@@ -2076,9 +2537,9 @@ class DownloadManager:
                     # Promote important wget lines to info
                     line_lower = stripped.lower()
                     if any(kw in line_lower for kw in ('error', 'failed', 'redirect', 'location', 'saving')):
-                        logger.info(f"  [wget] {stripped}")
+                        logger.info(f"  [wget] {self._sanitize_log(stripped)}")
                     elif stripped and not stripped.startswith('%'):
-                        logger.debug(f"  [wget] {stripped}")
+                        logger.debug(f"  [wget] {self._sanitize_log(stripped)}")
 
                 # Stall timeout for wget
                 now = time.monotonic()
@@ -2135,8 +2596,11 @@ class DownloadManager:
                 except Exception:
                     pass
             self._unregister_process(process)
-            logger.error(f"wget error: {e}")
+            logger.error(f"wget error: {self._sanitize_log(str(e))}")
             return False, str(e)
+        finally:
+            self._remove_secret_argfile(url_file)
+            self._remove_secret_argfile(wgetrc_file)
     
     def _add_auth_token(self, url: str) -> str:
         """Add authentication token if needed"""
