@@ -5,9 +5,10 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 import start
+import server
 
 
 class SageAttentionInstallerTests(unittest.TestCase):
@@ -171,6 +172,38 @@ class InstallCoordinatorTests(unittest.TestCase):
         status = start.get_install_status()
         self.assertFalse(status['installing'])
         self.assertEqual(status['install_status'], 'cancelled')
+
+    def test_shutdown_policy_is_forwarded_to_active_downloader(self):
+        self.assertTrue(start.reserve_install_slot())
+        downloader = Mock()
+
+        with patch.object(start, '_active_downloader', downloader):
+            self.assertTrue(start.cancel_active_install(delete_partials=True))
+
+        downloader.cancel.assert_called_once_with(delete_partials=True)
+
+    def test_shutdown_cleans_partials_before_stopping_comfyui(self):
+        events = []
+
+        class RecordingDownloader:
+            def cancel(self, delete_partials=False):
+                events.append(('cancel', delete_partials))
+
+        class RecordingProcessManager:
+            def is_running(self):
+                return True
+
+            def ensure_stopped(self, timeout):
+                events.append(('stop', timeout))
+                return True
+
+        self.assertTrue(start.reserve_install_slot())
+        with patch.object(start, '_active_downloader', RecordingDownloader()), \
+                patch.object(server, '_state_manager', object()), \
+                patch('process_manager.ProcessManager', return_value=RecordingProcessManager()):
+            server._shutdown_runtime()
+
+        self.assertEqual(events, [('cancel', True), ('stop', 15)])
 
 
 class PresetCompletionTests(unittest.TestCase):

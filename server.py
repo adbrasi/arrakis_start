@@ -21,6 +21,19 @@ _presets_callback = None
 _state_manager = None
 
 
+def _shutdown_runtime():
+    """Cancel active work destructively, then stop ComfyUI."""
+    from start import cancel_active_install
+    cancel_active_install(delete_partials=True)
+
+    from process_manager import ProcessManager
+    state = _state_manager or get_state_manager()
+    pm = ProcessManager(state)
+    if pm.is_running():
+        logger.info("Stopping ComfyUI before shutdown...")
+        pm.ensure_stopped(timeout=15)
+
+
 class PresetHandler(SimpleHTTPRequestHandler):
     """HTTP handler for preset selector"""
     
@@ -412,13 +425,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     import time
                     time.sleep(0.5)
                     logger.info("Shutdown requested via web UI")
-                    # Stop ComfyUI first
-                    from process_manager import ProcessManager
-                    state = _state_manager or get_state_manager()
-                    pm = ProcessManager(state)
-                    if pm.is_running():
-                        logger.info("Stopping ComfyUI before shutdown...")
-                        pm.ensure_stopped(timeout=15)
+                    _shutdown_runtime()
                     logger.info("Arrakis Start shutting down...")
                     import os, signal
                     os.kill(os.getpid(), signal.SIGTERM)

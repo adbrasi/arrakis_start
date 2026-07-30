@@ -64,6 +64,85 @@ ARRAKIS_DIR = Path(__file__).parent
 ARRAKIS_VENV_BIN = Path(os.environ.get('ARRAKIS_VENV_BIN', str(ARRAKIS_DIR / '.venv' / 'bin')))
 
 
+def cleanup_incomplete_downloads(
+    models_dir: Path,
+    hf_partial_root: Optional[Path] = None,
+) -> Dict[str, int]:
+    """Delete incomplete model payloads while preserving completed final files."""
+    models_dir = Path(models_dir)
+    hf_partial_root = Path(
+        hf_partial_root
+        or os.environ.get(
+            'ARRAKIS_HF_PARTIAL_DIR',
+            str(models_dir.parent / '.arrakis-hf-partials'),
+        )
+    )
+    partial_payloads = 0
+    bytes_removed = 0
+    errors = 0
+
+    if hf_partial_root.exists():
+        try:
+            jobs = list(hf_partial_root.iterdir())
+            for root, _dirs, files in os.walk(hf_partial_root):
+                for filename in files:
+                    try:
+                        bytes_removed += (Path(root) / filename).stat().st_size
+                    except OSError:
+                        pass
+            shutil.rmtree(hf_partial_root)
+            partial_payloads += len(jobs)
+        except Exception as e:
+            errors += 1
+            logger.error(
+                f"Falha ao limpar staging parcial do Hugging Face "
+                f"({hf_partial_root}): {e}"
+            )
+
+    if models_dir.exists():
+        # Current generic download staging contract.
+        for partial_path in list(models_dir.rglob('*.arrakis.part')):
+            control_path = partial_path.with_name(f"{partial_path.name}.aria2")
+            try:
+                if partial_path.exists():
+                    bytes_removed += partial_path.stat().st_size
+                    partial_path.unlink()
+                    partial_payloads += 1
+                control_path.unlink(missing_ok=True)
+            except Exception as e:
+                errors += 1
+                logger.error(f"Falha ao remover parcial {partial_path}: {e}")
+
+        # Legacy aria2 wrote directly to the final filename. The adjacent
+        # control file is the marker that proves the payload is incomplete.
+        for control_path in list(models_dir.rglob('*.aria2')):
+            if control_path.name.endswith('.arrakis.part.aria2'):
+                continue
+            payload_name = control_path.name[:-len('.aria2')]
+            payload_path = control_path.with_name(payload_name)
+            try:
+                if payload_path.exists() and payload_path.is_file():
+                    bytes_removed += payload_path.stat().st_size
+                    payload_path.unlink()
+                    partial_payloads += 1
+                control_path.unlink(missing_ok=True)
+            except Exception as e:
+                errors += 1
+                logger.error(
+                    f"Falha ao remover parcial legado {payload_path}: {e}"
+                )
+
+    logger.info(
+        f"Limpeza de downloads incompletos: {partial_payloads} payload(s), "
+        f"{bytes_removed / 1_048_576:.0f} MB removidos"
+    )
+    return {
+        'partial_payloads': partial_payloads,
+        'bytes_removed': bytes_removed,
+        'errors': errors,
+    }
+
+
 class DownloadManager:
     def __init__(self, models_dir: Path, progress_callback: Optional[Callable] = None):
         self.models_dir = Path(models_dir)
@@ -979,8 +1058,15 @@ class DownloadManager:
         with self._process_lock:
             self._active_procs.discard(process)
 
-    def cancel(self):
-        """Cancel ongoing downloads and preserve resumable partial files."""
+    def cleanup_partials(self) -> Dict[str, int]:
+        """Remove incomplete model payloads without touching completed files."""
+        return cleanup_incomplete_downloads(
+            self.models_dir,
+            self.hf_partial_root,
+        )
+
+    def cancel(self, delete_partials: bool = False):
+        """Cancel downloads, optionally deleting their resumable partial files."""
         self._cancelled = True
         with self._process_lock:
             active = list(self._active_procs)
@@ -990,6 +1076,8 @@ class DownloadManager:
                 self._terminate_process(proc, grace=3)
             except Exception as e:
                 logger.error(f"Failed to kill process: {e}")
+        if delete_partials:
+            self.cleanup_partials()
         logger.info("Download cancelled by user")
     
     def _report_progress(self, message: str, current: int = 0, total: int = 0):

@@ -264,9 +264,12 @@ def _terminate_install_process(process: subprocess.Popen, grace: float = 3.0) ->
 def get_active_downloader():
     return _active_downloader
 
-def cancel_active_install():
-    """Cancel every cancellable phase of the currently active installation."""
+def cancel_active_install(delete_partials: bool = False):
+    """Cancel the active installation and optionally delete model partials."""
     if not _install_lock.locked():
+        if delete_partials:
+            from downloader import cleanup_incomplete_downloads
+            cleanup_incomplete_downloads(MODELS_DIR)
         return False
 
     logger.warning("Cancelando instalação ativa...")
@@ -275,7 +278,10 @@ def cancel_active_install():
 
     downloader = _active_downloader
     if downloader is not None:
-        downloader.cancel()
+        downloader.cancel(delete_partials=delete_partials)
+    elif delete_partials:
+        from downloader import cleanup_incomplete_downloads
+        cleanup_incomplete_downloads(MODELS_DIR)
 
     with _active_install_processes_lock:
         active_processes = list(_active_install_processes)

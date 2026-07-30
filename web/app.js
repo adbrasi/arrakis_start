@@ -505,7 +505,9 @@ async function startWithPresets() {
 // Shutdown
 // ============================================
 async function shutdownArrakis() {
-    if (!confirm('Tem certeza que deseja desligar o Arrakis Start e o ComfyUI?')) return;
+    if (!confirm(
+        'Desligar o Arrakis Start e o ComfyUI? Downloads incompletos de modelos serão apagados.'
+    )) return;
     try {
         const response = await fetch('/api/shutdown', { method: 'POST' });
         if (response.ok) {

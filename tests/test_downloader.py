@@ -181,6 +181,63 @@ class DownloadStagingTests(unittest.TestCase):
         terminate.assert_not_called()
         self.assertFalse(state['killed'])
 
+    def test_cleanup_partials_preserves_completed_models(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            models_dir = Path(temp_dir) / 'models'
+            manager = self._manager(models_dir)
+            final = models_dir / 'loras' / 'complete.safetensors'
+            partial = models_dir / 'loras' / 'incomplete.safetensors.arrakis.part'
+            final.parent.mkdir(parents=True)
+            final.write_bytes(b'complete')
+            partial.write_bytes(b'partial')
+            partial.with_name(f'{partial.name}.aria2').write_bytes(b'control')
+            (manager.hf_partial_root / 'job').mkdir(parents=True)
+            (manager.hf_partial_root / 'job' / 'chunk').write_bytes(b'xet')
+
+            result = manager.cleanup_partials()
+
+            self.assertTrue(final.exists())
+            self.assertFalse(partial.exists())
+            self.assertFalse(partial.with_name(f'{partial.name}.aria2').exists())
+            self.assertFalse(manager.hf_partial_root.exists())
+            self.assertEqual(result['partial_payloads'], 2)
+
+    def test_cleanup_partials_removes_legacy_incomplete_pair(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            models_dir = Path(temp_dir) / 'models'
+            manager = self._manager(models_dir)
+            legacy = models_dir / 'checkpoints' / 'legacy.safetensors'
+            legacy.parent.mkdir(parents=True)
+            legacy.write_bytes(b'incomplete')
+            legacy.with_name(f'{legacy.name}.aria2').write_bytes(b'control')
+
+            manager.cleanup_partials()
+
+            self.assertFalse(legacy.exists())
+            self.assertFalse(legacy.with_name(f'{legacy.name}.aria2').exists())
+
+    def test_normal_cancel_preserves_partials(self):
+        manager = self._manager(Path('/tmp/models'))
+        manager._cancelled = False
+        manager._active_procs = set()
+        manager._process_lock = threading.Lock()
+
+        with patch.object(manager, 'cleanup_partials') as cleanup:
+            manager.cancel()
+
+        cleanup.assert_not_called()
+
+    def test_shutdown_cancel_deletes_partials(self):
+        manager = self._manager(Path('/tmp/models'))
+        manager._cancelled = False
+        manager._active_procs = set()
+        manager._process_lock = threading.Lock()
+
+        with patch.object(manager, 'cleanup_partials') as cleanup:
+            manager.cancel(delete_partials=True)
+
+        cleanup.assert_called_once_with()
+
     def test_deterministic_404_is_not_retried(self):
         manager = self._manager(Path('/tmp/models'))
 

@@ -215,6 +215,11 @@ downloads, clones, and `pip` installs, preserves completed files, and keeps
 partial payloads under staging names/directories. A cancelled preset is not
 marked as installed.
 
+Use **Shutdown** when partial downloads should be discarded. Arrakis cancels
+active work, deletes the private Hugging Face staging tree plus
+`*.arrakis.part`/`.aria2` incomplete payloads, preserves completed final models,
+stops ComfyUI, and then terminates the selector.
+
 After cancellation, select the same presets and install again:
 
 - completed models are skipped;
@@ -228,9 +233,9 @@ reused, ComfyUI is not cloned again when `main.py` exists, and synchronized
 requirements are skipped. Bootstrap may update packages and the checkout, but
 that replaces previous versions instead of creating a parallel installation.
 
-`Ctrl+C`/`SIGTERM` on the Arrakis process now requests the same safe cancellation
-before shutdown. Prefer the UI button because it keeps the page alive until a
-terminal status is confirmed.
+`Ctrl+C`/`SIGTERM` requests resume-preserving cancellation. Only the explicit
+**Shutdown** button requests destructive cleanup of incomplete model downloads,
+and its confirmation dialog states this before proceeding.
 
 ---
 
