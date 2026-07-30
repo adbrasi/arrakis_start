@@ -46,6 +46,21 @@
       "filename": "loop2d_r64-step00001000.comfy.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/seamless_loop_2d_balblabla_29-07_ltx2_3/resolve/main/checkpoints/loop2d_r64-step00005000.comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "loop2d_r64-step00005000.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/looperV3-base/resolve/main/looperV3-base-step00033750.comfy.safetensors",
+      "dir": "loras",
+      "filename": "looperV3-base-step00033750.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/looperV3-base/resolve/main/looperV3-base-step00024000.comfy.safetensors",
+      "dir": "loras",
+      "filename": "looperV3-base-step00024000.comfy.safetensors"
+    },
+    {
       "url": "https://huggingface.co/AdwolfCzar/scene_rush_v2/resolve/main/anima_scene_rush_v2_500.safetensors",
       "dir": "loras",
       "filename": "anima_scene_rush_v2_500.safetensors"
