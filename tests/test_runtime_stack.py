@@ -238,21 +238,33 @@ class InstallCoordinatorTests(unittest.TestCase):
             def cancel(self, delete_partials=False):
                 events.append(('cancel', delete_partials))
 
-        class RecordingProcessManager:
-            def is_running(self):
-                return True
+        # autospec, not a hand-rolled fake: the real signature is
+        # ensure_stopped(port=..., timeout=...), and a fake that omits `port`
+        # silently accepts a caller that forgets it — which is how shutdown came
+        # to target the default 8818 while ComfyUI ran on COMFY_PORT.
+        from unittest.mock import create_autospec
+        from process_manager import ProcessManager
 
-            def ensure_stopped(self, timeout):
-                events.append(('stop', timeout))
-                return True
+        recording_pm = create_autospec(ProcessManager, instance=True)
+        recording_pm.is_running.return_value = True
+
+        def record_stop(port=None, timeout=None):
+            events.append(('stop', timeout))
+            return True
+
+        recording_pm.ensure_stopped.side_effect = record_stop
 
         self.assertTrue(start.reserve_install_slot())
         with patch.object(start, '_active_downloader', RecordingDownloader()), \
                 patch.object(server, '_state_manager', object()), \
-                patch('process_manager.ProcessManager', return_value=RecordingProcessManager()):
+                patch('process_manager.ProcessManager', return_value=recording_pm):
             server._shutdown_runtime()
 
         self.assertEqual(events, [('cancel', True), ('stop', 15)])
+        # And the port is actually passed, so a non-default COMFY_PORT is honored.
+        _, stop_kwargs = recording_pm.ensure_stopped.call_args
+        self.assertIn('port', stop_kwargs)
+        self.assertEqual(stop_kwargs['port'], server.COMFY_PORT)
 
 
 class PresetCompletionTests(unittest.TestCase):

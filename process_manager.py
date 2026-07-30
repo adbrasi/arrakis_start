@@ -5,31 +5,86 @@ Start, stop, restart ComfyUI with configurable flags
 """
 
 import os
-import sys
+import signal
 import subprocess
 import logging
 import time
 import requests
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 import psutil
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a positive int env var, falling back to default when unusable."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid integer for env var {name}={raw!r}, using default {default}")
+        return default
+    if value <= 0:
+        logger.warning(f"Non-positive value for env var {name}={raw!r}, using default {default}")
+        return default
+    return value
+
 
 # Paths
 COMFY_BASE = Path(os.environ.get('COMFY_BASE', '/workspace/comfy'))
 COMFY_DIR = COMFY_BASE / 'ComfyUI'
 VENV_DIR = COMFY_BASE / '.venv'
 COMFY_CLI = os.environ.get('COMFY_CLI', str(VENV_DIR / 'bin' / 'comfy'))
-COMFY_STARTUP_TIMEOUT = int(os.environ.get('COMFY_STARTUP_TIMEOUT', '120'))
+COMFY_STARTUP_TIMEOUT = _env_int('COMFY_STARTUP_TIMEOUT', 120)
+# Single source of truth for the ComfyUI port in this module. start.py reads the
+# same variable for its own launch path, so both agree: health checks probe the
+# port ComfyUI was actually started on and the UI cannot spawn a second instance
+# on a different port (double VRAM -> OOM).
+COMFY_PORT = _env_int('COMFY_PORT', 8818)
+# Per-probe budget while waiting for startup. Short on purpose: a bound but
+# unresponsive port (or dropped packets) must not stretch the
+# COMFY_STARTUP_TIMEOUT wall-clock budget.
+STARTUP_PROBE_TIMEOUT = 2
 
 
 class ProcessManager:
     """Manages ComfyUI process lifecycle"""
-    
+
     def __init__(self, state_manager):
         self.state_manager = state_manager
         self.process = None
+        # Identity of the process this instance launched: (pid, create_time).
+        # A PID alone is not an identity — it can be recycled — so the start
+        # time is kept alongside it and compared before any kill.
+        self._tracked_identity: Optional[Tuple[int, float]] = None
+
+    @staticmethod
+    def _resolve_port(port: Optional[int] = None) -> int:
+        """Resolve the ComfyUI port: explicit argument wins, else COMFY_PORT."""
+        if port:
+            return int(port)
+        return COMFY_PORT
+
+    @staticmethod
+    def _process_create_time(pid: Optional[int]) -> Optional[float]:
+        """Start time of a PID, used as the second half of its identity."""
+        if not pid:
+            return None
+        try:
+            return psutil.Process(pid).create_time()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+
+    def _record_tracked_identity(self, pid: Optional[int]) -> None:
+        """Remember (pid, create_time) for the ComfyUI process we own."""
+        create_time = self._process_create_time(pid)
+        if pid and create_time is not None:
+            self._tracked_identity = (int(pid), create_time)
+        else:
+            self._tracked_identity = None
 
     def _pid_is_alive(self, pid: Optional[int]) -> bool:
         """Check if PID exists and is not a zombie."""
@@ -51,44 +106,173 @@ class ProcessManager:
             logger.warning(f"Could not inspect port owner for {port}: {e}")
         return None
 
+    @staticmethod
+    def _cmdline_is_comfy_server(cmdline: List[str]) -> bool:
+        """
+        True only for a ComfyUI *server* command line.
+
+        Deliberately strict: bootstrap runs git/pip/apt inside COMFY_DIR, so a
+        plain substring match on the workspace path is not an identity — it
+        would authorise killing unrelated processes whose PID happens to match
+        stale state.
+        """
+        if not cmdline:
+            return False
+        tokens = [str(t).lower() for t in cmdline]
+        joined = ' '.join(tokens)
+        basenames = {os.path.basename(t) for t in tokens}
+        # comfy-cli wrapper: "<python> .../bin/comfy --workspace <dir> launch -- ..."
+        if 'launch' in tokens and any(b.startswith('comfy') for b in basenames):
+            return True
+        # ComfyUI itself: "<python> .../ComfyUI/main.py --port <n> ..."
+        if 'main.py' in basenames and ('comfyui' in joined or '--port' in tokens):
+            return True
+        return False
+
     def _is_comfy_process(self, pid: Optional[int]) -> bool:
-        """Best-effort check that a PID belongs to ComfyUI stack."""
-        if not pid:
+        """Identity check: does this PID belong to a ComfyUI server we may stop?"""
+        if not pid or int(pid) == os.getpid():
             return False
         try:
-            process = psutil.Process(pid)
-            cmdline = " ".join(process.cmdline()).lower()
-            return (
-                'comfyui' in cmdline or
-                'comfy launch' in cmdline or
-                str(COMFY_DIR).lower() in cmdline or
-                ('main.py' in cmdline and '--port' in cmdline)
-            )
+            return self._cmdline_is_comfy_server(psutil.Process(pid).cmdline())
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return False
 
-    def _terminate_pid(self, pid: int, timeout: int = 10) -> bool:
-        """Terminate PID gracefully, fallback to kill."""
+    def _tracked_pid_is_stoppable(self, pid: Optional[int]) -> bool:
+        """
+        Decide whether the PID persisted in state may be killed.
+
+        state.json lives on the persistent volume, so the recorded PID survives
+        container restarts: on a fresh boot it is stale and PIDs climb past it
+        while bootstrap runs apt/pip/git. Existence is therefore not identity —
+        the PID must not be us, must still look like a ComfyUI server, and must
+        keep the start time we recorded when we launched it.
+        """
+        if not pid:
+            return False
+        if int(pid) == os.getpid():
+            logger.warning(
+                f"Tracked PID {pid} is this orchestrator itself (stale state); not killing it"
+            )
+            return False
+        if not self._pid_is_alive(pid):
+            return False
+        tracked = self._tracked_identity
+        if tracked and tracked[0] == int(pid) and self._process_create_time(pid) != tracked[1]:
+            logger.warning(
+                f"Tracked PID {pid} was recycled by another process "
+                f"(start time changed); not killing it"
+            )
+            return False
+        if not self._is_comfy_process(pid):
+            logger.warning(
+                f"Tracked PID {pid} is not a ComfyUI process (stale state or recycled PID); "
+                "refusing to kill automatically"
+            )
+            return False
+        return True
+
+    def _kill_process_group(self, pid: int, sig: int) -> bool:
+        """
+        Signal the whole process group led by `pid`.
+
+        Only a group this PID leads is touched, and never our own group, so a
+        stray PID can never take the orchestrator down with it.
+        """
         try:
-            process = psutil.Process(pid)
-            logger.info(f"Stopping process PID {pid}: {' '.join(process.cmdline())}")
-            process.terminate()
-            try:
-                process.wait(timeout=timeout)
-                logger.info(f"✓ PID {pid} stopped gracefully")
-                return True
-            except psutil.TimeoutExpired:
-                logger.warning(f"PID {pid} did not stop in {timeout}s, forcing kill...")
-                process.kill()
-                process.wait(timeout=5)
-                logger.info(f"✓ PID {pid} force killed")
-                return True
+            pgid = os.getpgid(pid)
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+        if pgid != pid or pgid == os.getpgid(0):
+            return False
+        try:
+            os.killpg(pgid, sig)
+            return True
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            logger.debug(f"killpg({pgid}, {sig}) failed: {e}")
+            return False
+
+    def _reap_child(self, timeout: Optional[float] = None) -> None:
+        """
+        Reap the comfy-cli child we launched so it cannot linger as a zombie.
+
+        Non-blocking by default: only an already-exited child is collected.
+        """
+        proc = self.process
+        if proc is None:
+            return
+        try:
+            if timeout is None:
+                if proc.poll() is None:
+                    return
+                proc.wait(timeout=1)
+            else:
+                proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return
+        except Exception as e:
+            logger.debug(f"Reaping comfy-cli child failed: {e}")
+        self.process = None
+
+    def _terminate_tree(self, pid: int, timeout: int = 10) -> bool:
+        """
+        Stop `pid` and every descendant.
+
+        ComfyUI runs as a grandchild of the comfy-cli wrapper and may hold VRAM
+        without owning the listening socket, so stopping a single PID is not
+        enough: the whole tree (and the process group, for anything that
+        reparented) has to go.
+        """
+        try:
+            root = psutil.Process(pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             logger.info(f"PID {pid} is no longer running")
             return True
-        except Exception as e:
-            logger.error(f"Failed to terminate PID {pid}: {e}")
+
+        try:
+            cmdline = ' '.join(root.cmdline())
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            cmdline = ''
+        logger.info(f"Stopping process tree of PID {pid}: {cmdline}")
+
+        try:
+            targets = [root] + root.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            targets = [root]
+
+        self._kill_process_group(pid, signal.SIGTERM)
+        for proc in targets:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        _, alive = psutil.wait_procs(targets, timeout=timeout)
+        if alive:
+            logger.warning(
+                f"{len(alive)} process(es) in tree of PID {pid} did not stop in {timeout}s, "
+                "forcing kill..."
+            )
+            self._kill_process_group(pid, signal.SIGKILL)
+            for proc in alive:
+                try:
+                    proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            _, alive = psutil.wait_procs(alive, timeout=5)
+
+        if self.process is not None and self.process.pid == pid:
+            self._reap_child(timeout=5)
+        if self._tracked_identity and self._tracked_identity[0] == pid:
+            self._tracked_identity = None
+
+        if alive:
+            logger.error(
+                f"Failed to stop PID(s) {[p.pid for p in alive]} in tree of {pid}"
+            )
             return False
+        logger.info(f"✓ Process tree of PID {pid} stopped")
+        return True
 
     def _try_comfy_stop(self, timeout: int = 12) -> bool:
         """Try stopping ComfyUI through comfy-cli before PID-level fallback."""
@@ -125,22 +309,29 @@ class ProcessManager:
                 logger.warning(f"comfy stop failed ({' '.join(cmd)}): {e}")
         return False
     
-    def is_running(self) -> bool:
+    def is_running(self, port: Optional[int] = None) -> bool:
         """Check if ComfyUI is running"""
+        port = self._resolve_port(port)
+        self._reap_child()
         status = self.state_manager.get_comfyui_status()
         pid = status.get('pid')
-        port = status.get('port', 8818)
-        
-        if self._pid_is_alive(pid):
+
+        # A live PID only counts when it is really ComfyUI: state.json survives
+        # container restarts, so the recorded PID may now belong to anything.
+        if self._pid_is_alive(pid) and self._is_comfy_process(pid):
             return True
 
-        # Fallback for stale/missing PID: if health endpoint responds, ComfyUI is alive.
-        if self.health_check(port=port, timeout=2):
+        # Fallback for stale/missing PID: if health endpoint responds, ComfyUI is
+        # alive. This also promotes a "starting"/"error" record to "running" once
+        # a slow launch finally answers, so no state can wedge the UI.
+        if self.health_check(port=port, timeout=STARTUP_PROBE_TIMEOUT):
             owner_pid = self._find_port_owner_pid(port)
-            logger.warning(
-                f"ComfyUI responds on port {port} but tracked PID is stale ({pid}); "
-                f"updating state to PID {owner_pid}"
-            )
+            if owner_pid != pid or status.get('status') != 'running':
+                logger.info(
+                    f"ComfyUI responds on port {port}; syncing state "
+                    f"(status={status.get('status')}, tracked PID={pid}, owner PID={owner_pid})"
+                )
+            self._record_tracked_identity(owner_pid)
             self.state_manager.set_comfyui_status(
                 status="running",
                 pid=owner_pid,
@@ -149,9 +340,10 @@ class ProcessManager:
             return True
 
         return False
-    
-    def health_check(self, port: int = 8818, timeout: int = 5) -> bool:
+
+    def health_check(self, port: Optional[int] = None, timeout: float = 5) -> bool:
         """Check if ComfyUI is responding"""
+        port = self._resolve_port(port)
         try:
             response = requests.get(
                 f"http://localhost:{port}/system_stats",
@@ -162,12 +354,13 @@ class ProcessManager:
             logger.debug(f"Health check failed: {e}")
             return False
     
-    def start(self, flags: Optional[List[str]] = None, port: int = 8818) -> bool:
+    def start(self, flags: Optional[List[str]] = None, port: Optional[int] = None) -> bool:
         """Start ComfyUI with optional flags + preset-specific flags"""
-        if self.is_running():
+        port = self._resolve_port(port)
+        if self.is_running(port=port):
             status = self.state_manager.get_comfyui_status()
             running_pid = status.get('pid')
-            running_port = status.get('port', port)
+            running_port = status.get('port') or port
             running_flags = status.get('flags') or []
             running_cmdline = ''
             try:
@@ -296,35 +489,51 @@ class ProcessManager:
             )
             
             # Start process WITHOUT capturing output - logs go directly to terminal
-            # This allows real-time log viewing and prevents Python buffering issues
+            # This allows real-time log viewing and prevents Python buffering issues.
+            # start_new_session puts comfy-cli and its ComfyUI grandchild in a
+            # dedicated process group, so stop() can take the whole tree down.
             self.process = subprocess.Popen(
                 cmd,
                 cwd=str(COMFY_DIR),
-                env=env
+                env=env,
+                start_new_session=True
                 # No stdout/stderr capture - ComfyUI logs appear in real-time
             )
-            
+            child_pid = self.process.pid
+            self._record_tracked_identity(child_pid)
+
             # Update state
             self.state_manager.set_comfyui_status(
                 status="starting",
-                pid=self.process.pid,
+                pid=child_pid,
                 flags=flags,
                 port=port
             )
-            
-            # Wait for startup (check health and early process crash)
+
+            # Wait for startup (check health and early process crash) against a
+            # single wall-clock deadline: COMFY_STARTUP_TIMEOUT is a seconds
+            # budget, not an iteration count.
             logger.info(f"Waiting for ComfyUI to start (timeout: {COMFY_STARTUP_TIMEOUT}s)...")
-            for i in range(COMFY_STARTUP_TIMEOUT):
-                time.sleep(1)
+            deadline = time.monotonic() + COMFY_STARTUP_TIMEOUT
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 exit_code = self.process.poll()
                 if exit_code is not None:
                     logger.error(f"ComfyUI process exited before startup (exit code: {exit_code})")
-                    self.state_manager.set_comfyui_status(status="error")
+                    self._reap_child(timeout=5)
+                    self._tracked_identity = None
+                    self.state_manager.set_comfyui_status(
+                        status="error",
+                        port=port,
+                        clear_pid=True
+                    )
                     return False
-                if self.health_check(port):
+                if self.health_check(port=port, timeout=min(STARTUP_PROBE_TIMEOUT, remaining)):
                     self.state_manager.set_comfyui_status(
                         status="running",
-                        pid=self.process.pid,
+                        pid=child_pid,
                         flags=flags,
                         port=port
                     )
@@ -335,22 +544,41 @@ class ProcessManager:
                     print("="*60 + "\n")
                     logger.info(f"✓ ComfyUI started successfully on port {port}")
                     return True
-            
-            # Timeout
-            logger.error(f"ComfyUI failed to start within {COMFY_STARTUP_TIMEOUT} seconds")
-            self.state_manager.set_comfyui_status(status="error")
+                time.sleep(min(1.0, max(deadline - time.monotonic(), 0)))
+
+            # Timeout: the launch did not answer inside the budget, but it is
+            # still alive (poll() above would have caught an exit). Record what
+            # is actually true — "starting", with the real PID — instead of
+            # "error" plus an orphaned process: is_running() promotes it to
+            # "running" as soon as it answers, and any later stop/restart/install
+            # takes the whole tree down. Writing "error" while keeping the PID is
+            # what used to wedge the Start button permanently.
+            logger.error(
+                f"ComfyUI did not answer on port {port} within {COMFY_STARTUP_TIMEOUT}s "
+                f"(PID {child_pid} still starting). Raise COMFY_STARTUP_TIMEOUT if the "
+                "first launch is legitimately slower, or use Restart to stop it."
+            )
+            self.state_manager.set_comfyui_status(
+                status="starting",
+                pid=child_pid,
+                flags=flags,
+                port=port
+            )
             return False
-            
+
         except Exception as e:
             logger.error(f"Failed to start ComfyUI: {e}")
-            self.state_manager.set_comfyui_status(status="error")
+            self.state_manager.set_comfyui_status(status="error", port=port)
             return False
-    
-    def ensure_stopped(self, port: int = 8818, timeout: int = 10) -> bool:
+
+
+    def ensure_stopped(self, port: Optional[int] = None, timeout: int = 10) -> bool:
         """
         Ensure ComfyUI is stopped by tracked PID and by port ownership.
         This handles stale state where PID no longer matches the process on port.
         """
+        port = self._resolve_port(port)
+        self._reap_child()
         status = self.state_manager.get_comfyui_status()
         tracked_pid = status.get('pid')
         stopped_any = False
@@ -361,9 +589,11 @@ class ProcessManager:
             stopped_any = True
             time.sleep(1)
 
-        if self._pid_is_alive(tracked_pid):
+        # The tracked PID is only killed when its identity still checks out —
+        # same rule the port-owner path below applies.
+        if self._tracked_pid_is_stoppable(tracked_pid):
             logger.info(f"Stopping tracked ComfyUI PID: {tracked_pid}")
-            ok = self._terminate_pid(tracked_pid, timeout=timeout) and ok
+            ok = self._terminate_tree(tracked_pid, timeout=timeout) and ok
             stopped_any = True
 
         owner_pid = self._find_port_owner_pid(port)
@@ -373,7 +603,7 @@ class ProcessManager:
                     f"Found ComfyUI-like process on port {port} with PID {owner_pid} "
                     "not tracked in state; stopping it."
                 )
-                ok = self._terminate_pid(owner_pid, timeout=timeout) and ok
+                ok = self._terminate_tree(owner_pid, timeout=timeout) and ok
                 stopped_any = True
             else:
                 logger.error(
@@ -383,38 +613,49 @@ class ProcessManager:
                 ok = False
 
         logger.info(f"Waiting for port {port} to be released...")
-        for _ in range(timeout):
+        released = False
+        deadline = time.monotonic() + max(timeout, 1)
+        while time.monotonic() < deadline:
             owner_pid = self._find_port_owner_pid(port)
             if owner_pid is None:
                 logger.info(f"✓ Port {port} released")
+                released = True
                 break
 
             if self._is_comfy_process(owner_pid):
                 logger.warning(
                     f"Port {port} still owned by ComfyUI-like PID {owner_pid}; forcing stop."
                 )
-                ok = self._terminate_pid(owner_pid, timeout=5) and ok
+                ok = self._terminate_tree(owner_pid, timeout=5) and ok
+                stopped_any = True
             else:
                 logger.warning(
                     f"Port {port} still owned by non-Comfy PID {owner_pid}; waiting."
                 )
             time.sleep(1)
-        else:
-            owner_pid = self._find_port_owner_pid(port)
-            logger.error(
-                f"Port {port} is still in use after stop attempts "
-                f"(owner PID: {owner_pid})"
-            )
-            ok = False
 
-        if stopped_any:
+        if not released:
+            owner_pid = self._find_port_owner_pid(port)
+            if owner_pid is None:
+                logger.info(f"✓ Port {port} released")
+            else:
+                logger.error(
+                    f"Port {port} is still in use after stop attempts "
+                    f"(owner PID: {owner_pid})"
+                )
+                ok = False
+
+        # The banner claims success, so it needs both halves: something was
+        # actually stopped AND every stop attempt worked.
+        if not stopped_any:
+            logger.info("No running ComfyUI process detected during stop check")
+        elif ok:
             print("\n" + "="*60)
             print("\033[1;31m⏹ COMFYUI DESLIGADO! ⏹\033[0m")
             print("="*60 + "\n")
-        else:
-            logger.info("No running ComfyUI process detected during stop check")
 
         if ok:
+            self._tracked_identity = None
             self.state_manager.set_comfyui_status(
                 status="stopped",
                 pid=None,
@@ -422,18 +663,23 @@ class ProcessManager:
                 clear_pid=True
             )
         else:
+            # Keep the record honest: only retain a PID that is genuinely still
+            # a live ComfyUI, otherwise the next run inherits a stale PID again.
+            tracked_still_running = self._is_comfy_process(tracked_pid) and self._pid_is_alive(tracked_pid)
+            if not tracked_still_running:
+                self._tracked_identity = None
             self.state_manager.set_comfyui_status(
                 status="error",
                 port=port,
+                clear_pid=not tracked_still_running,
             )
         return ok
 
-    def stop(self, timeout: int = 10) -> bool:
+    def stop(self, timeout: int = 10, port: Optional[int] = None) -> bool:
         """Stop ComfyUI and ensure port release."""
-        status = self.state_manager.get_comfyui_status()
-        port = status.get('port', 8818)
         return self.ensure_stopped(port=port, timeout=timeout)
-    
+
+
     def _is_port_in_use(self, port: int) -> bool:
         """Check if a listening process owns this port."""
         return self._find_port_owner_pid(port) is not None
@@ -442,14 +688,11 @@ class ProcessManager:
         """Restart ComfyUI with optional new flags"""
         logger.info("Restarting ComfyUI...")
 
-        # Preserve current port when none is explicitly provided
-        if port is None:
-            status = self.state_manager.get_comfyui_status()
-            port = status.get('port', 8818)
+        port = self._resolve_port(port)
 
         # Stop if running
-        if self.is_running():
-            if not self.stop():
+        if self.is_running(port=port):
+            if not self.stop(port=port):
                 logger.error("Failed to stop ComfyUI for restart")
                 return False
 
