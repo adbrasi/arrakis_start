@@ -35,6 +35,11 @@
       "filename": "ctx_rush_oficial_11000steps.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/k2-context-rush-ofc-beta1/resolve/main/checkpoints/step13250/adapter_model.safetensors?download=true",
+      "dir": "loras",
+      "filename": "krea2_multiref_grounded_13250.safetensors"
+    },
+    {
       "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_turbo_lora_rank_64_bf16.safetensors",
       "dir": "loras",
       "filename": "krea2_turbo_lora_rank_64_bf16.safetensors"

@@ -51,6 +51,16 @@
       "filename": "loop2d_r64-step00005000.comfy.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/seamless_loop_2d_balblabla_29-07_ltx2_3/resolve/main/checkpoints/loop2d_r64-step00009500.comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "loop2d_r64-step00009500.comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/bouncing_body_jiggle_30-07_ltx2_3/resolve/main/checkpoints/jiggle_r64-step00002500.comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "jiggle_r64-step00002500.comfy.safetensors"
+    },
+    {
       "url": "https://huggingface.co/AdwolfCzar/looperV3-base/resolve/main/looperV3-base-step00033750.comfy.safetensors",
       "dir": "loras",
       "filename": "looperV3-base-step00033750.comfy.safetensors"
@@ -151,6 +161,7 @@
     "https://github.com/adbrasi/PhiNoise",
     "https://github.com/ltdrdata/ComfyUI-Impact-Subpack",
     "https://github.com/adbrasi/facetaggg",
-    "https://github.com/adbrasi/facereframe"
+    "https://github.com/adbrasi/facereframe",
+    "https://github.com/TenStrip/10S-Comfy-nodes"
   ]
 }

@@ -1,14 +1,14 @@
 {
   "name": "LTX 2.3 GERADOR NSFW - PINKCHERRY",
-  "description": "GERAÇÃO DE NSFW COM LTX 2.3 - MODELO PINKCHERRY V1.6 (FP8 SCALED), ENCODER HERETIC E LORA DISTILLED 1.1.",
+  "description": "GERAÇÃO DE NSFW COM LTX 2.3 - MODELO PINKCHERRY V1.7-ALPHA (FP8 SCALED), ENCODER HERETIC E LORA DISTILLED 1.1.",
   "workflow": "padrao_ltx2_arrakisV1-3.json",
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [
     {
-      "url": "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.6/SexGod_PinkCherry_dev_fp8scaled_LTX23_v16b.safetensors?download=true",
+      "url": "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.7-alpha/PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors?download=true",
       "dir": "checkpoints",
-      "filename": "SexGod_PinkCherry_dev_fp8scaled_LTX23_v16b.safetensors"
+      "filename": "PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors"
     },
     {
       "url": "https://huggingface.co/Lightricks/LTX-2-19b-IC-LoRA-Detailer/resolve/main/ltx-2-19b-ic-lora-detailer.safetensors",
