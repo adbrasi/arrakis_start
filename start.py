@@ -20,6 +20,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterator, List, Dict, Any, Optional, Tuple
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 
@@ -2078,6 +2079,49 @@ def _git_checkout_is_complete(dest: Path, env: Optional[Dict[str, str]] = None) 
     return probe.returncode == 0
 
 
+def _normalize_git_repository_url(url: str) -> str:
+    """Return a transport-independent repository identity."""
+    value = url.strip().rstrip('/')
+    if value.endswith('.git'):
+        value = value[:-4]
+
+    if value.startswith('git@') and ':' in value:
+        host, path = value.split(':', 1)
+        return f"{host.split('@', 1)[1].lower()}/{path.lower()}"
+
+    parsed = urlsplit(value)
+    if parsed.hostname:
+        return f"{parsed.hostname.lower()}/{parsed.path.strip('/').lower()}"
+    return value.lower()
+
+
+def _git_checkout_matches_source(
+    dest: Path,
+    url: str,
+    env: Optional[Dict[str, str]] = None,
+) -> bool:
+    """True when dest is complete and its origin is the requested repository."""
+    if not _git_checkout_is_complete(dest, env=env):
+        return False
+
+    probe = _run_capture_cancellable(
+        [
+            'git',
+            f'--git-dir={dest / ".git"}',
+            'remote',
+            'get-url',
+            'origin',
+        ],
+        timeout_sec=60,
+        env=env,
+    )
+    return (
+        probe.returncode == 0
+        and _normalize_git_repository_url(probe.stdout)
+        == _normalize_git_repository_url(url)
+    )
+
+
 def _clone_node(
     url: str,
     cn_dir: Path,
@@ -2093,14 +2137,16 @@ def _clone_node(
     node_name = url.rstrip('/').split('/')[-1]
     dest = cn_dir / node_name
 
-    if _git_checkout_is_complete(dest, env=env):
+    if _git_checkout_matches_source(dest, url, env=env):
         return (url, node_name, dest, True, 'already_installed')
 
     if dest.exists():
-        backup = cn_dir / f"{node_name}.backup-{int(time.time())}"
+        backup_root = cn_dir.parent / '.arrakis-node-backups'
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup = backup_root / f"{node_name}-{time.time_ns()}"
         logger.warning(
-            f"Node directory is not a complete git checkout: {dest}. "
-            f"Renaming to {backup.name} and cloning again."
+            f"Node directory is incomplete or comes from another source: {dest}. "
+            f"Moving it to {backup} and cloning the declared source."
         )
         try:
             dest.rename(backup)
@@ -2183,7 +2229,11 @@ def install_custom_nodes(node_urls: List[str]) -> Dict[str, Any]:
                 state.add_node(url)
                 continue
             node_dest = cn_dir / node_name
-            if state.is_node_installed(url) and _git_checkout_is_complete(node_dest, env=git_env):
+            if state.is_node_installed(url) and _git_checkout_matches_source(
+                node_dest,
+                url,
+                env=git_env,
+            ):
                 logger.info(f"✓ Fully installed node: {node_name} (skipping)")
                 continue
             to_clone.append(url)

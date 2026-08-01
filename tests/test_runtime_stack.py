@@ -333,6 +333,47 @@ class PresetCompletionTests(unittest.TestCase):
 
 
 class CustomNodeRecoveryTests(unittest.TestCase):
+    def test_complete_clone_from_different_origin_is_replaced_recoverably(self):
+        def create_source(path, marker):
+            path.mkdir(parents=True)
+            (path / 'source.txt').write_text(marker)
+            subprocess.run(['git', 'init', '-q'], cwd=path, check=True)
+            subprocess.run(['git', 'add', 'source.txt'], cwd=path, check=True)
+            subprocess.run(
+                ['git', '-c', 'user.email=t@t', '-c', 'user.name=t',
+                 'commit', '-qm', marker],
+                cwd=path,
+                check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            old_source = root / 'old' / 'ComfyUI-LTXVideo'
+            new_source = root / 'new' / 'ComfyUI-LTXVideo'
+            create_source(old_source, 'old source')
+            create_source(new_source, 'new source')
+
+            custom_nodes = root / 'ComfyUI' / 'custom_nodes'
+            custom_nodes.mkdir(parents=True)
+            node_dir = custom_nodes / 'ComfyUI-LTXVideo'
+            subprocess.run(
+                ['git', 'clone', '-q', old_source.as_uri(), str(node_dir)],
+                check=True,
+            )
+
+            result = start._clone_node(new_source.as_uri(), custom_nodes)
+
+            self.assertTrue(result[3])
+            self.assertIsNone(result[4])
+            self.assertEqual((node_dir / 'source.txt').read_text(), 'new source')
+            backups = list(
+                (custom_nodes.parent / '.arrakis-node-backups').glob(
+                    'ComfyUI-LTXVideo-*'
+                )
+            )
+            self.assertEqual(len(backups), 1)
+            self.assertEqual((backups[0] / 'source.txt').read_text(), 'old source')
+
     @patch('start._pip_install_argv', return_value=['pip', 'install'])
     @patch('start._run_pip_install_streaming', return_value=(0, 'done'))
     @patch('start.get_state_manager')
@@ -362,6 +403,11 @@ class CustomNodeRecoveryTests(unittest.TestCase):
                 ['git', '-c', 'user.email=t@t', '-c', 'user.name=t',
                  'commit', '-qm', 'init'],
                 cwd=node_dir, check=True,
+            )
+            subprocess.run(
+                ['git', 'remote', 'add', 'origin', url],
+                cwd=node_dir,
+                check=True,
             )
 
             with patch.object(start, 'COMFY_DIR', comfy_dir):
@@ -419,8 +465,21 @@ class CustomNodeRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             comfy_dir = Path(temp_dir)
             node_dir = comfy_dir / 'custom_nodes' / 'broken-node'
-            (node_dir / '.git').mkdir(parents=True)
+            node_dir.mkdir(parents=True)
             (node_dir / 'requirements.txt').write_text('broken-package\n')
+            subprocess.run(['git', 'init', '-q'], cwd=node_dir, check=True)
+            subprocess.run(['git', 'add', 'requirements.txt'], cwd=node_dir, check=True)
+            subprocess.run(
+                ['git', '-c', 'user.email=t@t', '-c', 'user.name=t',
+                 'commit', '-qm', 'init'],
+                cwd=node_dir,
+                check=True,
+            )
+            subprocess.run(
+                ['git', 'remote', 'add', 'origin', url],
+                cwd=node_dir,
+                check=True,
+            )
 
             with patch.object(start, 'COMFY_DIR', comfy_dir):
                 result = start.install_custom_nodes([url])

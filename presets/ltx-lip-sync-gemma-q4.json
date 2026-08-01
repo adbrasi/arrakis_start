@@ -52,7 +52,7 @@
   ],
   "nodes": [
     "https://github.com/kijai/ComfyUI-WanVideoWrapper",
-    "https://github.com/Lightricks/ComfyUI-LTXVideo",
+    "https://github.com/adbrasi/ComfyUI-LTXVideo",
     "https://github.com/yolain/ComfyUI-Easy-Use",
     "https://github.com/kijai/ComfyUI-KJNodes",
     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",

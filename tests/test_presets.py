@@ -62,10 +62,10 @@ class PinkCherryPresetTests(unittest.TestCase):
             models[
                 (
                     "checkpoints",
-                    "SexGod_PinkCherry_dev_fp8scaled_LTX23_v16b.safetensors",
+                    "PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors",
                 )
             ],
-            "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.6/SexGod_PinkCherry_dev_fp8scaled_LTX23_v16b.safetensors?download=true",
+            "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.7-alpha/PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors?download=true",
         )
         self.assertEqual(
             models[
