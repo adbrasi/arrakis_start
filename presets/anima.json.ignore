@@ -32,7 +32,8 @@
     "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
     "https://github.com/yolain/ComfyUI-Easy-Use",
     "https://github.com/adbrasi/comfyui-ksampler-batch",
-    "https://github.com/ltdrdata/was-node-suite-comfyui"
+    "https://github.com/ltdrdata/was-node-suite-comfyui",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ],
   "workflow": "animaV2.json"
 }

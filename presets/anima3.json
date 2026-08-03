@@ -36,7 +36,8 @@
     "https://github.com/kimara-ai/ComfyUI-Kimara-AI-Advanced-Watermarks",
     "https://github.com/omar92/ComfyUI-QualityOfLifeSuit_Omar92",
     "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
-    "https://github.com/rgthree/rgthree-comfy"
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ],
   "workflow": "animaV2.json"
 }

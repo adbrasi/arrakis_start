@@ -25,6 +25,8 @@
       "filename": "flux2-vae.safetensors"
     }
   ],
-  "nodes": [],
+  "nodes": [
+    "https://github.com/Merserk/ComfyUI-PiD"
+  ],
   "workflow": "ideogram4_t2i.json"
 }

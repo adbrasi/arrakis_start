@@ -97,7 +97,8 @@
   ],
   "nodes": [
     "https://github.com/adbrasi/ctxrush-edit",
-    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public"
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ],
   "workflow": "krea2_full_t2i.json"
 }

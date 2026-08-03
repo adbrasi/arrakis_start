@@ -39,5 +39,7 @@
       "filename": "minimax_h3_audio_vae_fp32.safetensors"
     }
   ],
-  "nodes": []
+  "nodes": [
+    "https://github.com/Merserk/ComfyUI-PiD"
+  ]
 }

@@ -44,6 +44,7 @@
     "https://github.com/filliptm/ComfyUI_Fill-Nodes",
     "https://github.com/evanspearman/ComfyMath",
     "https://github.com/cubiq/ComfyUI_essentials",
-    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes"
+    "https://github.com/TinyTerra/ComfyUI_tinyterraNodes",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ]
 }

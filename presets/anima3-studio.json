@@ -201,7 +201,8 @@
     "https://github.com/ltdrdata/ComfyUI-Inspire-Pack",
     "https://github.com/ltdrdata/ComfyUI-Impact-Subpack",
     "https://github.com/ssitu/ComfyUI_UltimateSDUpscale",
-    "https://github.com/kijai/ComfyUI-Florence2"
+    "https://github.com/kijai/ComfyUI-Florence2",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ],
   "workflow": "animaV2.json"
 }

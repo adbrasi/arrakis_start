@@ -46,6 +46,7 @@
     }
   ],
   "nodes": [
-    "https://github.com/city96/ComfyUI-GGUF"
+    "https://github.com/city96/ComfyUI-GGUF",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ]
 }

@@ -20,5 +20,7 @@
       "filename": "flux2-vae.safetensors"
     }
   ],
-  "nodes": []
+  "nodes": [
+    "https://github.com/Merserk/ComfyUI-PiD"
+  ]
 }

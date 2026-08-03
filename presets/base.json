@@ -5,6 +5,7 @@
   "comfyui_flags": ["--enable-manager-legacy-ui"],
   "models": [],
   "nodes": [
-    "https://github.com/ltdrdata/ComfyUI-Manager"
+    "https://github.com/ltdrdata/ComfyUI-Manager",
+    "https://github.com/Merserk/ComfyUI-PiD"
   ]
 }

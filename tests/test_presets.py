@@ -54,18 +54,17 @@ class PinkCherryPresetTests(unittest.TestCase):
             preset["name"],
             "LTX 2.3 GERADOR NSFW - PINKCHERRY",
         )
-        self.assertEqual(
-            preset["workflow"],
-            "padrao_ltx2_arrakisV1-3.json",
-        )
+        workflow_files = [wf["file"] for wf in preset["workflows"]]
+        self.assertIn("padrao_ltx2_arrakisV1-3.json", workflow_files)
+        self.assertIn("pinkcherry_v18_oficial.json", workflow_files)
         self.assertEqual(
             models[
                 (
                     "checkpoints",
-                    "PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors",
+                    "PinkCherry_FineTune_fp8scaled_v1_8_LTX23.safetensors",
                 )
             ],
-            "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.7-alpha/PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors?download=true",
+            "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.8/PinkCherry_FineTune_fp8scaled_v1_8_LTX23.safetensors",
         )
         self.assertEqual(
             models[
