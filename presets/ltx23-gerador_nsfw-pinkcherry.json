@@ -1,19 +1,17 @@
 {
   "name": "LTX 2.3 GERADOR NSFW - PINKCHERRY",
-  "description": "GERAÇÃO DE NSFW COM LTX 2.3 - MODELO PINKCHERRY V1.7-ALPHA (FP8 SCALED), ENCODER HERETIC E LORA DISTILLED 1.1.",
-  "workflow": "padrao_ltx2_arrakisV1-3.json",
+  "description": "GERAÇÃO DE NSFW COM LTX 2.3 - PINKCHERRY V1.8 (FP8 SCALED, checkpoint completo), ENCODER HERETIC, DISTIL LORA 384-1.1 @0.6. Workflow oficial v1.8 com NAG p/ negative prompts. Prompt longo e diretivo é obrigatório.",
+  "workflows": [
+    { "label": "Oficial v1.8", "file": "pinkcherry_v18_oficial.json" },
+    { "label": "Padrão Arrakis", "file": "padrao_ltx2_arrakisV1-3.json" }
+  ],
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [
     {
-      "url": "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.7-alpha/PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors?download=true",
+      "url": "https://huggingface.co/SexGod1979/PinkCherry_NSFW_LTX23/resolve/main/v1.8/PinkCherry_FineTune_fp8scaled_v1_8_LTX23.safetensors",
       "dir": "checkpoints",
-      "filename": "PinkCherry_FineTune_fp8scaled_v1_7-alpha.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Lightricks/LTX-2-19b-IC-LoRA-Detailer/resolve/main/ltx-2-19b-ic-lora-detailer.safetensors",
-      "dir": "loras",
-      "filename": "ltx-2-19b-ic-lora-detailer.safetensors"
+      "filename": "PinkCherry_FineTune_fp8scaled_v1_8_LTX23.safetensors"
     },
     {
       "url": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
@@ -58,11 +56,6 @@
     {
       "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors",
       "dir": "vae",
-      "filename": "LTX23_audio_vae_bf16.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors",
-      "dir": "checkpoints",
       "filename": "LTX23_audio_vae_bf16.safetensors"
     },
     {
