@@ -1,0 +1,38 @@
+{
+  "name": "MiniMax H3 6000 Pro 96GB",
+  "description": "MiniMax H3 (03/08/2026) para RTX PRO 6000 96GB — tudo BF16: diffusion fl2va/ref2va (66GB cada) + text encoder BF16 (52GB), qualidade máxima sem offload. T2V/I2V/R2V com áudio estéreo nativo, 768p base. Requer ComfyUI 0.30.1+. ~190GB.",
+  "workflows": [
+    { "label": "T2V", "file": "minimax_h3_6000pro_t2v.json" },
+    { "label": "I2V", "file": "minimax_h3_6000pro_i2v.json" },
+    { "label": "R2V", "file": "minimax_h3_6000pro_r2v.json" }
+  ],
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_bf16.safetensors",
+      "dir": "diffusion_models",
+      "filename": "minimax_h3_fl2va_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_bf16.safetensors",
+      "dir": "diffusion_models",
+      "filename": "minimax_h3_ref2va_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_bf16.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen3vl_32b_minimax_h3_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",
+      "dir": "vae",
+      "filename": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+      "dir": "vae",
+      "filename": "minimax_h3_audio_vae_fp32.safetensors"
+    }
+  ],
+  "nodes": []
+}
