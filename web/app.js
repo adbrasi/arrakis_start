@@ -335,14 +335,15 @@ function createPresetCard(preset) {
     stats.innerHTML = `<span class="stat">\uD83D\uDCE6 ${preset.models_count} models</span><span class="stat">\uD83D\uDD27 ${preset.nodes_count} nodes</span>`;
     footer.appendChild(stats);
 
-    if (preset.workflow_url) {
+    for (const wf of preset.workflows || []) {
         const wfLink = document.createElement('a');
         wfLink.className = 'workflow-link';
-        wfLink.href = preset.workflow_url;
+        wfLink.href = wf.url;
         wfLink.title = 'Baixar workflow (arraste para o ComfyUI)';
-        wfLink.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 12l-4-4h2.5V2h3v6H12L8 12zm-6 2h12v1.5H2V14z"/></svg> Workflow`;
-        if (preset.workflow_local) {
-            wfLink.download = preset.workflow_file || 'workflow.json';
+        wfLink.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 12l-4-4h2.5V2h3v6H12L8 12zm-6 2h12v1.5H2V14z"/></svg>`;
+        wfLink.appendChild(document.createTextNode(` ${wf.label || 'Workflow'}`));
+        if (wf.local) {
+            wfLink.download = wf.file || 'workflow.json';
         } else {
             wfLink.target = '_blank';
             wfLink.rel = 'noopener';

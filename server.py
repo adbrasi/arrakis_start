@@ -142,13 +142,30 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 if preset_name.lower() == 'base':
                     continue
                 
-                # Resolve workflow: local file takes priority over external URL
-                workflow_file = p.get('workflow', '')
-                workflow_url = p.get('workflow_url', '')
-                workflow_local = False
-                if workflow_file:
-                    workflow_url = f'/api/workflows/{workflow_file}'
-                    workflow_local = True
+                # Resolve workflows: `workflows` is a list of {label, file|url};
+                # the legacy single `workflow`/`workflow_url` pair becomes a
+                # one-item list. A local file takes priority over an external URL.
+                raw_workflows = p.get('workflows')
+                if not isinstance(raw_workflows, list):
+                    raw_workflows = [{
+                        'label': 'Workflow',
+                        'file': p.get('workflow', ''),
+                        'url': p.get('workflow_url', ''),
+                    }]
+                workflows = []
+                for wf in raw_workflows:
+                    if not isinstance(wf, dict):
+                        continue
+                    wf_file = wf.get('file', '')
+                    wf_url = f'/api/workflows/{wf_file}' if wf_file else wf.get('url', '')
+                    if not wf_url:
+                        continue
+                    workflows.append({
+                        'label': wf.get('label', 'Workflow'),
+                        'url': wf_url,
+                        'local': bool(wf_file),
+                        'file': wf_file,
+                    })
 
                 clean = {
                     'name': preset_name,
@@ -156,9 +173,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     'models_count': len(p.get('models', [])),
                     'nodes_count': len(p.get('nodes', [])),
                     'installed': preset_name in installed_presets,
-                    'workflow_url': workflow_url,
-                    'workflow_local': workflow_local,
-                    'workflow_file': workflow_file,
+                    'workflows': workflows,
                 }
                 clean_presets.append(clean)
             

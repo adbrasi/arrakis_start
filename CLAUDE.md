@@ -54,9 +54,9 @@ Presets are JSON files in `presets/`. Each defines models to download, custom no
 - **Disabled presets:** renamed to `*.json.ignore`
 - **Hidden presets:** prefixed with `.`
 
-Key preset fields: `name`, `description`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention`, `workflow` (local file in `workflows/`) or `workflow_url` (external link).
+Key preset fields: `name`, `description`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention`, `workflows[]` (list of `{label, file|url}` — `file` is a local file in `workflows/` and wins over `url`). The legacy single `workflow`/`workflow_url` pair is still accepted and becomes a one-item list.
 
-When both workflow keys are present, the local `workflow` file wins. The web UI auto-detects new JSON files — adding a preset requires no code changes.
+The web UI auto-detects new JSON files — adding a preset requires no code changes. Presets are listed newest-added first, using the git commit that added each file (file mtime for uncommitted ones — a fresh clone flattens mtimes, so git is the source of truth on cloud instances).
 
 ## Environment Variables
 

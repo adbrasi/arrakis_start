@@ -264,15 +264,55 @@ def should_ignore_preset_file(preset_file: Path) -> bool:
     return False
 
 
+def preset_added_timestamps() -> Dict[str, float]:
+    """Map preset filename -> unix timestamp of the commit that added it.
+
+    Uses git because on cloud instances the repo is a fresh clone, where every
+    file mtime is the clone time. The log is newest-first, so a file deleted
+    and re-added (or re-enabled from .ignore) counts as added at the re-add.
+    """
+    timestamps: Dict[str, float] = {}
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(SCRIPT_DIR), 'log', '--diff-filter=A',
+             '--format=%ct', '--name-only', '--', 'presets'],
+            capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return timestamps
+        current_ts = 0.0
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.isdigit():
+                current_ts = float(line)
+            else:
+                timestamps.setdefault(Path(line).name, current_ts)
+    except Exception as e:
+        logger.debug(f"Could not read preset added dates from git: {e}")
+    return timestamps
+
+
 def load_presets() -> List[Dict]:
-    """Load all preset JSON files from presets/ directory"""
+    """Load all preset JSON files from presets/, newest added first"""
     presets = []
 
     if not PRESETS_DIR.exists():
         logger.warning(f"Presets directory not found: {PRESETS_DIR}")
         return presets
 
-    for preset_file in sorted(PRESETS_DIR.iterdir(), key=lambda p: p.name.lower()):
+    added = preset_added_timestamps()
+
+    def added_order(preset_file: Path):
+        # Uncommitted presets have no git date; their mtime is recent, which
+        # correctly puts them first.
+        try:
+            ts = added.get(preset_file.name) or preset_file.stat().st_mtime
+        except OSError:
+            ts = 0.0
+        return (-ts, preset_file.name.lower())
+
+    for preset_file in sorted(PRESETS_DIR.iterdir(), key=added_order):
         if not preset_file.is_file() or should_ignore_preset_file(preset_file):
             continue
         try:
