@@ -6,6 +6,7 @@
     { "label": "I2V", "file": "minimax_h3_6000pro_i2v.json" },
     { "label": "R2V", "file": "minimax_h3_6000pro_r2v.json" }
   ],
+  "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [
     {
