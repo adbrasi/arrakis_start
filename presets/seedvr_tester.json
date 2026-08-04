@@ -1,15 +1,29 @@
 {
   "name": "seedvr tester",
-  "description": "Minimal preset with SeedVR, VideoHelperSuite, rgthree, and SageAttention runtime",
-  "workflow": "seedvr_tester.json",
+  "description": "Upscaler SeedVR2 v2.5 — DiT 7B sharp FP16 + VAE FP16 pré-baixados (17GB). Attention SageAttention 2, color correction LAB, torch.compile inductor. Workflow com coletor de vídeos e upload para HuggingFace.",
+  "workflows": [
+    { "label": "Workflow", "file": "seedvr_v01.json" }
+  ],
   "use_sage_attention": true,
   "comfyui_flags": [],
-  "models": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/numz/SeedVR2_comfyUI/resolve/main/seedvr2_ema_7b_sharp_fp16.safetensors",
+      "dir": "SEEDVR2",
+      "filename": "seedvr2_ema_7b_sharp_fp16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/numz/SeedVR2_comfyUI/resolve/main/ema_vae_fp16.safetensors",
+      "dir": "SEEDVR2",
+      "filename": "ema_vae_fp16.safetensors"
+    }
+  ],
   "nodes": [
     "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler",
     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
     "https://github.com/rgthree/rgthree-comfy",
     "https://github.com/adbrasi/comfyui-media-collector",
+    "https://github.com/adbrasi/comfyui-hf-ultimate-uploader",
     "https://github.com/Merserk/ComfyUI-PiD"
   ]
 }
