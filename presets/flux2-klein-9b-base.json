@@ -30,7 +30,7 @@
       "filename": "flux2-klein-delight-relight-lora.safetensors"
     },
     {
-      "url": "https://huggingface.co/DeverStyle/Flux.2-Klein-Loras/resolve/main/dever_arcane_flux2_klein_9b.safetensors",
+      "url": "https://huggingface.co/DeverStyle/Flux.2-Klein-Loras/resolve/main/dever_arcane_f2k_9b%20(arcane_visual_style).safetensors",
       "dir": "loras",
       "filename": "dever_arcane_flux2_klein_9b.safetensors"
     },

@@ -29,6 +29,7 @@ class DownloadStagingTests(unittest.TestCase):
         manager.hf_token = ''
         manager.civitai_token = ''
         manager.failures = []
+        manager.config_conflicts = []
         manager.attempt_logs = []
         manager._failures_lock = threading.Lock()
         manager._process_lock = threading.Lock()
@@ -195,11 +196,19 @@ class DownloadStagingTests(unittest.TestCase):
         self.assertEqual(unique, [first, unrelated])
         self.assertEqual(conflicts, 1)
         self.assertEqual(removed, 0)
-        # And the loser is visible in the report rather than silently dropped.
-        self.assertEqual(len(manager.failures), 1)
-        self.assertEqual(manager.failures[0]['stage'], 'config')
-        self.assertEqual(manager.failures[0]['filename'], 'same.bin')
-        self.assertIn('destination_conflict', manager.failures[0]['reason'])
+        # The loser is visible in its own report rather than silently dropped,
+        # and stays OUT of the download failures: the destination did get a file
+        # from the winning source, so no preset is missing an artifact.
+        self.assertEqual(manager.failures, [])
+        self.assertEqual(len(manager.config_conflicts), 1)
+        self.assertEqual(manager.config_conflicts[0]['filename'], 'same.bin')
+        self.assertEqual(manager.config_conflicts[0]['dir'], 'loras')
+        self.assertEqual(
+            manager.config_conflicts[0]['kept_url'], 'https://example.com/one'
+        )
+        self.assertEqual(
+            manager.config_conflicts[0]['dropped_url'], 'https://example.com/two'
+        )
 
     def test_cancelled_download_is_not_retried_or_recorded_as_failure(self):
         manager = self._manager(Path('/tmp/models'))

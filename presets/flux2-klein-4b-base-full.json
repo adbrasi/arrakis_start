@@ -17,7 +17,7 @@
     {
       "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors",
       "dir": "vae",
-      "filename": "flux2-vae.safetensors"
+      "filename": "flux2-klein-4b-vae.safetensors"
     },
     {
       "url": "https://civitai.com/api/download/models/2583950?type=Model&format=SafeTensor",

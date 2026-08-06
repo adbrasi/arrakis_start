@@ -81,7 +81,13 @@ SAGEATTENTION_RETRY_DELAY_SECONDS = _safe_int_env('SAGEATTENTION_RETRY_DELAY_SEC
 # safe to run concurrently; pip requirements install stays sequential because
 # pip is not concurrent-safe inside the same environment.
 NODES_CLONE_WORKERS = _safe_int_env('NODES_CLONE_WORKERS', 6)
-NODE_PIP_TIMEOUT_SECONDS = _safe_int_env('NODE_PIP_TIMEOUT_SECONDS', 600)
+# Requirements install runs alongside multi-GB model transfers that legitimately
+# starve it of bandwidth, so "how long has it taken" cannot tell a slow pip from
+# a hung one — only "is it still doing anything" can. The stall window is the
+# real liveness guard; the wall-clock value below is just a backstop for a child
+# that spins forever without ever going quiet.
+NODE_PIP_TIMEOUT_SECONDS = _safe_int_env('NODE_PIP_TIMEOUT_SECONDS', 1800)
+NODE_PIP_STALL_SECONDS = _safe_int_env('NODE_PIP_STALL_SECONDS', 300)
 
 # Deadlines. Every long-running child gets one: without a deadline a silent pip
 # or a stuck curl freezes the whole installer with no way out.
@@ -818,6 +824,7 @@ def _stream_command(
     log_prefix: str = 'cmd',
     env: Optional[Dict[str, str]] = None,
     timeout_sec: float = 0,
+    stall_sec: float = 0,
     heartbeat_interval: float = 20.0,
     progress_stage: Optional[str] = None,
     collect_lines: bool = True,
@@ -827,6 +834,13 @@ def _stream_command(
     Returns (returncode, collected_lines, last_line). returncode is -2 when the
     install was cancelled and -1 when the deadline expired or the child could not
     be reaped.
+
+    ``timeout_sec`` bounds total wall-clock; ``stall_sec`` (when set) bounds time
+    without progress, where progress is any output line or any CPU/IO movement.
+    A child starved of bandwidth is slow, not hung, and only the second guard can
+    tell the difference. When the host offers no process telemetry the child is
+    assumed to be progressing, so an unmeasurable environment never kills it —
+    ``timeout_sec`` remains the backstop.
 
     The loop never waits for stdout EOF to decide it is done: a grandchild that
     inherited the pipe (backgrounded build step, orphaned aria2c) keeps the write
@@ -879,6 +893,7 @@ def _stream_command(
     tracker = _PackageProgress()
     started_at = time.monotonic()
     last_log_at = started_at
+    last_progress_at = started_at
     last_activity = _process_activity_snapshot(proc.pid)
     last_line = ''
     cancelled = False
@@ -908,6 +923,16 @@ def _stream_command(
                 _terminate_install_process(proc)
                 break
 
+            if stall_sec > 0 and now - last_progress_at >= stall_sec:
+                timed_out = True
+                logger.error(
+                    f"[{log_prefix}] sem progresso há {stall_sec:.0f}s "
+                    f"(nenhuma saída, CPU ou I/O) — terminating process group "
+                    f"({description})"
+                )
+                _terminate_install_process(proc)
+                break
+
             try:
                 line = output_queue.get(timeout=poll_interval)
             except queue.Empty:
@@ -921,6 +946,7 @@ def _stream_command(
                         output_lines.append(line)
                     logger.info(f"[{log_prefix}] {_sanitize_git_output(line)}")
                     last_log_at = time.monotonic()
+                    last_progress_at = last_log_at
                     if tracker.observe_line(line) and progress_stage:
                         _set_progress_stage(progress_stage, f"{description}: {tracker.detail}")
                     if tracker.awaiting_baseline:
@@ -931,16 +957,30 @@ def _stream_command(
 
             if not exited and now - last_log_at >= heartbeat_interval:
                 activity = _process_activity_snapshot(proc.pid)
+                # No telemetry means the child cannot be proven idle, so it counts
+                # as progressing: an unmeasurable host must not trip the stall
+                # guard. timeout_sec stays as the backstop for that case.
+                measurable = activity is not None and last_activity is not None
+                cpu_delta = (
+                    max(0.0, activity['cpu_seconds'] - last_activity['cpu_seconds'])
+                    if measurable else 0.0
+                )
+                io_delta = (
+                    max(0.0, activity['io_bytes'] - last_activity['io_bytes'])
+                    if measurable else 0.0
+                )
+                moving = cpu_delta >= 0.01 or io_delta >= 1024
+                if moving or not measurable:
+                    last_progress_at = now
+
                 detail = tracker.heartbeat_detail(activity)
                 elapsed = now - started_at
                 if detail:
                     logger.info(f"[{log_prefix}] {detail} ({elapsed:.0f}s)")
                     if progress_stage:
                         _set_progress_stage(progress_stage, f"{description}: {detail}")
-                elif activity is not None and last_activity is not None:
-                    cpu_delta = max(0.0, activity['cpu_seconds'] - last_activity['cpu_seconds'])
-                    io_delta = max(0.0, activity['io_bytes'] - last_activity['io_bytes'])
-                    if cpu_delta >= 0.01 or io_delta >= 1024:
+                elif measurable:
+                    if moving:
                         logger.info(
                             f"[{log_prefix}] ativo: CPU +{cpu_delta:.1f}s, "
                             f"I/O +{_format_activity_bytes(io_delta)}, "
@@ -1356,7 +1396,7 @@ INSTALL_CANCELLED = 'cancelled'
 # Download failure stages that mean the install produced nothing usable, as
 # opposed to a per-file problem (a gated repo, a dead mirror) that leaves the
 # rest of the install perfectly workable.
-FATAL_DOWNLOAD_STAGES = {'precheck', 'config'}
+FATAL_DOWNLOAD_STAGES = {'precheck'}
 
 
 def install_presets(
@@ -1560,9 +1600,12 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
             nodes_result = {"success": False, "failed": []}
 
     downloader_failures = []
+    config_conflicts = []
     try:
         if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
             downloader_failures = _active_downloader.get_failure_report()
+        if _active_downloader and hasattr(_active_downloader, 'get_config_conflicts'):
+            config_conflicts = _active_downloader.get_config_conflicts()
     finally:
         _active_downloader = None
 
@@ -1583,10 +1626,25 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
         )
     )
 
+    # Destination conflicts are a preset-data problem, not a missing artifact:
+    # the file did land, from whichever source won. Report them so they get
+    # fixed, but never let them fail an otherwise usable install.
+    if config_conflicts:
+        logger.warning(
+            f"Conflitos de configuração entre presets ({len(config_conflicts)}) — "
+            "dois presets pedem fontes diferentes para o mesmo arquivo. "
+            "Unifique a URL nos presets:"
+        )
+        for idx, conflict in enumerate(config_conflicts, 1):
+            logger.warning(
+                f"[{idx}] {conflict.get('dir')}/{conflict.get('filename')}: "
+                f"usado={conflict.get('kept_url')} ignorado={conflict.get('dropped_url')}"
+            )
+
     # A failed batch is a failed install, with or without a populated failure
-    # list: download_all() also returns False for queue-level errors (e.g. two
-    # models mapped to the same destination) that record nothing, and those used
-    # to be reported as a clean install with zero models on disk.
+    # list: download_all() also returns False for queue-level errors that record
+    # nothing, and those used to be reported as a clean install with zero models
+    # on disk.
     if not download_success:
         if downloader_failures:
             logger.error("Detailed download failures:")
@@ -1987,13 +2045,14 @@ def _run_pip_install_streaming(
     node_name: str,
     heartbeat_interval: float = 20,
     timeout_sec: float = NODE_PIP_TIMEOUT_SECONDS,
+    stall_sec: float = NODE_PIP_STALL_SECONDS,
     env: Optional[Dict[str, str]] = None,
     progress_stage: Optional[str] = None,
 ):
-    """Run pip install with streamed output, package progress and hard timeout.
+    """Run pip install with streamed output, package progress and liveness guard.
 
     Thin wrapper over _stream_command(): the loop that drains stdout, reports
-    which wheel is being fetched, honours cancellation and enforces the deadline
+    which wheel is being fetched, honours cancellation and enforces the deadlines
     lives there so pip, torch and the SageAttention build all share it.
     Returns (returncode, last_line); -1 signals a timeout, -2 a cancellation.
     """
@@ -2003,6 +2062,7 @@ def _run_pip_install_streaming(
         log_prefix=f"{node_name} pip",
         env=env,
         timeout_sec=timeout_sec,
+        stall_sec=stall_sec,
         heartbeat_interval=heartbeat_interval,
         progress_stage=progress_stage,
         collect_lines=False,

@@ -56,6 +56,8 @@ Presets are JSON files in `presets/`. Each defines models to download, custom no
 
 Key preset fields: `name`, `description`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention`, `workflows[]` (list of `{label, file|url}` — `file` is a local file in `workflows/` and wins over `url`). The legacy single `workflow`/`workflow_url` pair is still accepted and becomes a one-item list.
 
+Two presets must never map different URLs to the same `dir` + `filename`: one path holds one file, so the first entry wins and the other is reported as a configuration conflict (a preset-data problem to fix, never a download failure — it does not block ComfyUI). Presets sharing a file must therefore share its exact URL.
+
 The web UI auto-detects new JSON files — adding a preset requires no code changes. Presets are listed newest-added first, using the git commit that added each file (file mtime for uncommitted ones — a fresh clone flattens mtimes, so git is the source of truth on cloud instances).
 
 ## Environment Variables
@@ -73,6 +75,8 @@ The web UI auto-detects new JSON files — adding a preset requires no code chan
 | `HF_XET_HIGH_PERFORMANCE` | Toggle HF Xet high-perf mode; auto-disabled below `HF_XET_HP_MIN_RAM_GB` (default 48). |
 | `XET_NO_PROGRESS_SECONDS` | Abandon XET for the HTTP fallback after this long with no delivered bytes at all (default 240). A slow-but-growing warm-up never trips it. |
 | `XET_MIN_BYTES_PER_SEC` / `XET_RATE_GRACE_SECONDS` | Long-window throughput floor for XET, applied only after the grace window (defaults 100 KB/s after 600 s) to catch a transfer still crawling long past any warm-up. |
+| `NODE_PIP_STALL_SECONDS` | Kill a custom-node `pip install` after this long with no output, CPU or I/O (default 300). This is the real liveness guard — a pip starved of bandwidth by concurrent model downloads is slow, not hung. |
+| `NODE_PIP_TIMEOUT_SECONDS` | Wall-clock backstop for the same command (default 1800), for a child that spins forever without ever going quiet. |
 | `TORCH_INDEX_URL` | Torch wheel index (default: CUDA 12.8 build). |
 | `DISABLE_TEMPLATE_COMFY` / `TEMPLATE_COMFY_DIR` | Bootstrap cleanup of pre-existing template ComfyUI at `/workspace/ComfyUI` (enabled by default). |
 | `TEMPLATE_COMFY_EXTRA_DIRS` / `TEMPLATE_COMFY_PORTS` | Extra template ComfyUI dirs/ports to clean, `:`- or newline-separated (whitespace splitting cannot represent a path containing a space). Defaults cover RunPod comfyui-base (`/workspace/runpod-slim/ComfyUI`, port `8188`). Set to empty to disable. A directory is only removed when it proves to be a template (sentinel, matching supervisor conf, or no `.git`) and its `models/` holds no large files; ports are only freed when the listener is actually ComfyUI. |

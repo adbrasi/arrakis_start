@@ -15,7 +15,7 @@
       "filename": "qwen3vl_4b_bf16.safetensors"
     },
     {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/vae/qwen_image_vae.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
       "dir": "vae",
       "filename": "qwen_image_vae.safetensors"
     },

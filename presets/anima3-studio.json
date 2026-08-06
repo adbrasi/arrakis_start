@@ -15,9 +15,9 @@
       "filename": ""
     },
     {
-      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
       "dir": "vae",
-      "filename": ""
+      "filename": "qwen_image_vae.safetensors"
     },
     {
       "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/ani_ic_lora_v2_next_scene_v2_s1950_r64.safetensors?download=true",
@@ -130,9 +130,9 @@
       "filename": "4xNomosUniDAT_otf.pth"
     },
     {
-      "url": "https://huggingface.co/FacehugmanIII/4x_foolhardy_Remacri/resolve/main/4x_foolhardy_Remacri.pt",
+      "url": "https://huggingface.co/FacehugmanIII/4x_foolhardy_Remacri/resolve/main/4x_foolhardy_Remacri.pth",
       "dir": "upscale_models",
-      "filename": "4x_foolhardy_Remacri.pt"
+      "filename": "4x_foolhardy_Remacri.pth"
     },
     {
       "url": "https://huggingface.co/Kim2091/AnimeSharpV3/resolve/main/2x-AnimeSharpV3.pth",

@@ -493,6 +493,66 @@ if __name__ == '__main__':
     unittest.main()
 
 
+class StreamCommandLivenessTests(unittest.TestCase):
+    """A child starved of bandwidth is slow, not hung — only silence is hung.
+
+    A requirements install racing multi-GB model transfers took longer than the
+    wall-clock deadline while still making progress, and was killed metres from
+    the finish line. Elapsed time cannot tell slow from hung; inactivity can.
+    """
+
+    def setUp(self):
+        start._install_cancel_event.clear()
+        self.addCleanup(start._install_cancel_event.clear)
+
+    @staticmethod
+    def _child(body: str):
+        return [sys.executable, '-u', '-c', body]
+
+    def test_busy_but_silent_child_survives_the_stall_window(self):
+        # Burns CPU while printing nothing: the shape of a pip unpacking wheels
+        # with a quiet log. A total-time deadline kills it; the guard must not.
+        rc, _, _ = start._stream_command(
+            self._child(
+                "import time\n"
+                "end = time.monotonic() + 2.0\n"
+                "x = 0\n"
+                "while time.monotonic() < end:\n"
+                "    x += 1\n"
+            ),
+            'busy child',
+            log_prefix='busy',
+            timeout_sec=0,
+            stall_sec=1.0,
+            heartbeat_interval=0.3,
+        )
+        self.assertEqual(rc, 0, "a working child must not trip the stall guard")
+
+    def test_silent_idle_child_is_killed_by_the_stall_guard(self):
+        started = time.monotonic()
+        rc, _, _ = start._stream_command(
+            self._child("import time\ntime.sleep(30)\n"),
+            'idle child',
+            log_prefix='idle',
+            timeout_sec=0,
+            stall_sec=1.0,
+            heartbeat_interval=0.3,
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(rc, -1, "no output, no CPU and no I/O means hung")
+        self.assertLess(elapsed, 15, "the guard must fire, not wait out the sleep")
+
+    def test_stall_guard_stays_off_when_not_requested(self):
+        rc, _, _ = start._stream_command(
+            self._child("import time\ntime.sleep(1.5)\n"),
+            'unguarded child',
+            log_prefix='unguarded',
+            timeout_sec=0,
+            heartbeat_interval=0.3,
+        )
+        self.assertEqual(rc, 0, "stall_sec defaults to off for existing callers")
+
+
 class InstallOutcomeTests(unittest.TestCase):
     """A usable install must launch ComfyUI even when some artifacts are missing."""
 
@@ -511,17 +571,22 @@ class InstallOutcomeTests(unittest.TestCase):
         )
         self.assertFalse(fatal, "per-file auth failure must not be fatal")
 
-    def test_config_error_is_fatal(self):
+    def test_unrepairable_local_file_is_fatal(self):
         failures = [{
             'filename': 'vae.safetensors', 'dir': 'vae',
-            'stage': 'config', 'reason': 'destination_conflict_kept=...',
+            'stage': 'precheck', 'reason': 'invalid_existing_file_cleanup_failed',
             'url': 'https://huggingface.co/x/y',
         }]
         fatal = any(
             str(f.get('stage', '')).lower() in start.FATAL_DOWNLOAD_STAGES
             for f in failures
         )
-        self.assertTrue(fatal, "a queue/config error means nothing usable ran")
+        self.assertTrue(fatal, "an unusable local tree means nothing usable ran")
+
+    def test_destination_conflict_is_not_a_download_failure(self):
+        # Two presets naming one destination is a preset-data problem; the file
+        # still lands from the winning source, so it must not block the launch.
+        self.assertNotIn('config', start.FATAL_DOWNLOAD_STAGES)
 
     def test_failed_batch_with_no_recorded_failures_is_fatal(self):
         fatal = (not False) and (not [] or False)

@@ -161,6 +161,10 @@ class DownloadManager:
         self.progress_callback = progress_callback
         self._cancelled = False
         self.failures: List[Dict[str, str]] = []
+        # Preset-authoring conflicts, kept apart from self.failures: two presets
+        # naming one destination is a data problem to report, not an artifact
+        # that failed to land — the destination is satisfied by the winner.
+        self.config_conflicts: List[Dict[str, str]] = []
         self.attempt_logs: List[Dict[str, str]] = []
 
         # Bandwidth throttling (e.g., "50M" for 50MB/s, "0" for unlimited)
@@ -320,7 +324,12 @@ class DownloadManager:
         """Return detailed failures for installer summary."""
         with self._failures_lock:
             return list(self.failures)
-    
+
+    def get_config_conflicts(self) -> List[Dict[str, str]]:
+        """Return destination conflicts found while building the queue."""
+        with self._failures_lock:
+            return list(self.config_conflicts)
+
     def _token_tail(self, token: str) -> str:
         if not token:
             return "missing"
@@ -1513,11 +1522,11 @@ class DownloadManager:
     def _deduplicate_downloads(self, downloads: List[Dict]) -> Tuple[List[Dict], int, int]:
         """Collapse identical model destinations and resolve source conflicts.
 
-        Two different sources for one destination is a preset configuration
-        error and is reported as such — but it must never cancel the unrelated
-        downloads queued alongside it. The first entry wins, the loser is
-        recorded as a failure so it appears in the failure summary, and the rest
-        of the queue proceeds.
+        Two different sources for one destination is a preset-authoring error:
+        one path can only hold one file, so the first entry wins and the loser
+        is recorded in ``config_conflicts`` for the human to unify. It is NOT a
+        download failure — the destination ends up populated either way — so it
+        must not make presets pending nor block ComfyUI from starting.
 
         The destination name is derived the same way ``_download_file`` derives
         it, so an entry with an empty ``filename`` participates in the same
@@ -1571,11 +1580,13 @@ class DownloadManager:
                     f"presets pedem fontes diferentes para o mesmo destino. "
                     f"Mantendo {previous_url} e ignorando {current_url}."
                 )
-                self._record_failure(
-                    {'url': url, 'dir': directory, 'filename': filename},
-                    reason=f'destination_conflict_kept={previous_url}',
-                    stage='config',
-                )
+                with self._failures_lock:
+                    self.config_conflicts.append({
+                        'dir': directory,
+                        'filename': filename,
+                        'kept_url': self._sanitize_log(previous_url),
+                        'dropped_url': self._sanitize_log(current_url),
+                    })
                 continue
             removed += 1
 
@@ -1592,10 +1603,11 @@ class DownloadManager:
             logger.warning(f"Skipped {skipped} item(s) with no URL")
 
         raw_total = len(valid_downloads)
-        # Reset the report BEFORE deduplication, so configuration conflicts found
-        # there survive into the failure summary instead of being wiped.
+        # Reset both reports BEFORE deduplication, so the conflicts it finds
+        # survive into this run's summary instead of being wiped.
         with self._failures_lock:
             self.failures = []
+            self.config_conflicts = []
         self.attempt_logs = []
 
         valid_downloads, duplicate_count, conflict_count = self._deduplicate_downloads(
