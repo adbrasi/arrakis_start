@@ -43,14 +43,14 @@
     },
     {
       "id": 94,
-      "type": "CheckpointLoaderSimple",
+      "type": "UNETLoader",
       "pos": [
         -0.5448010962488439,
         2211.8247021966195
       ],
       "size": [
-        270,
-        98
+        340,
+        82
       ],
       "flags": {},
       "order": 1,
@@ -63,23 +63,14 @@
           "links": [
             194
           ]
-        },
-        {
-          "name": "CLIP",
-          "type": "CLIP",
-          "links": null
-        },
-        {
-          "name": "VAE",
-          "type": "VAE",
-          "links": null
         }
       ],
       "properties": {
-        "Node name for S&R": "CheckpointLoaderSimple"
+        "Node name for S&R": "UNETLoader"
       },
       "widgets_values": [
-        "anima-preview2.safetensors"
+        "anima-base-v1.0.safetensors",
+        "default"
       ]
     },
     {

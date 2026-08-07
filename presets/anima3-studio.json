@@ -30,6 +30,11 @@
       "filename": "ani_ic_lora_v2_next_scene_v2_s900_r64.safetensors"
     },
     {
+      "url": "https://huggingface.co/AdwolfCzar/scene-rush-anima/resolve/main/next_scene_iclora_test1_1875steps_8batch.safetensors",
+      "dir": "loras",
+      "filename": "next_scene_iclora_test1_1875steps_8batch.safetensors"
+    },
+    {
       "url": "https://huggingface.co/AdwolfCzar/nothnothin/resolve/main/ani_ominicontrol_rule34_tile_s750.safetensors?download=true",
       "dir": "loras",
       "filename": "ani_ominicontrol_rule34_tile_s750.safetensors"
