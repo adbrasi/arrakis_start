@@ -15,6 +15,11 @@
       "filename": "qwen3vl_4b_bf16.safetensors"
     },
     {
+      "url": "https://huggingface.co/ahmed22xa/Huihui-Qwen3-VL-4B-Instruct-abliterated-comfy/resolve/main/Huihui-Qwen3-VL-4B-Instruct-abliterated-fp8_scaled.safetensors",
+      "dir": "text_encoders",
+      "filename": "Huihui-Qwen3-VL-4B-Instruct-abliterated-fp8_scaled.safetensors"
+    },
+    {
       "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
       "dir": "vae",
       "filename": "qwen_image_vae.safetensors"
@@ -98,7 +103,9 @@
   "nodes": [
     "https://github.com/adbrasi/ctxrush-edit",
     "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
-    "https://github.com/Merserk/ComfyUI-PiD"
+    "https://github.com/Merserk/ComfyUI-PiD",
+    "https://github.com/huwhitememes/comfyui-krea2-conditioning",
+    "https://github.com/spacepxl/ComfyUI-VAE-Utils"
   ],
   "workflow": "krea2_full_t2i.json"
 }
