@@ -1,13 +1,13 @@
 {
   "name": "Anima 3 Studio",
-  "description": "Anima 3 Studio — Preview 3 com LoRAs, detectores (bbox/segm) e stack completo de custom nodes para edit/inpaint/detailer.",
+  "description": "Anima 3 Studio — Base v1.0 com LoRAs, detectores (bbox/segm) e stack completo de custom nodes para edit/inpaint/detailer.",
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
     {
-      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-preview3-base.safetensors?download=true",
+      "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/diffusion_models/anima-base-v1.0.safetensors",
       "dir": "diffusion_models",
-      "filename": ""
+      "filename": "anima-base-v1.0.safetensors"
     },
     {
       "url": "https://huggingface.co/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors",
