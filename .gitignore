@@ -22,5 +22,8 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local feature worktrees
+.worktrees/
+
 # MCP local config (contém segredos — nunca commitar)
 .mcp.json
