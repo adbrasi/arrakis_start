@@ -330,13 +330,14 @@ class InstallCoordinatorTests(unittest.TestCase):
             try:
                 self.assertTrue(start._install_cancel_event.wait(timeout=2))
                 self.assertFalse(stop_entered.wait(timeout=0.2))
-                cleanup_partials.assert_called_once_with(start.MODELS_DIR)
+                cleanup_partials.assert_not_called()
             finally:
                 start.finish_install_reservation('cancelled')
                 allow_stop.set()
                 shutdown_thread.join(timeout=2)
 
         self.assertFalse(shutdown_thread.is_alive())
+        cleanup_partials.assert_called_once_with(start.MODELS_DIR)
         self.assertEqual(events, [('stop', 15)])
         # And the port is actually passed, so a non-default COMFY_PORT is honored.
         _, stop_kwargs = recording_pm.ensure_stopped.call_args
@@ -355,6 +356,35 @@ class InstallCoordinatorTests(unittest.TestCase):
                 server._shutdown_runtime(terminate_process=True)
 
         kill_process.assert_not_called()
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation('failed')
+
+    def test_idle_shutdown_reserves_slot_before_cleaning_partials(self):
+        cleanup_entered = threading.Event()
+        allow_cleanup = threading.Event()
+        process_manager = Mock()
+        process_manager.is_running.return_value = False
+
+        def blocking_cleanup(_models_dir):
+            cleanup_entered.set()
+            self.assertTrue(allow_cleanup.wait(timeout=2))
+
+        with patch('downloader.cleanup_incomplete_downloads', side_effect=blocking_cleanup), \
+                patch.object(server, '_state_manager', object()), \
+                patch('process_manager.ProcessManager', return_value=process_manager):
+            shutdown_thread = threading.Thread(target=server._shutdown_runtime)
+            shutdown_thread.start()
+            self.assertTrue(cleanup_entered.wait(timeout=2))
+
+            unexpectedly_reserved = start.reserve_install_slot()
+            if unexpectedly_reserved:
+                start.finish_install_reservation('failed')
+
+            allow_cleanup.set()
+            shutdown_thread.join(timeout=2)
+
+        self.assertFalse(unexpectedly_reserved)
+        self.assertFalse(shutdown_thread.is_alive())
         self.assertTrue(start.reserve_install_slot())
         start.finish_install_reservation('failed')
 

@@ -363,3 +363,4 @@ class UninstallEndpointTests(unittest.TestCase):
             "stop",
             "kill",
         ])
+        cleanup_partials.assert_called_once_with(start.MODELS_DIR)

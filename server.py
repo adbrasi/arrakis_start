@@ -110,11 +110,14 @@ def _comfy_port(state) -> int:
 
 def _shutdown_runtime(terminate_process: bool = False):
     """Cancel active installation, then exclusively stop the runtime."""
-    from start import cancel_active_install, reserve_shutdown_slot
-    cancel_active_install(delete_partials=True)
+    from start import MODELS_DIR, cancel_active_install, reserve_shutdown_slot
+    cancel_active_install(delete_partials=False)
 
     with reserve_shutdown_slot():
+        from downloader import cleanup_incomplete_downloads
         from process_manager import ProcessManager
+
+        cleanup_incomplete_downloads(MODELS_DIR)
         state = _state_manager or get_state_manager()
         pm = ProcessManager(state)
         if pm.is_running():
