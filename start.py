@@ -397,6 +397,16 @@ def reserve_install_slot() -> bool:
         return True
 
 
+def reserve_restart_slot() -> bool:
+    """Reserve the shared coordinator for the complete ComfyUI restart."""
+    return _reserve_operation('restart')
+
+
+def finish_restart_reservation() -> bool:
+    """Release a restart reservation after every worker exit path."""
+    return _release_operation('restart')
+
+
 def _finish_install_slot(status: str) -> None:
     global _active_downloader, _active_operation, _install_status
     with _operation_condition:

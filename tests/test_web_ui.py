@@ -228,6 +228,22 @@ class UninstallEndpointTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def post_restart(self):
+        connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        try:
+            connection.request("POST", "/api/restart")
+            response = connection.getresponse()
+            return response.status, json.loads(response.read().decode())
+        finally:
+            connection.close()
+
+    def wait_for_pending_shutdown(self):
+        with start._operation_condition:
+            return start._operation_condition.wait_for(
+                lambda: start._pending_shutdowns > 0,
+                timeout=2,
+            )
+
     def test_active_reserved_install_blocks_uninstall_without_downloader(self):
         self.assertTrue(start.reserve_install_slot())
         try:
@@ -364,3 +380,141 @@ class UninstallEndpointTests(unittest.TestCase):
             "kill",
         ])
         cleanup_partials.assert_called_once_with(start.MODELS_DIR)
+
+    def test_restart_is_rejected_during_uninstall_with_pending_shutdown(self):
+        uninstall_entered = threading.Event()
+        allow_uninstall = threading.Event()
+        process_manager = Mock()
+        process_manager.is_running.return_value = False
+
+        def blocking_uninstall(_preset_name):
+            uninstall_entered.set()
+            self.assertTrue(allow_uninstall.wait(timeout=2))
+            return {"success": True, "preset": "Pinned", "deleted": []}
+
+        def request_uninstall():
+            self.post_uninstall("Pinned")
+
+        with patch("start.uninstall_preset", side_effect=blocking_uninstall), \
+                patch("downloader.cleanup_incomplete_downloads"), \
+                patch.object(server, "_state_manager", object()), \
+                patch("process_manager.ProcessManager", return_value=process_manager):
+            uninstall_thread = threading.Thread(target=request_uninstall)
+            uninstall_thread.start()
+            self.assertTrue(uninstall_entered.wait(timeout=2))
+
+            shutdown_thread = threading.Thread(target=server._shutdown_runtime)
+            shutdown_thread.start()
+            try:
+                self.assertTrue(self.wait_for_pending_shutdown())
+                status, payload = self.post_restart()
+                self.assertEqual(status, 409)
+                self.assertEqual(payload, {
+                    "error": "Instalação em andamento; reinicie o ComfyUI depois que ela terminar.",
+                })
+                process_manager.assert_not_called()
+            finally:
+                allow_uninstall.set()
+                uninstall_thread.join(timeout=2)
+                shutdown_thread.join(timeout=2)
+
+        self.assertFalse(uninstall_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+
+    def test_restart_blocks_operations_until_shutdown_finishes(self):
+        restart_entered = threading.Event()
+        allow_restart = threading.Event()
+        cleanup_entered = threading.Event()
+        allow_cleanup = threading.Event()
+        events = []
+        process_manager = Mock()
+        process_manager.is_running.return_value = False
+
+        def blocking_stop(**_kwargs):
+            restart_entered.set()
+            self.assertTrue(allow_restart.wait(timeout=2))
+            events.append("restart-stop")
+            return True
+
+        def record_start():
+            events.append("restart-start")
+            return True
+
+        def blocking_cleanup(_models_dir):
+            cleanup_entered.set()
+            self.assertTrue(allow_cleanup.wait(timeout=2))
+            events.append("shutdown-cleanup")
+
+        process_manager.ensure_stopped.side_effect = blocking_stop
+        process_manager.start.side_effect = record_start
+
+        with patch("start.uninstall_preset") as uninstall_preset, \
+                patch("downloader.cleanup_incomplete_downloads", side_effect=blocking_cleanup), \
+                patch.object(server, "_state_manager", object()), \
+                patch("process_manager.ProcessManager", return_value=process_manager), \
+                patch("time.sleep"):
+            status, payload = self.post_restart()
+            self.assertEqual(status, 202)
+            self.assertEqual(payload, {
+                "success": True,
+                "message": "Restart initiated",
+            })
+            self.assertTrue(restart_entered.wait(timeout=2))
+            shutdown_thread = None
+            try:
+                self.assertFalse(start.reserve_install_slot())
+                uninstall_status, _ = self.post_uninstall("Pinned")
+                self.assertEqual(uninstall_status, 409)
+                uninstall_preset.assert_not_called()
+
+                shutdown_thread = threading.Thread(target=server._shutdown_runtime)
+                shutdown_thread.start()
+                self.assertTrue(self.wait_for_pending_shutdown())
+                cleanup_entered.clear()
+                self.assertFalse(cleanup_entered.wait(timeout=0.2))
+
+                allow_restart.set()
+                self.assertTrue(cleanup_entered.wait(timeout=2))
+
+                self.assertFalse(start.reserve_install_slot())
+                uninstall_status, _ = self.post_uninstall("Pinned")
+                self.assertEqual(uninstall_status, 409)
+                uninstall_preset.assert_not_called()
+            finally:
+                allow_restart.set()
+                allow_cleanup.set()
+                if shutdown_thread is not None:
+                    shutdown_thread.join(timeout=2)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertEqual(events, [
+            "restart-stop",
+            "restart-start",
+            "shutdown-cleanup",
+        ])
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation("failed")
+
+    def test_restart_early_return_and_exception_release_reservation(self):
+        for error in (None, RuntimeError("restart failed")):
+            restart_finished = threading.Event()
+            process_manager = Mock()
+            if error is None:
+                process_manager.ensure_stopped.return_value = False
+            else:
+                process_manager.ensure_stopped.side_effect = error
+            original_finish = start.finish_restart_reservation
+
+            def record_finish():
+                original_finish()
+                restart_finished.set()
+
+            with patch("start.finish_restart_reservation", side_effect=record_finish), \
+                    patch.object(server, "_state_manager", object()), \
+                    patch("process_manager.ProcessManager", return_value=process_manager):
+                status, _ = self.post_restart()
+                self.assertEqual(status, 202)
+                self.assertTrue(restart_finished.wait(timeout=2))
+
+            self.assertTrue(start.reserve_install_slot())
+            start.finish_install_reservation("failed")

@@ -271,20 +271,18 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
     def _handle_restart(self):
         """Handle ComfyUI restart request (kill + start with last preset flags)"""
+        restart_reserved = False
         try:
             from process_manager import ProcessManager
-            from start import get_install_status, get_active_downloader
-            state = _state_manager or get_state_manager()
+            from start import finish_restart_reservation, reserve_restart_slot
 
-            # Restarting mid-install runs a second pip in the same venv (the
-            # start path can force-reinstall torch), and pip is not concurrent-safe
-            # in one environment. The client-side guard is per-tab and lost on
-            # reload, so it has to be enforced here.
-            if get_install_status().get('installing') or get_active_downloader() is not None:
+            if not reserve_restart_slot():
                 self._send_json_error(
                     409, "Instalação em andamento; reinicie o ComfyUI depois que ela terminar."
                 )
                 return
+            restart_reserved = True
+            state = _state_manager or get_state_manager()
 
             def do_restart():
                 try:
@@ -307,9 +305,17 @@ class PresetHandler(SimpleHTTPRequestHandler):
                         logger.error("ComfyUI failed to start after restart")
                 except Exception as e:
                     logger.error(f"Restart thread error: {e}")
+                finally:
+                    finish_restart_reservation()
 
             thread = threading.Thread(target=do_restart, daemon=True)
-            thread.start()
+            try:
+                thread.start()
+            except Exception:
+                finish_restart_reservation()
+                restart_reserved = False
+                raise
+            restart_reserved = False
 
             self.send_response(202)
             self.send_header('Content-Type', 'application/json')
@@ -320,6 +326,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
                 'message': 'Restart initiated'
             }).encode())
         except Exception as e:
+            if restart_reserved:
+                finish_restart_reservation()
             logger.error(f"Restart error: {e}")
             self._send_json_error(500, "Erro interno do servidor")
 
