@@ -30,7 +30,6 @@
 - Modify: `web/index.html`
 - Modify: `web/styles.css`
 - Modify: `web/app.js`
-- Create: `tests/test_web_ui.py`
 - Create: `tests/ui_smoke.cjs`
 
 **Interfaces:**
@@ -39,85 +38,19 @@
 - Preserves: `POST /api/install`, `/api/cancel`, `/api/restart`, `/api/shutdown`, and `/api/uninstall` request bodies and response handling.
 - Produces DOM anchors: `pinned-presets`, `recent-presets`, `queue-list`, `queue-count`, `queue-total`, `progress-summary`, `progress-fill`, `activity-list`, `manage-dialog`, and `manage-list`.
 
-- [ ] **Step 1: Write a failing frontend contract test**
+- [ ] **Step 1: Write a failing browser behavior test**
 
-Create `tests/test_web_ui.py` with:
+Create the first version of `tests/ui_smoke.cjs` with the server and API-mocking helpers from Step 9. Open the current page in Chromium and assert behavior through the rendered DOM: the three pinned presets are visible, the desktop catalog has three columns, the control panel is 300 px wide, selecting a preset updates the queue and total size, and `DELETAR` opens a square native dialog containing the installed presets. Do not inspect source text or CSS declarations.
 
-```python
-import unittest
-from pathlib import Path
-
-
-class FrontendStructureTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        root = Path(__file__).resolve().parents[1]
-        cls.html = (root / "web/index.html").read_text(encoding="utf-8")
-        cls.css = (root / "web/styles.css").read_text(encoding="utf-8")
-        cls.js = (root / "web/app.js").read_text(encoding="utf-8")
-
-    def test_two_panel_structure_replaces_legacy_manager(self):
-        required_ids = {
-            "app-shell", "preset-catalog", "pinned-presets",
-            "recent-presets", "control-panel", "status-dot",
-            "status-text", "extra-flags-input", "queue-list",
-            "queue-count", "queue-total", "start-btn", "cancel-btn",
-            "progress-summary", "progress-fill", "activity-list",
-            "restart-btn", "shutdown-btn", "manage-btn",
-            "manage-dialog", "manage-list", "manage-close",
-            "toast-container",
-        }
-        for element_id in required_ids:
-            with self.subTest(element_id=element_id):
-                self.assertIn(f'id="{element_id}"', self.html)
-
-        for removed_id in (
-            "installed-presets-list", "manage-fab", "manage-popup",
-            "progress-panel", "progress-files",
-        ):
-            with self.subTest(removed_id=removed_id):
-                self.assertNotIn(f'id="{removed_id}"', self.html)
-
-    def test_visual_contract_contains_tokens_and_breakpoints(self):
-        for declaration in (
-            "--page-bg: #0d0b11",
-            "--catalog-bg: #131118",
-            "--panel-bg: #0f0d15",
-            "--accent: #a284f2",
-            "--online: #7fd4d0",
-            "--destructive: #d178b8",
-            "@media (max-width: 920px)",
-            "@media (max-width: 640px)",
-            "@media (prefers-reduced-motion: reduce)",
-        ):
-            with self.subTest(declaration=declaration):
-                self.assertIn(declaration, self.css)
-
-        self.assertNotIn("border-radius:", self.css)
-        self.assertNotIn(".manage-fab", self.css)
-        self.assertNotIn(".manage-popup", self.css)
-
-    def test_client_uses_new_rendering_boundaries(self):
-        for function_name in (
-            "renderPresetCatalog", "renderQueue", "renderActivity",
-            "renderManageDialog", "togglePresetSelection",
-        ):
-            with self.subTest(function_name=function_name):
-                self.assertIn(f"function {function_name}", self.js)
-
-        self.assertNotIn("createPresetCard", self.js)
-        self.assertNotIn("toggleManagePopup", self.js)
-```
-
-- [ ] **Step 2: Run the frontend contract test and verify RED**
+- [ ] **Step 2: Run the browser behavior test and verify RED**
 
 Run:
 
 ```bash
-python -m unittest tests.test_web_ui.FrontendStructureTests -v
+node tests/ui_smoke.cjs
 ```
 
-Expected: failures because the current page still contains the legacy grid, installed chips, floating delete button, and popup.
+Expected: failure at the first missing behavior because the current page still uses the legacy grid, installed chips, floating delete button, and popup.
 
 - [ ] **Step 3: Replace `web/index.html` with the semantic shell**
 
@@ -626,16 +559,15 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 ```
 
-- [ ] **Step 8: Run focused static and syntax verification**
+- [ ] **Step 8: Run focused syntax verification**
 
 Run:
 
 ```bash
-python -m unittest tests.test_web_ui.FrontendStructureTests -v
 node --check web/app.js
 ```
 
-Expected: the frontend contract passes and Node reports no syntax error.
+Expected: Node reports no syntax error. Browser behavior remains the contract and is verified in Step 9.
 
 - [ ] **Step 9: Add and run the browser smoke at desktop and mobile widths**
 
@@ -850,7 +782,7 @@ Expected: exit code zero and screenshots at `/tmp/arrakis-ui-desktop.png` and `/
 - [ ] **Step 10: Commit the complete UI vertical slice**
 
 ```bash
-git add web/index.html web/styles.css web/app.js tests/test_web_ui.py tests/ui_smoke.cjs
+git add web/index.html web/styles.css web/app.js tests/ui_smoke.cjs
 git commit -m "Implementa nova interface do Arrakis Start"
 ```
 
@@ -861,7 +793,7 @@ git commit -m "Implementa nova interface do Arrakis Start"
 **Files:**
 - Modify: `start.py:270-330`
 - Modify: `server.py:118-185`
-- Modify: `tests/test_web_ui.py`
+- Create: `tests/test_web_ui.py`
 
 **Interfaces:**
 - Produces: `start.preset_modified_timestamps() -> Dict[str, float]`.
@@ -872,7 +804,7 @@ git commit -m "Implementa nova interface do Arrakis Start"
 
 - [ ] **Step 1: Write failing modification-order tests**
 
-Replace the import block at the top of `tests/test_web_ui.py` with the exact imports shown below, then append the test classes that follow:
+Create `tests/test_web_ui.py` with the exact imports shown below, then add the test classes that follow:
 
 ```python
 import json
