@@ -1,6 +1,8 @@
 {
   "name": "MiniMax H3 5090",
   "description": "MiniMax H3 (03/08/2026) para RTX 5090 32GB — vídeo com áudio estéreo nativo, 768p base. Diffusion pruned INT8 ConvRot (21GB cada) + text encoder INT8 (27GB, produção) e NVFP4 (16GB, previews rápidos). T2V/I2V/R2V. Requer ComfyUI 0.30.1+. ~91GB.",
+  "pinned": true,
+  "size_gb": 91,
   "workflows": [
     { "label": "T2V", "file": "minimax_h3_5090_t2v.json" },
     { "label": "I2V", "file": "minimax_h3_5090_i2v.json" },

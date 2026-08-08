@@ -1,6 +1,8 @@
 {
   "name": "Ideogram 4.0",
   "description": "Ideogram 4.0 (9.3B DiT, open weights) in fp8_scaled - best-in-class text rendering and JSON structured prompts. Loads two checkpoints (conditional + unconditional) through DualModelGuider. Weights are non-commercial use only.",
+  "pinned": false,
+  "size_gb": 21,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

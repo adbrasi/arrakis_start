@@ -1,6 +1,8 @@
 {
   "name": "Ltx production base",
   "description": "Geração LTX 2.3 (30/06/2026) base — para testes e criação dos presets derivativos etc.",
+  "pinned": false,
+  "size_gb": 58,
   "workflow": "padrao_ltx2_arrakisV1-3.json",
   "use_sage_attention": true,
   "comfyui_flags": [],

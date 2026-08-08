@@ -1,6 +1,8 @@
 {
   "name": "Anime production",
   "description": "LTX 2.3 production base with the Animateka I2V LoRA and experimental PhiNoise node.",
+  "pinned": false,
+  "size_gb": 58,
   "workflow": "padrao_ltx2_arrakisV1-3.json",
   "use_sage_attention": true,
   "comfyui_flags": [],

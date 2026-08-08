@@ -1,6 +1,8 @@
 {
   "name": "animegen wan 2.2",
   "description": "AnimeGen WAN 2.2 I2V preset with low-noise and high-noise Q8 GGUF diffusion models, WanVideo tooling, and optional SageAttention stack",
+  "pinned": false,
+  "size_gb": 91,
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [

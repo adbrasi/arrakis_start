@@ -54,11 +54,20 @@ Presets are JSON files in `presets/`. Each defines models to download, custom no
 - **Disabled presets:** renamed to `*.json.ignore`
 - **Hidden presets:** prefixed with `.`
 
-Key preset fields: `name`, `description`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention`, `workflows[]` (list of `{label, file|url}` — `file` is a local file in `workflows/` and wins over `url`). The legacy single `workflow`/`workflow_url` pair is still accepted and becomes a one-item list.
+Key preset fields: `name`, `description`, `pinned`, `size_gb`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention`, `workflows[]` (list of `{label, file|url}` — `file` is a local file in `workflows/` and wins over `url`). The legacy single `workflow`/`workflow_url` pair is still accepted and becomes a one-item list.
+
+```json
+{
+  "pinned": false,
+  "size_gb": 15
+}
+```
+
+`pinned` selects whether the preset appears in the large-card section. `size_gb` is an author-maintained estimate of the full payload. Committed presets are ordered by their latest modifying commit rather than the commit that added them.
 
 Two presets must never map different URLs to the same `dir` + `filename`: one path holds one file, so the first entry wins and the other is reported as a configuration conflict (a preset-data problem to fix, never a download failure — it does not block ComfyUI). Presets sharing a file must therefore share its exact URL.
 
-The web UI auto-detects new JSON files — adding a preset requires no code changes. Presets are listed newest-added first, using the git commit that added each file (file mtime for uncommitted ones — a fresh clone flattens mtimes, so git is the source of truth on cloud instances).
+The web UI auto-detects new JSON files — adding a preset requires no code changes. Committed presets are listed by their latest modifying commit (file mtime for uncommitted ones — a fresh clone flattens mtimes, so git is the source of truth on cloud instances).
 
 ## Environment Variables
 

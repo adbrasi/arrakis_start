@@ -1,6 +1,8 @@
 {
   "name": "Qwen Image Edit 2511",
   "description": "Qwen Image Edit 2511 models with Lightning LoRAs and GGUF support",
+  "pinned": false,
+  "size_gb": 15,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

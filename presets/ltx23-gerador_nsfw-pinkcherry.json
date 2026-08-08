@@ -1,6 +1,8 @@
 {
   "name": "LTX 2.3 GERADOR NSFW - PINKCHERRY",
   "description": "GERAÇÃO DE NSFW COM LTX 2.3 - PINKCHERRY V1.8 (FP8 SCALED, checkpoint completo), ENCODER HERETIC, DISTIL LORA 384-1.1 @0.6. Workflow oficial v1.8 com NAG p/ negative prompts. Prompt longo e diretivo é obrigatório.",
+  "pinned": false,
+  "size_gb": 39,
   "workflows": [
     { "label": "Oficial v1.8", "file": "pinkcherry_v18_oficial.json" },
     { "label": "Padrão Arrakis", "file": "padrao_ltx2_arrakisV1-3.json" }

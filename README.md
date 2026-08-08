@@ -100,6 +100,8 @@ Create a new JSON file in `presets/` directory:
 {
   "name": "My Custom Preset",
   "description": "Description of what this preset includes",
+  "pinned": false,
+  "size_gb": 15,
   "use_sage_attention": false,
   "comfyui_flags": ["--highvram"],
   "pip_commands": [
@@ -123,7 +125,10 @@ Create a new JSON file in `presets/` directory:
 }
 ```
 
-The web UI will automatically detect and display new presets.
+The web UI will automatically detect and display new presets. `pinned` selects
+whether the preset appears in the large-card section. `size_gb` is an
+author-maintained estimate of the full payload. Committed presets are ordered
+by their latest modifying commit rather than the commit that added them.
 
 ---
 

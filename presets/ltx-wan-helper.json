@@ -1,6 +1,8 @@
 {
   "name": "ltx wan helper",
   "description": "WAN 2.2 helper preset with two low-noise GGUF diffusion models, Lightning LoRAs, VAE, NSFW UMT5 encoder, and video utility nodes.",
+  "pinned": false,
+  "size_gb": 37,
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [

@@ -113,5 +113,45 @@ class PinkCherryPresetTests(unittest.TestCase):
         self.assertTrue(preset["use_sage_attention"])
 
 
+class PresetUiMetadataTests(unittest.TestCase):
+    EXPECTED = {
+        "anima3-studio.json": (True, 42),
+        "anima3.json": (False, 8),
+        "animegen-wan-2.2.json": (False, 91),
+        "base.json": (False, 1),
+        "flux2-klein-4b-base-full.json": (False, 18),
+        "flux2-klein-9b-base.json": (False, 24),
+        "gerar_imagens_validacao.json": (False, 9),
+        "ideogram4.json": (False, 21),
+        "krea2-full.json": (True, 35),
+        "krea2.json": (False, 28),
+        "ltx-gerador_nsfw.json": (False, 37),
+        "ltx-lip-sync-gemma-q4.json": (False, 54),
+        "ltx-wan-helper.json": (False, 37),
+        "ltx23-anime-production.json": (False, 58),
+        "ltx23-gerador_nsfw-10eros.json": (False, 58),
+        "ltx23-gerador_nsfw-pinkcherry.json": (False, 39),
+        "ltx23-gerador_nsfw-sulphur.json": (False, 39),
+        "ltx23-gerador_nsfw.json": (False, 39),
+        "ltx23-production-base.json": (False, 58),
+        "minimax-h3-5090.json": (True, 91),
+        "minimax-h3-6000pro-96gb.json": (False, 190),
+        "qwen-image.json": (False, 15),
+        "seedvr_tester.json": (False, 2),
+        "video-scail-test.json": (False, 33),
+    }
+
+    def test_every_active_preset_has_approved_ui_metadata(self):
+        presets = {
+            preset["_filename"]: preset for preset in start.load_presets()
+        }
+
+        self.assertEqual(set(presets), set(self.EXPECTED))
+        for filename, (pinned, size_gb) in self.EXPECTED.items():
+            with self.subTest(filename=filename):
+                self.assertIs(presets[filename]["pinned"], pinned)
+                self.assertEqual(presets[filename]["size_gb"], size_gb)
+
+
 if __name__ == "__main__":
     unittest.main()

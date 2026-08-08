@@ -1,6 +1,8 @@
 {
   "name": "LTX 2.3 GERADOR NSFW - SULPHUR",
   "description": "GERAÇÃO DE NSFW COM LTX 2.3 - MODELO SULPHUR DEV (FP8 MIXED) COM LORA ESPECIALIZADO.",
+  "pinned": false,
+  "size_gb": 39,
   "workflow": "padrao_ltx2_arrakisV1-3.json",
   "use_sage_attention": true,
   "comfyui_flags": [],

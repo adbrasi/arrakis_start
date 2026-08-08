@@ -1,6 +1,8 @@
 {
   "name": "MiniMax H3 6000 Pro 96GB",
   "description": "MiniMax H3 (03/08/2026) para RTX PRO 6000 96GB — tudo BF16: diffusion fl2va/ref2va (66GB cada) + text encoder BF16 (52GB), qualidade máxima sem offload. T2V/I2V/R2V com áudio estéreo nativo, 768p base. Requer ComfyUI 0.30.1+. ~190GB.",
+  "pinned": false,
+  "size_gb": 190,
   "workflows": [
     { "label": "T2V", "file": "minimax_h3_6000pro_t2v.json" },
     { "label": "I2V", "file": "minimax_h3_6000pro_i2v.json" },

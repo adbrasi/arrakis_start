@@ -1,6 +1,8 @@
 {
   "name": "LTX2 FULL",
   "description": "LTX lip sync preset with LTX-2 dev checkpoint and full Gemma 3 12B QAT Q4_0 files",
+  "pinned": false,
+  "size_gb": 54,
   "use_sage_attention": true,
   "comfyui_flags": [],
   "models": [

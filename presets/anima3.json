@@ -1,6 +1,8 @@
 {
   "name": "Anima 3 - simples",
   "description": "Anima 3 - simples: checkpoint Base v1.0 com nodes essenciais para edit/inpaint/acceleration (sem LoRAs/detectores do Studio).",
+  "pinned": false,
+  "size_gb": 8,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

@@ -1,6 +1,8 @@
 {
   "name": "Anima 3 Studio",
   "description": "Anima 3 Studio — Base v1.0 com LoRAs, detectores (bbox/segm) e stack completo de custom nodes para edit/inpaint/detailer.",
+  "pinned": true,
+  "size_gb": 42,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

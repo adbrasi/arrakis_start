@@ -1,6 +1,8 @@
 {
   "name": "Flux2 Klein 9B Base",
   "description": "FLUX.2 [klein] 9B base preset with community-tested nodes for edit/inpaint/acceleration and Klein LoRAs for testing.",
+  "pinned": false,
+  "size_gb": 24,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

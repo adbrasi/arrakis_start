@@ -1,6 +1,8 @@
 {
   "name": "Krea 2 Turbo",
   "description": "Krea 2 Turbo (12.9B DiT, open weights) in fp8_scaled - 8 steps, cfg 1.0, euler/simple. Includes the 9 official Krea style LoRAs. Needs a recent ComfyUI (CLIPLoader type 'krea2').",
+  "pinned": false,
+  "size_gb": 28,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

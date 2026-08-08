@@ -1,6 +1,8 @@
 {
   "name": "seedvr tester",
   "description": "Upscaler SeedVR2 v2.5 — o próprio node baixa o DiT e o VAE em models/SEEDVR2 no primeiro uso. Attention SageAttention 2, color correction LAB, torch.compile inductor. Workflow com coletor de vídeos e upload para HuggingFace.",
+  "pinned": false,
+  "size_gb": 2,
   "workflows": [
     { "label": "Workflow", "file": "seedvr_v01.json" }
   ],

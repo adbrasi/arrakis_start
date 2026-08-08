@@ -1,6 +1,8 @@
 {
   "name": "Flux2 Klein 4B Base Full",
   "description": "FLUX.2 [klein] 4B base full (non-FP8) preset with core model/text encoder/VAE and 3 curated Civitai LoRAs for style and character tests.",
+  "pinned": false,
+  "size_gb": 18,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

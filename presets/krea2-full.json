@@ -1,6 +1,8 @@
 {
   "name": "Krea 2 Full",
   "description": "Krea 2 Raw fp8_scaled with Qwen3-VL 4B bf16 and the official Turbo LoRA. Preserves all models, style LoRAs, custom nodes, flags, and auxiliary assets from Krea 2 Turbo.",
+  "pinned": true,
+  "size_gb": 35,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [

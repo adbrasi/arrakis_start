@@ -1,6 +1,8 @@
 {
   "name": "LTX 2.3 GERADOR NSFW - 10EROS",
   "description": "GERAÇÃO DE NSFW COM LTX 2.3 - 10EROS V1.5 (BF16, checkpoint completo) + DMD HYBRID V2 @1.0 no workflow oficial V5 do autor. Encoder Gemma abliterated. Prompt estrito/diretivo é obrigatório ('you will get nothing if you don't ask it').",
+  "pinned": false,
+  "size_gb": 58,
   "workflows": [
     { "label": "Oficial V5 DMD", "file": "10eros_v15_dmd_oficial.json" },
     { "label": "Padrão Arrakis", "file": "padrao_ltx2_arrakisV1-3.json" }
