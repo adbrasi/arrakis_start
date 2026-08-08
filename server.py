@@ -110,8 +110,7 @@ def _comfy_port(state) -> int:
 
 def _shutdown_runtime(terminate_process: bool = False):
     """Cancel active installation, then exclusively stop the runtime."""
-    from start import MODELS_DIR, cancel_active_install, reserve_shutdown_slot
-    cancel_active_install(delete_partials=False)
+    from start import MODELS_DIR, reserve_shutdown_slot
 
     with reserve_shutdown_slot():
         from downloader import cleanup_incomplete_downloads

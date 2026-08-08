@@ -335,8 +335,9 @@ def load_presets() -> List[Dict]:
 
 # Global tracker for cancellation
 _active_downloader = None
-_operation_mutex = threading.Lock()
+_operation_condition = threading.Condition()
 _active_operation: Optional[str] = None
+_pending_shutdowns = 0
 _install_cancel_event = threading.Event()
 _install_status = 'idle'
 _active_install_processes = set()
@@ -345,66 +346,80 @@ _active_install_processes_lock = threading.Lock()
 
 def _set_install_status(status: str) -> None:
     global _install_status
-    _install_status = status
+    with _operation_condition:
+        _install_status = status
 
 
-def _reserve_operation(operation: str, blocking: bool = False) -> bool:
-    """Acquire the one mutable-operation mutex for the named operation."""
+def _reserve_operation(operation: str) -> bool:
+    """Atomically begin a non-shutdown mutable operation."""
     global _active_operation
-    if not _operation_mutex.acquire(blocking=blocking):
-        return False
-    _active_operation = operation
-    return True
+    with _operation_condition:
+        if _active_operation is not None or _pending_shutdowns:
+            return False
+        _active_operation = operation
+        return True
 
 
 def _release_operation(operation: str) -> bool:
-    """Release the mutable-operation mutex only for its current owner type."""
+    """Finish an operation and wake its coordinator waiters."""
     global _active_operation
-    if _active_operation != operation:
-        logger.warning(
-            "Refusing to release %s operation while %r is active",
-            operation,
-            _active_operation,
-        )
-        return False
-    _active_operation = None
-    _operation_mutex.release()
-    return True
+    with _operation_condition:
+        if _active_operation != operation:
+            logger.warning(
+                "Refusing to release %s operation while %r is active",
+                operation,
+                _active_operation,
+            )
+            return False
+        _active_operation = None
+        _operation_condition.notify_all()
+        return True
 
 
 def get_install_status() -> Dict[str, Any]:
     """Return volatile installation state for the web UI/API."""
-    return {
-        'installing': _active_operation == 'install',
-        'install_status': _install_status,
-    }
+    with _operation_condition:
+        return {
+            'installing': _active_operation == 'install',
+            'install_status': _install_status,
+        }
 
 
 def reserve_install_slot() -> bool:
     """Reserve the single installer slot before a background web job starts."""
-    if not _reserve_operation('install'):
-        return False
-    _install_cancel_event.clear()
-    _set_install_status('running')
-    return True
+    global _active_operation, _install_status
+    with _operation_condition:
+        if _active_operation is not None or _pending_shutdowns:
+            return False
+        _install_cancel_event.clear()
+        _install_status = 'running'
+        _active_operation = 'install'
+        return True
 
 
 def _finish_install_slot(status: str) -> None:
-    global _active_downloader
-    _active_downloader = None
-    _set_install_status(status)
-    _release_operation('install')
+    global _active_downloader, _active_operation, _install_status
+    with _operation_condition:
+        if _active_operation != 'install':
+            logger.warning(
+                "Refusing to finish install while %r is active",
+                _active_operation,
+            )
+            return
+        _active_downloader = None
+        _install_status = status
+        _active_operation = None
+        _operation_condition.notify_all()
 
 
 def finish_install_reservation(status: str = 'failed') -> None:
     """Release a web-reserved slot when setup fails before install_presets()."""
-    if _active_operation == 'install':
-        _finish_install_slot('cancelled' if _install_cancel_event.is_set() else status)
+    _finish_install_slot('cancelled' if _install_cancel_event.is_set() else status)
 
 
 @contextlib.contextmanager
 def reserve_uninstall_slot() -> Iterator[bool]:
-    """Hold the shared mutable-operation mutex for one uninstall request."""
+    """Hold the shared operation coordinator for one uninstall request."""
     if not _reserve_operation('uninstall'):
         yield False
         return
@@ -416,8 +431,30 @@ def reserve_uninstall_slot() -> Iterator[bool]:
 
 @contextlib.contextmanager
 def reserve_shutdown_slot() -> Iterator[None]:
-    """Wait for and hold the shared mutex while shutting down the runtime."""
-    _reserve_operation('shutdown', blocking=True)
+    """Register shutdown intent, cancel an install, then own the coordinator."""
+    global _active_operation, _pending_shutdowns
+    pending_registered = False
+    try:
+        with _operation_condition:
+            _pending_shutdowns += 1
+            pending_registered = True
+            cancel_install = _active_operation == 'install'
+
+        if cancel_install:
+            cancel_active_install(delete_partials=False)
+
+        with _operation_condition:
+            while _active_operation is not None:
+                _operation_condition.wait()
+            _pending_shutdowns -= 1
+            pending_registered = False
+            _active_operation = 'shutdown'
+    except Exception:
+        if pending_registered:
+            with _operation_condition:
+                _pending_shutdowns -= 1
+                _operation_condition.notify_all()
+        raise
     try:
         yield
     finally:
@@ -466,21 +503,28 @@ def _terminate_install_process(process: subprocess.Popen, grace: float = 3.0) ->
             pass
 
 def get_active_downloader():
-    return _active_downloader
+    with _operation_condition:
+        return _active_downloader
 
 def cancel_active_install(delete_partials: bool = False):
     """Cancel the active installation and optionally delete model partials."""
-    if _active_operation != 'install':
-        if delete_partials and _active_operation is None:
+    global _install_status
+    with _operation_condition:
+        operation = _active_operation
+        if operation == 'install':
+            _install_cancel_event.set()
+            _install_status = 'cancelling'
+            downloader = _active_downloader
+        else:
+            downloader = None
+
+    if operation != 'install':
+        if delete_partials and operation is None:
             from downloader import cleanup_incomplete_downloads
             cleanup_incomplete_downloads(MODELS_DIR)
         return False
 
     logger.warning("Cancelando instalação ativa...")
-    _install_cancel_event.set()
-    _set_install_status('cancelling')
-
-    downloader = _active_downloader
     if downloader is not None:
         downloader.cancel(delete_partials=delete_partials)
     elif delete_partials:
@@ -1490,7 +1534,9 @@ def install_presets(
     if not _slot_reserved and not reserve_install_slot():
         logger.error("Já existe uma instalação em andamento")
         return False
-    if _slot_reserved and _active_operation != 'install':
+    with _operation_condition:
+        slot_reserved = _active_operation == 'install'
+    if _slot_reserved and not slot_reserved:
         logger.error("Installer slot was not reserved")
         return False
 
@@ -1647,8 +1693,10 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
         # 3.1 Download models
         if downloads:
             logger.info(f"Downloading {len(downloads)} new models...")
-            _active_downloader = DownloadManager(models_dir=MODELS_DIR)
-            download_future = executor.submit(_active_downloader.download_all, downloads)
+            downloader = DownloadManager(models_dir=MODELS_DIR)
+            with _operation_condition:
+                _active_downloader = downloader
+            download_future = executor.submit(downloader.download_all, downloads)
         else:
             logger.info("All models already installed, skipping downloads")
 
@@ -1677,12 +1725,16 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     downloader_failures = []
     config_conflicts = []
     try:
-        if _active_downloader and hasattr(_active_downloader, 'get_failure_report'):
-            downloader_failures = _active_downloader.get_failure_report()
-        if _active_downloader and hasattr(_active_downloader, 'get_config_conflicts'):
-            config_conflicts = _active_downloader.get_config_conflicts()
+        with _operation_condition:
+            downloader = _active_downloader
+        if downloader and hasattr(downloader, 'get_failure_report'):
+            downloader_failures = downloader.get_failure_report()
+        if downloader and hasattr(downloader, 'get_config_conflicts'):
+            config_conflicts = downloader.get_config_conflicts()
     finally:
-        _active_downloader = None
+        with _operation_condition:
+            if _active_downloader is downloader:
+                _active_downloader = None
 
     if _install_cancel_event.is_set() or nodes_result.get('cancelled'):
         logger.warning(

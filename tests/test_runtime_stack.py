@@ -388,6 +388,96 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertTrue(start.reserve_install_slot())
         start.finish_install_reservation('failed')
 
+    def test_pending_shutdown_blocks_new_operations_before_install_releases(self):
+        shutdown_cancelled = threading.Event()
+        allow_shutdown_to_wait = threading.Event()
+        cleanup_entered = threading.Event()
+        allow_cleanup = threading.Event()
+        process_manager = Mock()
+        process_manager.is_running.return_value = False
+        original_cancel = start.cancel_active_install
+
+        def pause_after_cancel(*args, **kwargs):
+            result = original_cancel(*args, **kwargs)
+            shutdown_cancelled.set()
+            self.assertTrue(allow_shutdown_to_wait.wait(timeout=2))
+            return result
+
+        def blocking_cleanup(_models_dir):
+            cleanup_entered.set()
+            self.assertTrue(allow_cleanup.wait(timeout=2))
+
+        def try_uninstall_reservation():
+            with start.reserve_uninstall_slot() as reserved:
+                return reserved
+
+        self.assertTrue(start.reserve_install_slot())
+        with patch('start.cancel_active_install', side_effect=pause_after_cancel), \
+                patch('downloader.cleanup_incomplete_downloads', side_effect=blocking_cleanup), \
+                patch.object(server, '_state_manager', object()), \
+                patch('process_manager.ProcessManager', return_value=process_manager):
+            shutdown_thread = threading.Thread(target=server._shutdown_runtime)
+            shutdown_thread.start()
+            try:
+                self.assertTrue(shutdown_cancelled.wait(timeout=2))
+                start.finish_install_reservation('cancelled')
+
+                install_b_reserved = start.reserve_install_slot()
+                if install_b_reserved:
+                    start.finish_install_reservation('failed')
+                uninstall_b_reserved = try_uninstall_reservation()
+
+                allow_shutdown_to_wait.set()
+                self.assertTrue(cleanup_entered.wait(timeout=2))
+
+                install_during_cleanup = start.reserve_install_slot()
+                if install_during_cleanup:
+                    start.finish_install_reservation('failed')
+                uninstall_during_cleanup = try_uninstall_reservation()
+            finally:
+                allow_shutdown_to_wait.set()
+                allow_cleanup.set()
+                shutdown_thread.join(timeout=2)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertFalse(install_b_reserved)
+        self.assertFalse(uninstall_b_reserved)
+        self.assertFalse(install_during_cleanup)
+        self.assertFalse(uninstall_during_cleanup)
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation('failed')
+        self.assertTrue(try_uninstall_reservation())
+
+    def test_shutdown_preparation_exception_does_not_leave_pending_admission(self):
+        cancellation_attempted = threading.Event()
+        failure = []
+
+        def fail_cancellation(*_args, **_kwargs):
+            cancellation_attempted.set()
+            raise RuntimeError('cancel failed')
+
+        def reserve_shutdown():
+            try:
+                with start.reserve_shutdown_slot():
+                    pass
+            except RuntimeError as exc:
+                failure.append(exc)
+
+        self.assertTrue(start.reserve_install_slot())
+        with patch('start.cancel_active_install', side_effect=fail_cancellation):
+            shutdown_thread = threading.Thread(target=reserve_shutdown)
+            shutdown_thread.start()
+            try:
+                self.assertTrue(cancellation_attempted.wait(timeout=2))
+            finally:
+                start.finish_install_reservation('cancelled')
+                shutdown_thread.join(timeout=2)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertEqual(str(failure[0]), 'cancel failed')
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation('failed')
+
 
 class PresetCompletionTests(unittest.TestCase):
     def test_missing_model_keeps_preset_pending(self):

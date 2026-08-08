@@ -1,3 +1,4 @@
+import contextlib
 import http.client
 import json
 import tempfile
@@ -314,21 +315,21 @@ class UninstallEndpointTests(unittest.TestCase):
         def request_uninstall():
             uninstall_result["response"] = self.post_uninstall("Pinned")
 
-        def record_cancel(*args, **kwargs):
-            result = original_cancel(*args, **kwargs)
-            events.append("cancel-requested")
+        @contextlib.contextmanager
+        def record_shutdown_reservation():
             shutdown_started.set()
-            return result
+            with original_shutdown_reservation():
+                yield
 
         process_manager = Mock()
         process_manager.is_running.return_value = True
         process_manager.ensure_stopped.side_effect = (
             lambda **_kwargs: events.append("stop") or True
         )
-        original_cancel = start.cancel_active_install
+        original_shutdown_reservation = start.reserve_shutdown_slot
 
         with patch("start.uninstall_preset", side_effect=blocking_uninstall), \
-                patch("start.cancel_active_install", side_effect=record_cancel), \
+                patch("start.reserve_shutdown_slot", side_effect=record_shutdown_reservation), \
                 patch("downloader.cleanup_incomplete_downloads") as cleanup_partials, \
                 patch.object(server, "_state_manager", object()), \
                 patch("process_manager.ProcessManager", return_value=process_manager), \
@@ -344,7 +345,7 @@ class UninstallEndpointTests(unittest.TestCase):
             shutdown_thread.start()
             try:
                 self.assertTrue(shutdown_started.wait(timeout=2))
-                self.assertEqual(events, ["cancel-requested"])
+                self.assertEqual(events, [])
                 cleanup_partials.assert_not_called()
             finally:
                 allow_uninstall.set()
@@ -358,7 +359,6 @@ class UninstallEndpointTests(unittest.TestCase):
             {"success": True, "preset": "Pinned", "deleted": []},
         ))
         self.assertEqual(events, [
-            "cancel-requested",
             "uninstall-complete",
             "stop",
             "kill",
