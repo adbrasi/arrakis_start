@@ -17,6 +17,15 @@ curl -L https://raw.githubusercontent.com/adbrasi/arrakis_start/main/bootstrap.s
 
 ```
 
+### Test a Branch
+
+```bash
+curl -L https://raw.githubusercontent.com/adbrasi/arrakis_start/feature/arrakis-ui-redesign/bootstrap.sh | ARRAKIS_GIT_REF=feature/arrakis-ui-redesign bash
+```
+
+`ARRAKIS_GIT_REF` selects the branch cloned or fast-forwarded by bootstrap. Omit
+it to keep using `main`.
+
 This will:
 1. ✅ Install ComfyUI core (~3 min)
 2. ✅ Prepare Python/ComfyUI base

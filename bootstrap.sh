@@ -868,6 +868,29 @@ git_run() {
         timeout "$timeout_s" git "$@"
 }
 
+is_safe_arrakis_git_ref() {
+    local ref="$1"
+
+    # This structural validation intentionally uses Bash only: it runs before the
+    # dependency step that installs Git on a fresh cloud image. When Git is already
+    # present, check-ref-format below confirms the same branch grammar natively.
+    case "$ref" in
+        ''|@|.|..|refs/*|-*|/*|*/|.*|*/.*|*.|*..*|*//*|*.lock|*@\{*) return 1 ;;
+        *[[:cntrl:]]*|*' '*|*'~'*|*'^'*|*':'*|*'?'*|*'*'*|*'['*|*'\'*) return 1 ;;
+    esac
+    if command -v git >/dev/null 2>&1; then
+        git check-ref-format --branch "$ref" >/dev/null 2>&1
+    fi
+}
+
+configure_arrakis_git_ref() {
+    ARRAKIS_GIT_REF="${ARRAKIS_GIT_REF:-main}"
+    if ! is_safe_arrakis_git_ref "$ARRAKIS_GIT_REF"; then
+        log_error "ARRAKIS_GIT_REF inválido: '$ARRAKIS_GIT_REF'. Informe um nome de branch Git válido."
+        return 1
+    fi
+}
+
 # Clone the repo into a staging dir on the same filesystem and move it into place only
 # after a complete clone. Retried with backoff: by the time this runs, apt, both venvs,
 # ComfyUI and a multi-GB torch download have already been paid for, so a transient
@@ -875,13 +898,14 @@ git_run() {
 install_arrakis_repo() {
     local dest="$1"
     local url="$2"
+    local ref="$3"
     local attempt stage_dir backup
     local cloned=0
 
     for attempt in 1 2 3; do
         stage_dir="$(mktemp -d "${dest}.stage.XXXXXX")" || return 1
         if run_with_progress "Clonando repositorio Arrakis Start (tentativa $attempt/3)" \
-                git_run 60 clone --depth 1 "$url" "$stage_dir"; then
+                git_run 60 clone --depth 1 --single-branch --branch "$ref" "$url" "$stage_dir"; then
             cloned=1
             break
         fi
@@ -904,6 +928,79 @@ install_arrakis_repo() {
     fi
     mv "$stage_dir" "$dest"
     return 0
+}
+
+checkout_has_local_changes() {
+    local dest="$1"
+    [ -z "$(git -C "$dest" status --porcelain --untracked-files=all)" ]
+}
+
+ensure_arrakis_ref_fetchspec() {
+    local dest="$1"
+    local ref="$2"
+    local fetchspec="+refs/heads/$ref:refs/remotes/origin/$ref"
+
+    if git -C "$dest" config --get-all remote.origin.fetch 2>/dev/null \
+            | grep -Fx -- "$fetchspec" >/dev/null; then
+        return 0
+    fi
+    git -C "$dest" config --add remote.origin.fetch "$fetchspec"
+}
+
+# Fetch the requested branch explicitly instead of relying on origin's configured
+# fetchspec. A shallow clone made with --single-branch main only knows main, so the
+# ordinary `git pull` cannot discover a feature branch even when it exists remotely.
+update_arrakis_repo() {
+    local dest="$1"
+    local url="$2"
+    local ref="$3"
+
+    # Keep the stored remote token-free. Older bootstraps embedded the token in
+    # this URL, so this also scrubs a leaked credential from existing volumes.
+    if ! git -C "$dest" remote set-url origin "$url"; then
+        log_error "Não foi possível configurar o remoto origin em $dest. Verifique o checkout existente."
+        return 1
+    fi
+
+    if ! checkout_has_local_changes "$dest"; then
+        log_error "Atualização bloqueada por alterações locais em $dest. Faça commit, stash ou remova as alterações antes de rodar o bootstrap novamente."
+        return 1
+    fi
+
+    if ! ensure_arrakis_ref_fetchspec "$dest" "$ref"; then
+        log_error "Não foi possível registrar a branch '$ref' no fetchspec do remoto origin."
+        return 1
+    fi
+
+    if ! run_with_progress "Buscando branch $ref do Arrakis Start" \
+            git_run 45 -C "$dest" fetch origin "+refs/heads/$ref:refs/remotes/origin/$ref"; then
+        log_error "Não foi possível buscar a branch '$ref'. Verifique a rede e se a branch existe no remoto."
+        return 1
+    fi
+
+    if git -C "$dest" show-ref --verify --quiet "refs/heads/$ref"; then
+        if ! git -C "$dest" switch "$ref"; then
+            log_error "Não foi possível mudar para a branch '$ref' sem sobrescrever dados locais. Resolva as alterações e rode o bootstrap novamente."
+            return 1
+        fi
+    elif ! git -C "$dest" switch --track -c "$ref" "origin/$ref"; then
+        log_error "Não foi possível criar a branch local '$ref' acompanhando origin/$ref. Verifique o checkout existente."
+        return 1
+    fi
+
+    if ! git -C "$dest" branch --set-upstream-to="origin/$ref" "$ref"; then
+        log_error "Não foi possível configurar origin/$ref como upstream da branch '$ref'."
+        return 1
+    fi
+
+    if run_with_progress "Atualizando repositorio Arrakis Start (fast-forward)" \
+            git_run 45 -C "$dest" merge --ff-only "origin/$ref"; then
+        log_success "Arrakis Start atualizado na branch $ref"
+        return 0
+    fi
+
+    log_error "Não foi possível atualizar '$ref' somente por fast-forward. O checkout local foi preservado; resolva a divergência e rode o bootstrap novamente."
+    return 1
 }
 
 # Store the HF token the way huggingface_hub and hf_xet read it: $HF_HOME/token.
@@ -940,6 +1037,8 @@ main() {
     ARRAKIS_PYTHON="$ARRAKIS_VENV_DIR/bin/python"
     COMFY_REQ_MARKER="$COMFY_VENV_DIR/.arrakis_comfy_requirements.sha256"
     ARRAKIS_REPO_URL="https://github.com/adbrasi/arrakis_start.git"
+    configure_arrakis_git_ref \
+        || die "ARRAKIS_GIT_REF precisa ser um nome de branch Git válido."
 
     # Template ComfyUI cleanup targets. ${VAR-default} (NOT ${VAR:-default}) so that
     # exporting a var empty really disables that part of the cleanup — with :- an
@@ -1235,18 +1334,11 @@ main() {
 
     if [ -d "$ARRAKIS_DIR/.git" ]; then
         log_info "Updating Arrakis Start..."
-        # Keep the stored remote token-free. Older bootstraps embedded the token in
-        # this URL, so this also scrubs a leaked credential from existing volumes.
-        git -C "$ARRAKIS_DIR" remote set-url origin "$ARRAKIS_REPO_URL" 2>/dev/null || true
-        if run_with_progress "Atualizando repositorio Arrakis Start (git pull)" \
-            git_run 45 -C "$ARRAKIS_DIR" pull --ff-only; then
-            log_success "Arrakis Start atualizado"
-        else
-            log_warn "Update pulado (timeout, rede ou bloqueio de git). Continuando com versão local."
-        fi
+        update_arrakis_repo "$ARRAKIS_DIR" "$ARRAKIS_REPO_URL" "$ARRAKIS_GIT_REF" \
+            || die "Não foi possível atualizar o Arrakis Start na branch '$ARRAKIS_GIT_REF'. O checkout local foi preservado."
     else
         log_info "Cloning Arrakis Start..."
-        install_arrakis_repo "$ARRAKIS_DIR" "$ARRAKIS_REPO_URL" \
+        install_arrakis_repo "$ARRAKIS_DIR" "$ARRAKIS_REPO_URL" "$ARRAKIS_GIT_REF" \
             || die "Não foi possível clonar o Arrakis Start após 3 tentativas (rede/DNS/GitHub). Verifique a rede da instância e rode o bootstrap novamente."
         log_success "Arrakis Start clonado"
     fi
