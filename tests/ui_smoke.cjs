@@ -209,8 +209,18 @@ async function verifyLifecycleRequests(page, requests, currentStatus) {
 
     requests.splice(0, requests.length);
     await page.locator("#manage-btn").click();
+    const presetsReload = page.waitForResponse(response => (
+        new URL(response.url()).pathname === "/api/presets"
+        && response.request().method() === "GET"
+    ), { timeout: 8000 });
+    const removalToast = page.locator("#toast-container .toast.success").filter({
+        hasText: "Anima 3 Studio",
+    });
     const uninstallRequest = await clickAndCapturePost(page, ".manage-remove", "/api/uninstall");
     assertActionRequest(uninstallRequest, "/api/uninstall", { preset: "Anima 3 Studio" });
+    await removalToast.waitFor({ state: "visible" });
+    await presetsReload;
+    await delay(350);
     assert.equal(requests.some(request => request.path === "/api/shutdown"), false);
     await page.locator("#manage-close").click();
 }
