@@ -252,3 +252,48 @@ class UninstallEndpointTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload, expected)
         uninstall_preset.assert_called_once_with("Pinned")
+
+    def test_uninstall_blocks_install_reservation_until_removal_finishes(self):
+        uninstall_entered = threading.Event()
+        allow_uninstall = threading.Event()
+        request_result = {}
+
+        def blocking_uninstall(_preset_name):
+            uninstall_entered.set()
+            self.assertTrue(allow_uninstall.wait(timeout=2))
+            return {"success": True, "preset": "Pinned", "deleted": []}
+
+        def request_uninstall():
+            request_result["response"] = self.post_uninstall("Pinned")
+
+        with patch("start.uninstall_preset", side_effect=blocking_uninstall):
+            request_thread = threading.Thread(target=request_uninstall)
+            request_thread.start()
+            self.assertTrue(uninstall_entered.wait(timeout=2))
+
+            self.assertFalse(start.get_install_status()["installing"])
+            self.assertFalse(start.cancel_active_install())
+            unexpectedly_reserved = start.reserve_install_slot()
+            if unexpectedly_reserved:
+                start.finish_install_reservation("failed")
+
+            allow_uninstall.set()
+            request_thread.join(timeout=2)
+
+        self.assertFalse(unexpectedly_reserved)
+        self.assertFalse(request_thread.is_alive())
+        self.assertEqual(request_result["response"], (
+            200,
+            {"success": True, "preset": "Pinned", "deleted": []},
+        ))
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation("completed")
+
+    def test_uninstall_exception_releases_operation_reservation(self):
+        with patch("start.uninstall_preset", side_effect=RuntimeError("boom")):
+            status, payload = self.post_uninstall("Pinned")
+
+        self.assertEqual(status, 500)
+        self.assertEqual(payload, {"error": "Erro interno do servidor"})
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation("failed")

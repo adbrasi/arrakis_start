@@ -335,9 +335,9 @@ def load_presets() -> List[Dict]:
 
 # Global tracker for cancellation
 _active_downloader = None
-_install_lock = threading.Lock()
+_operation_mutex = threading.Lock()
+_active_operation: Optional[str] = None
 _install_cancel_event = threading.Event()
-_install_status_lock = threading.Lock()
 _install_status = 'idle'
 _active_install_processes = set()
 _active_install_processes_lock = threading.Lock()
@@ -345,23 +345,44 @@ _active_install_processes_lock = threading.Lock()
 
 def _set_install_status(status: str) -> None:
     global _install_status
-    with _install_status_lock:
-        _install_status = status
+    _install_status = status
+
+
+def _reserve_operation(operation: str) -> bool:
+    """Acquire the one mutable-operation mutex for the named operation."""
+    global _active_operation
+    if not _operation_mutex.acquire(blocking=False):
+        return False
+    _active_operation = operation
+    return True
+
+
+def _release_operation(operation: str) -> bool:
+    """Release the mutable-operation mutex only for its current owner type."""
+    global _active_operation
+    if _active_operation != operation:
+        logger.warning(
+            "Refusing to release %s operation while %r is active",
+            operation,
+            _active_operation,
+        )
+        return False
+    _active_operation = None
+    _operation_mutex.release()
+    return True
 
 
 def get_install_status() -> Dict[str, Any]:
     """Return volatile installation state for the web UI/API."""
-    with _install_status_lock:
-        status = _install_status
     return {
-        'installing': _install_lock.locked(),
-        'install_status': status,
+        'installing': _active_operation == 'install',
+        'install_status': _install_status,
     }
 
 
 def reserve_install_slot() -> bool:
     """Reserve the single installer slot before a background web job starts."""
-    if not _install_lock.acquire(blocking=False):
+    if not _reserve_operation('install'):
         return False
     _install_cancel_event.clear()
     _set_install_status('running')
@@ -372,14 +393,25 @@ def _finish_install_slot(status: str) -> None:
     global _active_downloader
     _active_downloader = None
     _set_install_status(status)
-    if _install_lock.locked():
-        _install_lock.release()
+    _release_operation('install')
 
 
 def finish_install_reservation(status: str = 'failed') -> None:
     """Release a web-reserved slot when setup fails before install_presets()."""
-    if _install_lock.locked():
+    if _active_operation == 'install':
         _finish_install_slot('cancelled' if _install_cancel_event.is_set() else status)
+
+
+@contextlib.contextmanager
+def reserve_uninstall_slot() -> Iterator[bool]:
+    """Hold the shared mutable-operation mutex for one uninstall request."""
+    if not _reserve_operation('uninstall'):
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        _release_operation('uninstall')
 
 
 def _register_install_process(process: subprocess.Popen) -> None:
@@ -428,7 +460,7 @@ def get_active_downloader():
 
 def cancel_active_install(delete_partials: bool = False):
     """Cancel the active installation and optionally delete model partials."""
-    if not _install_lock.locked():
+    if _active_operation != 'install':
         if delete_partials:
             from downloader import cleanup_incomplete_downloads
             cleanup_incomplete_downloads(MODELS_DIR)
@@ -1448,7 +1480,7 @@ def install_presets(
     if not _slot_reserved and not reserve_install_slot():
         logger.error("Já existe uma instalação em andamento")
         return False
-    if _slot_reserved and not _install_lock.locked():
+    if _slot_reserved and _active_operation != 'install':
         logger.error("Installer slot was not reserved")
         return False
 

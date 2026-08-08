@@ -159,7 +159,7 @@ class SageAttentionInstallerTests(unittest.TestCase):
 class PipInstallStreamingTests(unittest.TestCase):
     def tearDown(self):
         start._install_cancel_event.clear()
-        if start._install_lock.locked():
+        if start.get_install_status()['installing']:
             start.finish_install_reservation('failed')
 
     def test_silent_process_emits_heartbeat(self):
@@ -277,7 +277,7 @@ class PipInstallStreamingTests(unittest.TestCase):
 class InstallCoordinatorTests(unittest.TestCase):
     def tearDown(self):
         start._install_cancel_event.clear()
-        if start._install_lock.locked():
+        if start.get_install_status()['installing']:
             start.finish_install_reservation('failed')
 
     def test_only_one_installation_can_be_reserved(self):
