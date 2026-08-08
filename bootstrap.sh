@@ -31,6 +31,19 @@ die() {
     exit 1
 }
 
+# `set -e` kills this script without printing anything, so an unguarded command
+# that fails leaves the operator staring at a shell prompt with no clue which of
+# 1200 lines gave up — a silent exit reads exactly like "it just doesn't work".
+# Name the line and the command before going down. `die` exits rather than
+# failing, so intentional aborts never reach here, and neither do failures inside
+# conditions, `||` chains or `if` tests, where errexit is suspended.
+on_unexpected_error() {
+    local exit_code="$1" line="$2" command="$3"
+    log_error "Bootstrap abortado na linha ${line} (exit ${exit_code}): ${command}"
+    log_error "Isso é uma falha não tratada — reporte o trecho acima."
+}
+trap 'on_unexpected_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
 run_with_progress() {
     local label="$1"
     shift
@@ -589,10 +602,15 @@ detect_driver_max_cuda() {
     # (no nvidia-smi, MIG, "N/A", etc.). This is the driver capability, NOT the
     # toolkit a wheel was built against.
     command -v nvidia-smi >/dev/null 2>&1 || return 0
+    # "Empty" above is a legitimate answer, so this must not FAIL to produce it.
+    # grep exits 1 when the banner carries no "CUDA Version:" (NVML error, MIG,
+    # "N/A"), pipefail promotes that to a failed pipeline, and a caller doing a
+    # plain `var="$(detect_driver_max_cuda)"` under `set -e` then dies silently
+    # mid-deploy. Unreadable is not an error here — it is the empty string.
     nvidia-smi 2>/dev/null \
         | grep -oE 'CUDA Version:[[:space:]]*[0-9]+\.[0-9]+' \
         | grep -oE '[0-9]+\.[0-9]+' \
-        | head -1
+        | head -1 || true
 }
 
 torch_runtime_is_ready() {
@@ -1146,8 +1164,15 @@ main() {
     if [ -f "$COMFY_DIR/requirements.txt" ]; then
         if [ "$COMFY_VENV_CREATED" -eq 1 ] || ! is_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"; then
             log_info "Syncing ComfyUI core requirements..."
+            # No --upgrade: ComfyUI pins torch/torchvision/torchaudio with no
+            # version bound, so "upgrade everything already satisfied" throws away
+            # the driver-selected wheel installed moments earlier and pulls the
+            # newest PyPI build (a CUDA 13 one) in its place — several GB
+            # re-downloaded to undo work, then repaired again further down. The
+            # goal here is only that the dependencies are PRESENT; anything whose
+            # constraint is unsatisfied still gets resolved without the flag.
             run_with_progress "Instalando dependencias core do ComfyUI" \
-                pip_install_into "$COMFY_PYTHON" --upgrade -r "$COMFY_DIR/requirements.txt"
+                pip_install_into "$COMFY_PYTHON" -r "$COMFY_DIR/requirements.txt"
             mark_requirements_synced "$COMFY_DIR/requirements.txt" "$COMFY_REQ_MARKER"
             log_success "ComfyUI core requirements synced"
         else
