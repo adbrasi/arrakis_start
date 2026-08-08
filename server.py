@@ -108,17 +108,20 @@ def _comfy_port(state) -> int:
     return int(recorded) if recorded else COMFY_PORT
 
 
-def _shutdown_runtime():
-    """Cancel active work destructively, then stop ComfyUI."""
-    from start import cancel_active_install
+def _shutdown_runtime(terminate_process: bool = False):
+    """Cancel active installation, then exclusively stop the runtime."""
+    from start import cancel_active_install, reserve_shutdown_slot
     cancel_active_install(delete_partials=True)
 
-    from process_manager import ProcessManager
-    state = _state_manager or get_state_manager()
-    pm = ProcessManager(state)
-    if pm.is_running():
-        logger.info("Stopping ComfyUI before shutdown...")
-        pm.ensure_stopped(port=_comfy_port(state), timeout=15)
+    with reserve_shutdown_slot():
+        from process_manager import ProcessManager
+        state = _state_manager or get_state_manager()
+        pm = ProcessManager(state)
+        if pm.is_running():
+            logger.info("Stopping ComfyUI before shutdown...")
+            pm.ensure_stopped(port=_comfy_port(state), timeout=15)
+        if terminate_process:
+            os.kill(os.getpid(), signal.SIGTERM)
 
 
 class PresetHandler(SimpleHTTPRequestHandler):
@@ -487,8 +490,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
             from start import reserve_uninstall_slot, uninstall_preset
 
-            # Block while an installation is in progress: a parallel uninstall
-            # could delete a file the downloader just wrote (or is writing).
+            # Serialize every mutable preset operation so an install or another
+            # uninstall cannot race this removal.
             with reserve_uninstall_slot() as reserved:
                 if not reserved:
                     self.send_response(409)
@@ -531,10 +534,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     import time
                     time.sleep(0.5)
                     logger.info("Shutdown requested via web UI")
-                    _shutdown_runtime()
+                    _shutdown_runtime(terminate_process=True)
                     logger.info("Arrakis Start shutting down...")
-                    import os, signal
-                    os.kill(os.getpid(), signal.SIGTERM)
                 except Exception as e:
                     logger.error(f"Shutdown thread error: {e}")
                     os._exit(1)

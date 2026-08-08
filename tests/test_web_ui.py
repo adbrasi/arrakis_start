@@ -297,3 +297,69 @@ class UninstallEndpointTests(unittest.TestCase):
         self.assertEqual(payload, {"error": "Erro interno do servidor"})
         self.assertTrue(start.reserve_install_slot())
         start.finish_install_reservation("failed")
+
+    def test_shutdown_waits_for_uninstall_before_stopping_or_terminating(self):
+        events = []
+        uninstall_entered = threading.Event()
+        allow_uninstall = threading.Event()
+        shutdown_started = threading.Event()
+        uninstall_result = {}
+
+        def blocking_uninstall(_preset_name):
+            uninstall_entered.set()
+            self.assertTrue(allow_uninstall.wait(timeout=2))
+            events.append("uninstall-complete")
+            return {"success": True, "preset": "Pinned", "deleted": []}
+
+        def request_uninstall():
+            uninstall_result["response"] = self.post_uninstall("Pinned")
+
+        def record_cancel(*args, **kwargs):
+            result = original_cancel(*args, **kwargs)
+            events.append("cancel-requested")
+            shutdown_started.set()
+            return result
+
+        process_manager = Mock()
+        process_manager.is_running.return_value = True
+        process_manager.ensure_stopped.side_effect = (
+            lambda **_kwargs: events.append("stop") or True
+        )
+        original_cancel = start.cancel_active_install
+
+        with patch("start.uninstall_preset", side_effect=blocking_uninstall), \
+                patch("start.cancel_active_install", side_effect=record_cancel), \
+                patch("downloader.cleanup_incomplete_downloads") as cleanup_partials, \
+                patch.object(server, "_state_manager", object()), \
+                patch("process_manager.ProcessManager", return_value=process_manager), \
+                patch("server.os.kill", side_effect=lambda *_args: events.append("kill")):
+            uninstall_thread = threading.Thread(target=request_uninstall)
+            uninstall_thread.start()
+            self.assertTrue(uninstall_entered.wait(timeout=2))
+
+            shutdown_thread = threading.Thread(
+                target=server._shutdown_runtime,
+                kwargs={"terminate_process": True},
+            )
+            shutdown_thread.start()
+            try:
+                self.assertTrue(shutdown_started.wait(timeout=2))
+                self.assertEqual(events, ["cancel-requested"])
+                cleanup_partials.assert_not_called()
+            finally:
+                allow_uninstall.set()
+                uninstall_thread.join(timeout=2)
+                shutdown_thread.join(timeout=2)
+
+        self.assertFalse(uninstall_thread.is_alive())
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertEqual(uninstall_result["response"], (
+            200,
+            {"success": True, "preset": "Pinned", "deleted": []},
+        ))
+        self.assertEqual(events, [
+            "cancel-requested",
+            "uninstall-complete",
+            "stop",
+            "kill",
+        ])

@@ -306,40 +306,57 @@ class InstallCoordinatorTests(unittest.TestCase):
 
         downloader.cancel.assert_called_once_with(delete_partials=True)
 
-    def test_shutdown_cleans_partials_before_stopping_comfyui(self):
+    def test_shutdown_cancels_install_before_waiting_to_stop_comfyui(self):
         events = []
-
-        class RecordingDownloader:
-            def cancel(self, delete_partials=False):
-                events.append(('cancel', delete_partials))
-
-        # autospec, not a hand-rolled fake: the real signature is
-        # ensure_stopped(port=..., timeout=...), and a fake that omits `port`
-        # silently accepts a caller that forgets it — which is how shutdown came
-        # to target the default 8818 while ComfyUI ran on COMFY_PORT.
-        from unittest.mock import create_autospec
-        from process_manager import ProcessManager
-
-        recording_pm = create_autospec(ProcessManager, instance=True)
+        recording_pm = Mock()
         recording_pm.is_running.return_value = True
+        stop_entered = threading.Event()
+        allow_stop = threading.Event()
 
         def record_stop(port=None, timeout=None):
+            stop_entered.set()
+            self.assertTrue(allow_stop.wait(timeout=2))
             events.append(('stop', timeout))
             return True
 
         recording_pm.ensure_stopped.side_effect = record_stop
 
         self.assertTrue(start.reserve_install_slot())
-        with patch.object(start, '_active_downloader', RecordingDownloader()), \
+        with patch('downloader.cleanup_incomplete_downloads') as cleanup_partials, \
                 patch.object(server, '_state_manager', object()), \
                 patch('process_manager.ProcessManager', return_value=recording_pm):
-            server._shutdown_runtime()
+            shutdown_thread = threading.Thread(target=server._shutdown_runtime)
+            shutdown_thread.start()
+            try:
+                self.assertTrue(start._install_cancel_event.wait(timeout=2))
+                self.assertFalse(stop_entered.wait(timeout=0.2))
+                cleanup_partials.assert_called_once_with(start.MODELS_DIR)
+            finally:
+                start.finish_install_reservation('cancelled')
+                allow_stop.set()
+                shutdown_thread.join(timeout=2)
 
-        self.assertEqual(events, [('cancel', True), ('stop', 15)])
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertEqual(events, [('stop', 15)])
         # And the port is actually passed, so a non-default COMFY_PORT is honored.
         _, stop_kwargs = recording_pm.ensure_stopped.call_args
         self.assertIn('port', stop_kwargs)
         self.assertEqual(stop_kwargs['port'], server.COMFY_PORT)
+
+    def test_shutdown_releases_operation_slot_when_stop_raises(self):
+        process_manager = Mock()
+        process_manager.is_running.return_value = True
+        process_manager.ensure_stopped.side_effect = RuntimeError('stop failed')
+
+        with patch.object(server, '_state_manager', object()), \
+                patch('process_manager.ProcessManager', return_value=process_manager), \
+                patch('server.os.kill') as kill_process:
+            with self.assertRaisesRegex(RuntimeError, 'stop failed'):
+                server._shutdown_runtime(terminate_process=True)
+
+        kill_process.assert_not_called()
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation('failed')
 
 
 class PresetCompletionTests(unittest.TestCase):

@@ -348,10 +348,10 @@ def _set_install_status(status: str) -> None:
     _install_status = status
 
 
-def _reserve_operation(operation: str) -> bool:
+def _reserve_operation(operation: str, blocking: bool = False) -> bool:
     """Acquire the one mutable-operation mutex for the named operation."""
     global _active_operation
-    if not _operation_mutex.acquire(blocking=False):
+    if not _operation_mutex.acquire(blocking=blocking):
         return False
     _active_operation = operation
     return True
@@ -414,6 +414,16 @@ def reserve_uninstall_slot() -> Iterator[bool]:
         _release_operation('uninstall')
 
 
+@contextlib.contextmanager
+def reserve_shutdown_slot() -> Iterator[None]:
+    """Wait for and hold the shared mutex while shutting down the runtime."""
+    _reserve_operation('shutdown', blocking=True)
+    try:
+        yield
+    finally:
+        _release_operation('shutdown')
+
+
 def _register_install_process(process: subprocess.Popen) -> None:
     with _active_install_processes_lock:
         _active_install_processes.add(process)
@@ -461,7 +471,7 @@ def get_active_downloader():
 def cancel_active_install(delete_partials: bool = False):
     """Cancel the active installation and optionally delete model partials."""
     if _active_operation != 'install':
-        if delete_partials:
+        if delete_partials and _active_operation is None:
             from downloader import cleanup_incomplete_downloads
             cleanup_incomplete_downloads(MODELS_DIR)
         return False
