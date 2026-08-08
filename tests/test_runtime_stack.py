@@ -10,6 +10,7 @@ from unittest.mock import Mock, call, patch
 
 import start
 import server
+from state import StateManager
 
 
 class SageAttentionInstallerTests(unittest.TestCase):
@@ -44,6 +45,30 @@ class SageAttentionInstallerTests(unittest.TestCase):
         self.assertEqual(kwargs['env']['HF_TOKEN'], 'secret')
         self.assertEqual(kwargs['env']['SKIP_TORCH_INSTALL'], '1')
         self.assertEqual(kwargs['env']['KEEP_ME'], 'yes')
+
+    def test_sage_failure_uses_launchable_standard_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch('state.STATE_FILE', Path(temp_dir) / 'state.json'), \
+                patch('start._verify_python_import', return_value=True):
+            state = StateManager()
+            result = start._fallback_to_standard_runtime(
+                state, 'wheel unavailable'
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(state.get_runtime_stack(), 'standard')
+
+    def test_sage_failure_remains_fatal_when_torch_is_broken(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch('state.STATE_FILE', Path(temp_dir) / 'state.json'), \
+                patch('start._verify_python_import', return_value=False):
+            state = StateManager()
+            result = start._fallback_to_standard_runtime(
+                state, 'wheel unavailable'
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(state.get_runtime_stack(), 'unknown')
 
     @patch('start.get_state_manager')
     @patch('start._detect_runtime_stack', return_value='standard')

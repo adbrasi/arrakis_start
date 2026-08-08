@@ -1208,6 +1208,23 @@ def _rebuild_sageattention_for_current_torch(
     )
 
 
+def _fallback_to_standard_runtime(state, reason: str) -> bool:
+    """Use the standard runtime when optional SageAttention is unavailable."""
+    logger.warning(f"{reason}. Falling back to the standard PyTorch runtime.")
+    comfy_python = _comfy_python()
+    if not _verify_python_import('torch', python_bin=comfy_python):
+        logger.error(
+            "SageAttention is unavailable and the standard PyTorch runtime "
+            "cannot be imported."
+        )
+        return False
+    state.set_runtime_stack('standard')
+    logger.warning(
+        "SageAttention unavailable; continuing without --use-sage-attention."
+    )
+    return True
+
+
 def configure_runtime_stack(use_sage_attention: bool) -> bool:
     """Configure runtime stack only when SageAttention is explicitly requested."""
     state = get_state_manager()
