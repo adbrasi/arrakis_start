@@ -1,5 +1,7 @@
+import http.client
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -197,3 +199,56 @@ class PresetSerializationTests(unittest.TestCase):
             set(),
         )
         self.assertEqual(result, [])
+
+
+class UninstallEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.PresetHandler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.thread.join()
+
+    def post_uninstall(self, preset):
+        connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        body = json.dumps({"preset": preset})
+        try:
+            connection.request(
+                "POST",
+                "/api/uninstall",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            return response.status, json.loads(response.read().decode())
+        finally:
+            connection.close()
+
+    def test_active_reserved_install_blocks_uninstall_without_downloader(self):
+        self.assertTrue(start.reserve_install_slot())
+        try:
+            with patch("start.get_active_downloader", return_value=None), patch(
+                "start.uninstall_preset", return_value={"success": True}
+            ) as uninstall_preset:
+                status, payload = self.post_uninstall("Pinned")
+        finally:
+            start.finish_install_reservation()
+
+        self.assertEqual(status, 409)
+        self.assertEqual(payload, {
+            "success": False,
+            "error": "Instalação em andamento — aguarde a conclusão antes de remover.",
+        })
+        uninstall_preset.assert_not_called()
+
+    def test_uninstall_without_installation_preserves_success_response(self):
+        expected = {"success": True, "preset": "Pinned", "deleted": []}
+        with patch("start.uninstall_preset", return_value=expected) as uninstall_preset:
+            status, payload = self.post_uninstall("Pinned")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, expected)
+        uninstall_preset.assert_called_once_with("Pinned")

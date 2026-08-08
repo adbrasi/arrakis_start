@@ -485,11 +485,11 @@ class PresetHandler(SimpleHTTPRequestHandler):
 
             logger.info(f"Uninstall request: {preset_name}")
 
-            from start import uninstall_preset, get_active_downloader
+            from start import get_install_status, uninstall_preset
 
             # Block while an installation is in progress: a parallel uninstall
             # could delete a file the downloader just wrote (or is writing).
-            if get_active_downloader() is not None:
+            if get_install_status()['installing']:
                 self.send_response(409)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
