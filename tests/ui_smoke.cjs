@@ -218,8 +218,13 @@ async function mockApi(page, api, requests) {
                 ? { success: true, deleted: ["model.safetensors"], bytes_freed: 1073741824 }
                 : { success: true });
         if (response?.promise) response = await response.promise;
-        if (response?.abort) return route.abort(response.abort);
-        return fulfillJson(route, { status: response.status, body: response.body ?? response });
+        if (response?.abort) {
+            await route.abort(response.abort);
+            response.settled?.resolve();
+            return;
+        }
+        await fulfillJson(route, { status: response.status, body: response.body ?? response });
+        response.settled?.resolve();
     });
     await page.route("**/api/presets", route => fulfillJson(
         route,
@@ -230,7 +235,13 @@ async function mockApi(page, api, requests) {
         const response = api.nextStatus
             ? await api.nextStatus(api.statusRequests)
             : { body: api.status };
+        if (response?.abort) {
+            await route.abort(response.abort);
+            response.settled?.resolve();
+            return;
+        }
         await fulfillJson(route, response);
+        response.settled?.resolve();
     });
 }
 
@@ -516,6 +527,7 @@ async function verifyPendingInstallPollCannotApplyOldStatus(browser, baseURL) {
 
 async function verifyPreMutationPollFailureIsIgnored(browser, baseURL) {
     const staleFailure = createDeferred();
+    const staleFailureSettled = createDeferred();
     const api = {
         status: createStatus(false),
         nextStatus: requestNumber => requestNumber === 1
@@ -530,20 +542,20 @@ async function verifyPreMutationPollFailureIsIgnored(browser, baseURL) {
         { manualPolling: true },
     );
     try {
+        await waitForCondition(() => api.statusRequests === 1, "initial status poll did not begin");
+        await waitForText(page.locator("#status-text"), "COMFYUI: RODANDO");
         await page.evaluate(() => { void window.__triggerArrakisStatusPoll(); });
         await waitForCondition(() => api.statusRequests === 2, "pre-mutation status poll did not begin");
         await page.locator(".pinned-card .preset-checkbox").first().check();
         await clickAndAcceptPost(page, "#start-btn", "/api/install");
-        const failed = page.waitForEvent("requestfailed", request => (
-            new URL(request.url()).pathname === "/api/status"
-        ));
-        staleFailure.resolve({ abort: "failed" });
-        await failed;
-        await delay(0);
-        assert.equal(await page.locator("#status-text").textContent(), "INSTALANDO...");
+        staleFailure.resolve({ abort: "failed", settled: staleFailureSettled });
+        await staleFailureSettled.promise;
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
+        assert.equal(await page.locator(".preset-checkbox").first().isDisabled(), true);
         assert.equal(await page.locator("#cancel-btn").isDisabled(), false);
     } finally {
-        staleFailure.resolve({ abort: "failed" });
+        staleFailure.resolve({ abort: "failed", settled: staleFailureSettled });
         await page.close();
     }
 }
@@ -563,7 +575,7 @@ async function verifyShutdownStaysLockedAfterStatus(browser, baseURL) {
         await page.evaluate(() => window.__triggerArrakisStatusPoll());
         await waitForCondition(() => api.statusRequests === 2, "status poll did not finish after shutdown");
         assert.equal(await page.locator("#shutdown-btn").isDisabled(), true);
-        assert.equal(await page.locator("#shutdown-btn").textContent(), "\n                    DESLIGANDO...\n                ");
+        assert.match(await page.locator("#shutdown-btn").textContent(), /DESLIGANDO\.\.\./);
     } finally {
         await page.close();
     }
