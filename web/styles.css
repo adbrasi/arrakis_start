@@ -162,7 +162,19 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .progress-fill { display: block; width: 0; height: 100%; background: var(--accent); transition: width 180ms ease; }
 
 .activity-block { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 10px; }
-.activity-list { min-height: 80px; overflow: auto; }
+.activity-list {
+    min-height: 80px;
+    overflow: auto;
+    scrollbar-color: var(--text-muted) var(--panel-bg);
+    scrollbar-width: thin;
+}
+.activity-list::-webkit-scrollbar { width: 6px; }
+.activity-list::-webkit-scrollbar-track { background: var(--panel-bg); }
+.activity-list::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    border: 1px solid var(--panel-bg);
+}
+.activity-list::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 .activity-line { margin: 0 0 8px; color: var(--text-secondary); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .activity-line--active { color: var(--text-soft); }
 .activity-line--success { color: var(--installed); }
