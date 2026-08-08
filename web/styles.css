@@ -78,7 +78,9 @@ button:focus-visible, input:focus-visible, a:focus-visible {
     transition: border-color 180ms ease, background-color 180ms ease, opacity 180ms ease;
 }
 .preset-card.selected, .recent-row.selected { border-color: var(--accent); background: #201b2a; }
-.preset-card { min-width: 0; padding: 14px; }
+.preset-card { position: relative; min-width: 0; padding: 14px; }
+.preset-pin { position: absolute; top: 12px; right: 12px; width: 16px; height: 16px; fill: var(--accent-light); pointer-events: none; }
+.pinned-card .preset-select { padding-right: 22px; }
 .preset-select { display: flex; align-items: center; min-width: 0; gap: 9px; cursor: pointer; }
 .preset-name { min-width: 0; color: var(--text); font-size: 17px; line-height: 1.1; }
 .preset-description { min-height: 38px; margin: 12px 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
@@ -171,7 +173,7 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .control-footer button:hover:not(:disabled) { color: var(--text); background: var(--section-bg); }
 .control-footer svg { width: 16px; height: 16px; fill: currentColor; }
 
-.toast-container { position: fixed; right: 18px; bottom: 18px; z-index: 10; display: grid; gap: 8px; max-width: min(360px, calc(100vw - 36px)); }
+.toast-container { position: fixed; right: 18px; bottom: 72px; z-index: 10; display: grid; gap: 8px; max-width: min(360px, calc(100vw - 36px)); }
 .toast { padding: 11px 13px; color: var(--text); background: var(--section-bg); border: 2px solid var(--border); box-shadow: 0 10px 30px #0008; font-size: 11px; }
 .toast.success { border-color: var(--installed); }
 .toast.error { border-color: var(--destructive); }

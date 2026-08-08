@@ -10,12 +10,7 @@ const presets = [
         models_count: 33,
         nodes_count: 37,
         installed: true,
-        workflows: [{
-            label: "Workflow",
-            url: "/api/workflows/anima.json",
-            local: true,
-            file: "anima.json",
-        }],
+        workflows: [{ label: "Workflow", url: "/api/workflows/anima.json", local: true, file: "anima.json" }],
         pinned: true,
         size_gb: 42,
         modified_at: 1786147200,
@@ -55,27 +50,29 @@ const presets = [
     },
 ];
 
-const status = {
-    running: !installing,
-    status: installing ? "starting" : "running",
-    port: 8818,
-    installing,
-    install_status: installing ? "running" : "completed",
-    installed_presets: ["Anima 3 Studio", "Krea 2 Full"],
-    progress: {
-        stages: { models: "fila pronta" },
-        done: 2,
-        total: 6,
-        active: [{
-            filename: "model.safetensors",
-            current: 1073741824,
-            total: 4294967296,
-            speed_bps: 104857600,
-            backend: "xet",
-        }],
-        recent: [{ filename: "vae.safetensors", ok: true }],
-    },
-};
+function createStatus(isInstalling = installing) {
+    return {
+        running: !isInstalling,
+        status: isInstalling ? "starting" : "running",
+        port: 8818,
+        installing: isInstalling,
+        install_status: isInstalling ? "running" : "completed",
+        installed_presets: ["Anima 3 Studio", "Krea 2 Full"],
+        progress: {
+            stages: { models: "fila pronta" },
+            done: 2,
+            total: 6,
+            active: [{
+                filename: "model.safetensors",
+                current: 1073741824,
+                total: 4294967296,
+                speed_bps: 104857600,
+                backend: "xet",
+            }],
+            recent: [{ filename: "vae.safetensors", ok: true }],
+        },
+    };
+}
 
 function delay(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -92,12 +89,27 @@ async function waitForServer() {
     throw new Error("Static UI server did not start on port 8091");
 }
 
-async function mockApi(page) {
-    await page.route("**/api/**", route => route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ success: true }),
-    }));
+function requestRecord(request) {
+    return {
+        path: new URL(request.url()).pathname,
+        method: request.method(),
+        body: request.postData(),
+    };
+}
+
+async function mockApi(page, currentStatus, requests) {
+    page.on("request", request => {
+        if (new URL(request.url()).pathname.startsWith("/api/")) requests.push(requestRecord(request));
+    });
+    await page.route("**/api/**", route => {
+        const path = new URL(route.request().url()).pathname;
+        const response = path === "/api/cancel"
+            ? { success: true, cancelled: true }
+            : path === "/api/uninstall"
+                ? { success: true, deleted: ["model.safetensors"], bytes_freed: 1073741824 }
+                : { success: true };
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(response) });
+    });
     await page.route("**/api/presets", route => route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -106,8 +118,121 @@ async function mockApi(page) {
     await page.route("**/api/status", route => route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(status),
+        body: JSON.stringify(currentStatus),
     }));
+}
+
+async function newAppPage(browser, viewport, currentStatus) {
+    const page = await browser.newPage({ viewport });
+    page.setDefaultTimeout(2000);
+    await page.addInitScript(() => {
+        const nativeSetInterval = window.setInterval.bind(window);
+        window.setInterval = (handler, milliseconds, ...args) => nativeSetInterval(
+            handler,
+            milliseconds === 5000 ? 1000 : milliseconds,
+            ...args,
+        );
+    });
+    const requests = [];
+    const consoleErrors = [];
+    page.on("console", message => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("dialog", dialog => dialog.accept());
+    await mockApi(page, currentStatus, requests);
+    await page.goto("http://127.0.0.1:8091/", { waitUntil: "domcontentloaded" });
+    await page.locator(".pinned-card").first().waitFor({ state: "attached" });
+    return { page, requests, consoleErrors };
+}
+
+async function waitForText(locator, expected) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (await locator.textContent() === expected) return;
+        await delay(50);
+    }
+    assert.equal(await locator.textContent(), expected);
+}
+
+async function clickAndCapturePost(page, selector, path) {
+    const target = page.locator(selector).first();
+    const request = page.waitForRequest(candidate => (
+        new URL(candidate.url()).pathname === path && candidate.method() === "POST"
+    ), { timeout: 8000 });
+    try {
+        await target.click();
+        return requestRecord(await request);
+    } catch (error) {
+        request.catch(() => {});
+        console.error("Missing action request:", path, await target.isDisabled(), await target.textContent());
+        throw error;
+    }
+}
+
+function assertActionRequest(request, path, body = null) {
+    assert.equal(request.path, path);
+    assert.equal(request.method, "POST");
+    assert.equal(request.body, body === null ? null : JSON.stringify(body));
+}
+
+async function verifyLifecycleRequests(page, requests, currentStatus) {
+    await page.locator(".pinned-card .preset-checkbox").first().check();
+    assert.equal(await page.locator("#queue-count").textContent(), "1");
+    assert.equal(await page.locator("#queue-total").textContent(), "42 GB");
+    await page.locator("#extra-flags-input").fill("--disable-xformers --preview-method auto");
+    const installRequest = await clickAndCapturePost(page, "#start-btn", "/api/install");
+    assertActionRequest(installRequest, "/api/install", {
+        presets: ["Anima 3 Studio"],
+        extra_flags: ["--disable-xformers", "--preview-method", "auto"],
+    });
+    currentStatus.installing = true;
+    currentStatus.running = false;
+    currentStatus.status = "starting";
+    currentStatus.install_status = "running";
+    assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
+    assert.equal(await page.locator("#cancel-btn").isVisible(), true);
+
+    const cancelRequest = await clickAndCapturePost(page, "#cancel-btn", "/api/cancel");
+    assertActionRequest(cancelRequest, "/api/cancel");
+    currentStatus.installing = false;
+    currentStatus.running = false;
+    currentStatus.status = "stopped";
+    currentStatus.install_status = "cancelled";
+    await page.locator("#cancel-btn").waitFor({ state: "hidden" });
+    assert.match(await page.locator("#toast-container").textContent(), /Instalação cancelada/);
+
+    assert.equal(await page.locator("#restart-btn").isDisabled(), false);
+    const restartRequest = await clickAndCapturePost(page, "#restart-btn", "/api/restart");
+    assertActionRequest(restartRequest, "/api/restart");
+
+    const shutdownRequest = await clickAndCapturePost(page, "#shutdown-btn", "/api/shutdown");
+    assertActionRequest(shutdownRequest, "/api/shutdown");
+
+    requests.splice(0, requests.length);
+    await page.locator("#manage-btn").click();
+    const uninstallRequest = await clickAndCapturePost(page, ".manage-remove", "/api/uninstall");
+    assertActionRequest(uninstallRequest, "/api/uninstall", { preset: "Anima 3 Studio" });
+    assert.equal(requests.some(request => request.path === "/api/shutdown"), false);
+    await page.locator("#manage-close").click();
+}
+
+async function verifyTerminalState(browser, installStatus, expectedToast) {
+    const currentStatus = createStatus(true);
+    const { page } = await newAppPage(browser, { width: 1000, height: 700 }, currentStatus);
+    try {
+        assert.equal(await page.locator("#cancel-btn").isVisible(), true);
+        currentStatus.installing = false;
+        currentStatus.running = installStatus === "completed_with_failures";
+        currentStatus.status = currentStatus.running ? "running" : "error";
+        currentStatus.install_status = installStatus;
+        await page.locator("#cancel-btn").waitFor({ state: "hidden" });
+        await waitForText(
+            page.locator("#status-text"),
+            currentStatus.running ? "COMFYUI: RODANDO" : "COMFYUI: ERRO",
+        );
+        assert.match(await page.locator("#toast-container").textContent(), expectedToast);
+    } finally {
+        await page.close();
+    }
 }
 
 async function main() {
@@ -119,19 +244,16 @@ async function main() {
     let browser;
     try {
         await waitForServer();
-        browser = await chromium.launch({
-            executablePath: "/usr/bin/google-chrome",
-            headless: true,
-        });
+        browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", headless: true });
 
-        const desktop = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-        const consoleErrors = [];
-        desktop.on("console", message => {
-            if (message.type() === "error") consoleErrors.push(message.text());
-        });
-        await mockApi(desktop);
-        await desktop.goto("http://127.0.0.1:8091/", { waitUntil: "networkidle" });
+        const currentStatus = createStatus();
+        const { page: desktop, requests, consoleErrors } = await newAppPage(
+            browser,
+            { width: 1440, height: 1000 },
+            currentStatus,
+        );
         assert.equal(await desktop.locator(".pinned-card").count(), 3);
+        assert.equal(await desktop.locator(".pinned-card .preset-pin").count(), 3);
 
         const desktopLayout = await desktop.evaluate(() => ({
             columns: getComputedStyle(document.getElementById("pinned-presets"))
@@ -152,9 +274,7 @@ async function main() {
             assert.match(activity, /model\.safetensors/);
             assert.match(activity, /vae\.safetensors/);
         } else {
-            await desktop.locator(".pinned-card .preset-checkbox").first().check();
-            assert.equal(await desktop.locator("#queue-count").textContent(), "1");
-            assert.equal(await desktop.locator("#queue-total").textContent(), "42 GB");
+            await verifyLifecycleRequests(desktop, requests, currentStatus);
         }
 
         await desktop.locator("#manage-btn").click();
@@ -170,13 +290,18 @@ async function main() {
             );
             assert.equal(disabled, true);
         }
-
         assert.deepEqual(consoleErrors, []);
         await desktop.screenshot({ path: "/tmp/arrakis-ui-desktop.png", fullPage: true });
+        await desktop.close();
 
-        const mobile = await browser.newPage({ viewport: { width: 375, height: 812 } });
-        await mockApi(mobile);
-        await mobile.goto("http://127.0.0.1:8091/", { waitUntil: "networkidle" });
+        await verifyTerminalState(browser, "failed", /A instalação falhou/);
+        await verifyTerminalState(browser, "completed_with_failures", /ComfyUI iniciado, mas alguns itens não baixaram/);
+
+        const { page: mobile } = await newAppPage(
+            browser,
+            { width: 375, height: 812 },
+            createStatus(),
+        );
         assert.equal(await mobile.locator(".recent-row").count(), 1);
         const widths = await mobile.evaluate(() => ({
             page: document.documentElement.scrollWidth,
@@ -184,6 +309,7 @@ async function main() {
         }));
         assert.equal(widths.page, widths.viewport);
         await mobile.screenshot({ path: "/tmp/arrakis-ui-mobile.png", fullPage: true });
+        await mobile.close();
     } finally {
         if (browser) await browser.close();
         staticServer.kill("SIGTERM");

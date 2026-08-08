@@ -28,6 +28,17 @@ function createDownloadIcon() {
     return icon;
 }
 
+function createPinIcon() {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.classList.add("preset-pin");
+    icon.setAttribute("viewBox", "0 0 20 20");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "m13.7 2.5 3.8 3.8-2.2 2.2v3.1l1.3 1.3v1.4H11l-5.2 5.2-1.4-1.4 5.2-5.2V7.3h1.4l1.3 1.3h3.1l2.2-2.2-3.8-3.8Z");
+    icon.appendChild(path);
+    return icon;
+}
+
 function formatModifiedDate(timestamp) {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return "--/--";
     return new Intl.DateTimeFormat("pt-BR", {
@@ -76,7 +87,9 @@ function renderPresetCatalog() {
 }
 
 function renderPinnedPreset(preset) {
-    return createPresetEntry(preset, "preset-card pinned-card");
+    const entry = createPresetEntry(preset, "preset-card pinned-card");
+    entry.prepend(createPinIcon());
+    return entry;
 }
 
 function renderRecentPreset(preset) {
