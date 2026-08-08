@@ -1251,26 +1251,43 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
         )
         ok, output_lines = _run_sageattention_installer(comfy_activate)
         if not ok:
-            logger.error("SageAttention installer failed after retries")
             if output_lines:
-                logger.error(f"Last installer lines: {' | '.join(output_lines[-10:])}")
-            return False
+                logger.warning(
+                    f"Last SageAttention installer lines: "
+                    f"{' | '.join(output_lines[-10:])}"
+                )
+            return _fallback_to_standard_runtime(
+                state,
+                "SageAttention installer failed after retries",
+            )
 
         comfy_python = _comfy_python()
-        for package_name in ('torch', 'triton'):
-            if not _verify_python_import(package_name, python_bin=comfy_python):
-                return False
+        if not _verify_python_import('torch', python_bin=comfy_python):
+            return False
+        if not _can_import('triton', python_bin=comfy_python):
+            return _fallback_to_standard_runtime(
+                state,
+                "Triton required by SageAttention is unavailable",
+            )
 
         if not _can_import('sageattention', python_bin=comfy_python):
             ok, output_lines = _rebuild_sageattention_for_current_torch(comfy_activate)
             if not ok:
-                logger.error("SageAttention source rebuild failed")
                 if output_lines:
-                    logger.error(f"Last build lines: {' | '.join(output_lines[-10:])}")
-                return False
+                    logger.warning(
+                        f"Last SageAttention build lines: "
+                        f"{' | '.join(output_lines[-10:])}"
+                    )
+                return _fallback_to_standard_runtime(
+                    state,
+                    "SageAttention source rebuild failed",
+                )
 
-        if not _verify_python_import('sageattention', python_bin=comfy_python):
-            return False
+        if not _can_import('sageattention', python_bin=comfy_python):
+            return _fallback_to_standard_runtime(
+                state,
+                "SageAttention cannot be imported after installation",
+            )
 
         state.set_runtime_stack('sageattention')
         logger.info("✓ SageAttention runtime stack configured")
@@ -1458,10 +1475,10 @@ def install_presets(
 def _install_presets_impl(preset_names: List[str], include_base: bool = True) -> bool:
     """Install selected presets with smart skip-existing and parallelism.
 
-    Returns True only when everything requested actually landed. A failed
-    download batch, a failed custom node, or a SageAttention runtime that no
-    longer imports is a failed install — the caller (web UI / CLI) must never be
-    told a half-installed pod is ready.
+    Returns a precise install outcome. SageAttention is an optional capability:
+    when it is unavailable, a functional standard PyTorch runtime remains
+    launchable. Only a broken base runtime or fatal local configuration error
+    blocks ComfyUI; missing artifacts remain resumable installation failures.
     """
     from downloader import DownloadManager
     state = get_state_manager()
@@ -1763,20 +1780,17 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
 def _revalidate_sageattention_runtime(state) -> bool:
     """Confirm the SageAttention wheel still imports after all pip work.
 
-    Returns False (and downgrades the state marker) when it does not, so the
-    next run rebuilds instead of trusting a stale 'sageattention' marker.
+    A lost optional SageAttention capability falls back to the standard runtime.
+    Only a standard PyTorch runtime that also cannot import blocks launch.
     """
     if state.get_runtime_stack() != 'sageattention':
         return True
     if _can_import('sageattention', python_bin=_comfy_python()):
         return True
-    logger.error(
-        "sageattention deixou de importar após os comandos pip/requirements "
-        "(provavelmente o torch foi substituído). Marcando runtime como 'standard' "
-        "para reconstruir na próxima execução."
+    return _fallback_to_standard_runtime(
+        state,
+        "SageAttention stopped importing after preset pip or node requirements",
     )
-    state.set_runtime_stack('standard')
-    return False
 
 
 def _record_installed_models(state, models: List[Dict[str, Any]]) -> None:

@@ -70,10 +70,60 @@ class SageAttentionInstallerTests(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(state.get_runtime_stack(), 'unknown')
 
+    def test_failed_installer_does_not_block_preset_or_persist_sage_flag(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch('state.STATE_FILE', Path(temp_dir) / 'state.json'):
+            state = StateManager()
+            state.add_preset('Video Preset')
+            with patch('start.get_state_manager', return_value=state), \
+                    patch('start._detect_runtime_stack', return_value='unknown'), \
+                    patch('start._verify_python_import', return_value=True), \
+                    patch(
+                        'start._run_sageattention_installer',
+                        return_value=(False, ['ABI mismatch']),
+                    ):
+                result = start.configure_runtime_stack(use_sage_attention=True)
+            start._persist_comfyui_flags(
+                state,
+                {'Video Preset': {'comfyui_flags': []}},
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(state.get_runtime_stack(), 'standard')
+        self.assertEqual(state.get_comfyui_flags(), [])
+
+    def test_failed_installer_blocks_when_standard_runtime_is_broken(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch('state.STATE_FILE', Path(temp_dir) / 'state.json'):
+            state = StateManager()
+            with patch('start.get_state_manager', return_value=state), \
+                    patch('start._detect_runtime_stack', return_value='unknown'), \
+                    patch('start._verify_python_import', return_value=False), \
+                    patch(
+                        'start._run_sageattention_installer',
+                        return_value=(False, ['ABI mismatch']),
+                    ):
+                result = start.configure_runtime_stack(use_sage_attention=True)
+
+        self.assertFalse(result)
+        self.assertEqual(state.get_runtime_stack(), 'unknown')
+
+    def test_post_install_sage_loss_falls_back_without_blocking(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch('state.STATE_FILE', Path(temp_dir) / 'state.json'):
+            state = StateManager()
+            state.set_runtime_stack('sageattention')
+            with patch('start._can_import', return_value=False), \
+                    patch('start._verify_python_import', return_value=True):
+                result = start._revalidate_sageattention_runtime(state)
+
+        self.assertTrue(result)
+        self.assertEqual(state.get_runtime_stack(), 'standard')
+
     @patch('start.get_state_manager')
     @patch('start._detect_runtime_stack', return_value='standard')
     @patch('start._verify_python_import', return_value=True)
-    @patch('start._can_import', side_effect=[False])
+    @patch('start._can_import', side_effect=[True, False, True])
     @patch('start._rebuild_sageattention_for_current_torch', return_value=(True, ['rebuilt']))
     @patch('start._run_sageattention_installer', return_value=(True, ['installed']))
     def test_runtime_rebuilds_when_prebuilt_wheel_cannot_import(
@@ -92,17 +142,16 @@ class SageAttentionInstallerTests(unittest.TestCase):
 
         installer.assert_called_once()
         rebuild.assert_called_once()
-        can_import.assert_called_once_with(
-            'sageattention',
-            python_bin=start._comfy_python()
-        )
         self.assertEqual(
-            verify_import.call_args_list,
+            can_import.call_args_list,
             [
-                call('torch', python_bin=start._comfy_python()),
                 call('triton', python_bin=start._comfy_python()),
                 call('sageattention', python_bin=start._comfy_python()),
-            ]
+                call('sageattention', python_bin=start._comfy_python()),
+            ],
+        )
+        verify_import.assert_called_once_with(
+            'torch', python_bin=start._comfy_python()
         )
         state.set_runtime_stack.assert_any_call('sageattention')
 
