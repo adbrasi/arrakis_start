@@ -6,6 +6,7 @@ const state = {
     installedNames: [],
     lastProgress: null,
     statusReachable: true,
+    isShuttingDown: false,
 };
 
 let statusPollTimer = null;
@@ -15,6 +16,7 @@ const statusPolling = {
     requestId: 0,
     latestAppliedRequestId: 0,
     lifecycleGeneration: 0,
+    pendingLifecycleMutations: 0,
     restartRestoreTimer: null,
 };
 
@@ -280,10 +282,11 @@ async function pollStatus() {
     if (statusPolling.inFlight) return;
     const requestId = ++statusPolling.requestId;
     const lifecycleGeneration = statusPolling.lifecycleGeneration;
+    const beganDuringLifecycleMutation = statusPolling.pendingLifecycleMutations > 0;
     statusPolling.inFlight = true;
     try {
         const response = await fetch("/api/status");
-        if (lifecycleGeneration !== statusPolling.lifecycleGeneration) return;
+        if (!canApplyStatusPoll(lifecycleGeneration, beganDuringLifecycleMutation)) return;
         if (!response.ok) {
             if (requestId >= statusPolling.latestAppliedRequestId) {
                 statusPolling.latestAppliedRequestId = requestId;
@@ -292,12 +295,13 @@ async function pollStatus() {
             return;
         }
         const data = await response.json();
-        if (lifecycleGeneration !== statusPolling.lifecycleGeneration) return;
+        if (!canApplyStatusPoll(lifecycleGeneration, beganDuringLifecycleMutation)) return;
         if (requestId >= statusPolling.latestAppliedRequestId) {
             statusPolling.latestAppliedRequestId = requestId;
             updateStatusUI(data, { authoritative: true });
         }
     } catch {
+        if (!canApplyStatusPoll(lifecycleGeneration, beganDuringLifecycleMutation)) return;
         if (requestId >= statusPolling.latestAppliedRequestId) {
             statusPolling.latestAppliedRequestId = requestId;
             updateStatusUI({ status: "unreachable" }, { authoritative: false });
@@ -307,8 +311,27 @@ async function pollStatus() {
     }
 }
 
-function invalidateStatusForLifecycleMutation() {
+function canApplyStatusPoll(lifecycleGeneration, beganDuringLifecycleMutation) {
+    return !beganDuringLifecycleMutation
+        && statusPolling.pendingLifecycleMutations === 0
+        && lifecycleGeneration === statusPolling.lifecycleGeneration;
+}
+
+function beginLifecycleMutation() {
     statusPolling.lifecycleGeneration += 1;
+    statusPolling.pendingLifecycleMutations += 1;
+}
+
+function settleLifecycleMutation() {
+    statusPolling.lifecycleGeneration += 1;
+    statusPolling.pendingLifecycleMutations = Math.max(0, statusPolling.pendingLifecycleMutations - 1);
+}
+
+function setShuttingDown(isShuttingDown) {
+    state.isShuttingDown = isShuttingDown;
+    const button = document.getElementById("shutdown-btn");
+    button.disabled = isShuttingDown;
+    button.lastChild.textContent = isShuttingDown ? " DESLIGANDO..." : " DESLIGAR";
 }
 
 function updateStatusUI(data, { authoritative } = { authoritative: true }) {
@@ -370,7 +393,7 @@ function updateStatusUI(data, { authoritative } = { authoritative: true }) {
     }
 
     const controlsLocked = state.isInstalling || !state.statusReachable;
-    shutdownButton.disabled = false;
+    shutdownButton.disabled = state.isShuttingDown;
     manageButton.disabled = controlsLocked;
     flagsInput.disabled = controlsLocked;
 
@@ -515,7 +538,7 @@ async function cancelInstall() {
     const button = document.getElementById("cancel-btn");
     button.disabled = true;
     try {
-        invalidateStatusForLifecycleMutation();
+        beginLifecycleMutation();
         const response = await fetch("/api/cancel", { method: "POST" });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) {
@@ -529,13 +552,14 @@ async function cancelInstall() {
     } catch {
         showToast("Falha ao solicitar cancelamento.", "error");
     } finally {
+        settleLifecycleMutation();
         button.disabled = false;
     }
 }
 
 async function startWithPresets() {
     if (state.selectedNames.length === 0 || state.isInstalling || !state.statusReachable) return;
-    invalidateStatusForLifecycleMutation();
+    beginLifecycleMutation();
     state.isInstalling = true;
     renderPresetCatalog();
     renderQueue();
@@ -555,8 +579,10 @@ async function startWithPresets() {
             const result = await response.json().catch(() => ({}));
             throw new Error(result.error || "Falha na requisição de instalação");
         }
+        settleLifecycleMutation();
         showToast("Instalação iniciada! ComfyUI será iniciado quando estiver pronto.", "success");
     } catch (error) {
+        settleLifecycleMutation();
         console.error("Erro na instalação:", error);
         state.isInstalling = false;
         renderPresetCatalog();
@@ -574,12 +600,13 @@ async function restartComfyUI() {
     button.disabled = true;
     showToast("Reiniciando ComfyUI...", "info");
     try {
-        invalidateStatusForLifecycleMutation();
+        beginLifecycleMutation();
         const response = await fetch("/api/restart", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
         });
         if (!response.ok) throw new Error("Falha no restart");
+        settleLifecycleMutation();
         showToast("Reiniciando... aguarde o ComfyUI voltar.", "success");
         setStatusPollingCadence(2000, true);
         if (statusPolling.restartRestoreTimer) clearTimeout(statusPolling.restartRestoreTimer);
@@ -588,6 +615,7 @@ async function restartComfyUI() {
             setStatusPollingCadence(5000, true);
         }, 30000);
     } catch (error) {
+        settleLifecycleMutation();
         console.error("Erro no restart:", error);
         state.isRestarting = false;
         button.disabled = false;
@@ -596,20 +624,22 @@ async function restartComfyUI() {
 }
 
 async function shutdownArrakis() {
+    if (state.isShuttingDown) return;
     if (!confirm("Desligar o Arrakis Start e o ComfyUI? Downloads incompletos de modelos serão apagados.")) return;
+    setShuttingDown(true);
+    beginLifecycleMutation();
     try {
-        invalidateStatusForLifecycleMutation();
         const response = await fetch("/api/shutdown", { method: "POST" });
         if (!response.ok) {
+            setShuttingDown(false);
             showToast("Falha ao desligar.", "error");
             return;
         }
-        const button = document.getElementById("shutdown-btn");
-        button.disabled = true;
-        button.lastChild.textContent = " DESLIGANDO...";
         showToast("Arrakis Start desligando...", "success");
     } catch {
         showToast("Arrakis Start desligado.", "success");
+    } finally {
+        settleLifecycleMutation();
     }
 }
 

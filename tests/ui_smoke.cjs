@@ -1,8 +1,11 @@
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
+const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
 const { chromium } = require("playwright");
 
 const installing = process.env.UI_INSTALLING === "1";
+const webRoot = path.resolve(__dirname, "..", "web");
 const presets = [
     {
         name: "Anima 3 Studio",
@@ -74,19 +77,117 @@ function createStatus(isInstalling = installing) {
     };
 }
 
-function delay(milliseconds) {
-    return new Promise(resolve => setTimeout(resolve, milliseconds));
+async function verifySuiteStaticServer(suiteServer) {
+    const page = await fetch(new URL("/", suiteServer.baseURL));
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get("content-type") || "", /text\/html/);
+
+    const script = await fetch(new URL("/app.js", suiteServer.baseURL));
+    assert.equal(script.status, 200);
+    assert.match(script.headers.get("content-type") || "", /javascript/);
+
+    const escaped = await fetch(new URL("/%2e%2e/%2e%2e/etc/passwd", suiteServer.baseURL));
+    assert.equal(escaped.status, 404);
 }
 
-async function waitForServer() {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-        try {
-            const response = await fetch("http://127.0.0.1:8091/");
-            if (response.ok) return;
-        } catch {}
-        await delay(100);
+function staticContentType(filePath) {
+    switch (path.extname(filePath).toLowerCase()) {
+        case ".css": return "text/css; charset=utf-8";
+        case ".html": return "text/html; charset=utf-8";
+        case ".js": return "text/javascript; charset=utf-8";
+        case ".svg": return "image/svg+xml";
+        default: return "application/octet-stream";
     }
-    throw new Error("Static UI server did not start on port 8091");
+}
+
+function sendStaticError(response, statusCode) {
+    response.statusCode = statusCode;
+    response.end();
+}
+
+async function serveStaticFile(request, response) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+        response.setHeader("Allow", "GET, HEAD");
+        sendStaticError(response, 405);
+        return;
+    }
+
+    let pathname;
+    try {
+        pathname = decodeURIComponent(new URL(request.url, "http://127.0.0.1").pathname);
+    } catch {
+        sendStaticError(response, 400);
+        return;
+    }
+    const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+    const filePath = path.resolve(webRoot, relativePath);
+    if (filePath !== webRoot && !filePath.startsWith(`${webRoot}${path.sep}`)) {
+        sendStaticError(response, 404);
+        return;
+    }
+
+    let stat;
+    try {
+        stat = await fs.promises.stat(filePath);
+    } catch {
+        sendStaticError(response, 404);
+        return;
+    }
+    if (!stat.isFile()) {
+        sendStaticError(response, 404);
+        return;
+    }
+
+    response.statusCode = 200;
+    response.setHeader("Content-Type", staticContentType(filePath));
+    response.setHeader("Content-Length", stat.size);
+    if (request.method === "HEAD") {
+        response.end();
+        return;
+    }
+    fs.createReadStream(filePath).on("error", () => {
+        if (!response.headersSent) sendStaticError(response, 500);
+        else response.destroy();
+    }).pipe(response);
+}
+
+async function createStaticServer() {
+    const connections = new Set();
+    const server = http.createServer((request, response) => {
+        void serveStaticFile(request, response);
+    });
+    server.on("connection", socket => {
+        connections.add(socket);
+        socket.on("close", () => connections.delete(socket));
+    });
+    await new Promise((resolve, reject) => {
+        const onError = error => {
+            server.off("listening", onListening);
+            reject(error);
+        };
+        const onListening = () => {
+            server.off("error", onError);
+            resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(0, "127.0.0.1");
+    });
+    const address = server.address();
+    assert.ok(address && typeof address !== "string", "suite server did not expose a TCP address");
+    return {
+        baseURL: `http://127.0.0.1:${address.port}`,
+        async close() {
+            for (const socket of connections) socket.destroy();
+            await new Promise((resolve, reject) => {
+                server.close(error => error ? reject(error) : resolve());
+            });
+        },
+    };
+}
+
+function delay(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 function requestRecord(request) {
@@ -109,13 +210,15 @@ async function mockApi(page, api, requests) {
     page.on("request", request => {
         if (new URL(request.url()).pathname.startsWith("/api/")) requests.push(requestRecord(request));
     });
-    await page.route("**/api/**", route => {
+    await page.route("**/api/**", async route => {
         const path = new URL(route.request().url()).pathname;
-        const response = api.actionResponses?.[path] ?? (path === "/api/cancel"
+        let response = api.actionResponses?.[path] ?? (path === "/api/cancel"
             ? { success: true, cancelled: true }
             : path === "/api/uninstall"
                 ? { success: true, deleted: ["model.safetensors"], bytes_freed: 1073741824 }
                 : { success: true });
+        if (response?.promise) response = await response.promise;
+        if (response?.abort) return route.abort(response.abort);
         return fulfillJson(route, { status: response.status, body: response.body ?? response });
     });
     await page.route("**/api/presets", route => fulfillJson(
@@ -131,17 +234,26 @@ async function mockApi(page, api, requests) {
     });
 }
 
-async function newAppPage(browser, viewport, api, options = {}) {
+async function newAppPage(browser, baseURL, viewport, api, options = {}) {
     const page = await browser.newPage({ viewport });
     page.setDefaultTimeout(2000);
-    await page.addInitScript(() => {
+    await page.addInitScript(({ manualPolling, pollInterval }) => {
         const nativeSetInterval = window.setInterval.bind(window);
         window.setInterval = (handler, milliseconds, ...args) => nativeSetInterval(
             handler,
-            milliseconds === 5000 ? 500 : milliseconds,
+            milliseconds === 5000 ? pollInterval : milliseconds,
             ...args,
         );
-    });
+        if (manualPolling) {
+            window.setInterval = (handler, milliseconds, ...args) => {
+                if (milliseconds === 5000) {
+                    window.__triggerArrakisStatusPoll = handler;
+                    return 1;
+                }
+                return nativeSetInterval(handler, milliseconds, ...args);
+            };
+        }
+    }, { manualPolling: Boolean(options.manualPolling), pollInterval: options.pollInterval ?? 500 });
     const requests = [];
     const consoleErrors = [];
     page.on("console", message => {
@@ -149,7 +261,7 @@ async function newAppPage(browser, viewport, api, options = {}) {
     });
     page.on("dialog", dialog => dialog.accept());
     await mockApi(page, api, requests);
-    await page.goto("http://127.0.0.1:8091/", { waitUntil: "domcontentloaded" });
+    await page.goto(new URL("/", baseURL).href, { waitUntil: "domcontentloaded" });
     await page.locator(options.readySelector ?? ".pinned-card").first().waitFor({ state: "attached" });
     return { page, requests, consoleErrors };
 }
@@ -175,6 +287,15 @@ async function clickAndCapturePost(page, selector, path) {
         console.error("Missing action request:", path, await target.isDisabled(), await target.textContent());
         throw error;
     }
+}
+
+async function clickAndAcceptPost(page, selector, path) {
+    const response = page.waitForResponse(candidate => (
+        new URL(candidate.url()).pathname === path && candidate.request().method() === "POST"
+    ), { timeout: 8000 });
+    const request = await clickAndCapturePost(page, selector, path);
+    await response;
+    return request;
 }
 
 function assertActionRequest(request, path, body = null) {
@@ -215,15 +336,15 @@ async function verifyLifecycleRequests(page, requests, currentStatus) {
     assert.equal(await page.locator("#queue-count").textContent(), "1");
     assert.equal(await page.locator("#queue-total").textContent(), "42 GB");
     await page.locator("#extra-flags-input").fill("--disable-xformers --preview-method auto");
-    currentStatus.installing = true;
-    currentStatus.running = false;
-    currentStatus.status = "starting";
-    currentStatus.install_status = "running";
-    const installRequest = await clickAndCapturePost(page, "#start-btn", "/api/install");
+    const installRequest = await clickAndAcceptPost(page, "#start-btn", "/api/install");
     assertActionRequest(installRequest, "/api/install", {
         presets: ["Anima 3 Studio"],
         extra_flags: ["--disable-xformers", "--preview-method", "auto"],
     });
+    currentStatus.installing = true;
+    currentStatus.running = false;
+    currentStatus.status = "starting";
+    currentStatus.install_status = "running";
     assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
     assert.equal(await page.locator("#cancel-btn").isVisible(), true);
 
@@ -261,9 +382,9 @@ async function verifyLifecycleRequests(page, requests, currentStatus) {
     await page.locator("#manage-close").click();
 }
 
-async function verifyTerminalState(browser, installStatus, expectedToast) {
+async function verifyTerminalState(browser, baseURL, installStatus, expectedToast) {
     const currentStatus = createStatus(true);
-    const { page } = await newAppPage(browser, { width: 1000, height: 700 }, { status: currentStatus });
+    const { page } = await newAppPage(browser, baseURL, { width: 1000, height: 700 }, { status: currentStatus });
     try {
         assert.equal(await page.locator("#cancel-btn").isVisible(), true);
         currentStatus.installing = false;
@@ -281,7 +402,7 @@ async function verifyTerminalState(browser, installStatus, expectedToast) {
     }
 }
 
-async function verifyUnreachableInstallLock(browser) {
+async function verifyUnreachableInstallLock(browser, baseURL) {
     const activeStatus = createStatus(true);
     const api = {
         status: activeStatus,
@@ -289,7 +410,7 @@ async function verifyUnreachableInstallLock(browser) {
             ? { body: activeStatus }
             : { status: 503, body: { error: "status offline" } },
     };
-    const { page } = await newAppPage(browser, { width: 1024, height: 760 }, api);
+    const { page } = await newAppPage(browser, baseURL, { width: 1024, height: 760 }, api);
     try {
         assert.equal(await page.locator("#cancel-btn").isVisible(), true);
         await waitForText(page.locator("#status-text"), "SERVIDOR INACESSÍVEL");
@@ -304,7 +425,7 @@ async function verifyUnreachableInstallLock(browser) {
     }
 }
 
-async function verifySerializedPolling(browser) {
+async function verifySerializedPolling(browser, baseURL) {
     const delayedStatus = createDeferred();
     const initialStatus = createStatus(true);
     const api = {
@@ -313,7 +434,7 @@ async function verifySerializedPolling(browser) {
             ? { body: initialStatus }
             : delayedStatus.promise,
     };
-    const { page } = await newAppPage(browser, { width: 1024, height: 760 }, api);
+    const { page } = await newAppPage(browser, baseURL, { width: 1024, height: 760 }, api);
     try {
         await waitForCondition(() => api.statusRequests === 2, "second status poll did not begin");
         await delay(420);
@@ -327,7 +448,7 @@ async function verifySerializedPolling(browser) {
     }
 }
 
-async function verifyLifecycleMutationInvalidatesOlderStatus(browser) {
+async function verifyLifecycleMutationInvalidatesOlderStatus(browser, baseURL) {
     const preInstallStatus = createDeferred();
     const afterInstallStatus = createStatus(true);
     const api = {
@@ -338,7 +459,7 @@ async function verifyLifecycleMutationInvalidatesOlderStatus(browser) {
             return { body: afterInstallStatus };
         },
     };
-    const { page } = await newAppPage(browser, { width: 1024, height: 760 }, api);
+    const { page } = await newAppPage(browser, baseURL, { width: 1024, height: 760 }, api);
     try {
         await waitForCondition(() => api.statusRequests === 2, "pre-install status poll did not begin");
         await page.locator(".pinned-card .preset-checkbox").first().check();
@@ -354,14 +475,108 @@ async function verifyLifecycleMutationInvalidatesOlderStatus(browser) {
     }
 }
 
-async function verifyCancelError(browser) {
+async function verifyPendingInstallPollCannotApplyOldStatus(browser, baseURL) {
+    const installAcceptance = createDeferred();
+    const afterInstallStatus = createStatus(true);
+    const api = {
+        status: createStatus(false),
+        actionResponses: { "/api/install": { promise: installAcceptance.promise } },
+        nextStatus: requestNumber => requestNumber === 1
+            ? { body: createStatus(false) }
+            : { body: requestNumber === 2 ? createStatus(false) : afterInstallStatus },
+    };
+    const { page } = await newAppPage(
+        browser,
+        baseURL,
+        { width: 1024, height: 760 },
+        api,
+        { manualPolling: true },
+    );
+    try {
+        await page.locator(".pinned-card .preset-checkbox").first().check();
+        const accepted = page.waitForResponse(response => (
+            new URL(response.url()).pathname === "/api/install"
+            && response.request().method() === "POST"
+        ));
+        await clickAndCapturePost(page, "#start-btn", "/api/install");
+        await page.evaluate(() => window.__triggerArrakisStatusPoll());
+        await waitForCondition(() => api.statusRequests === 2, "status poll did not begin during install POST");
+        installAcceptance.resolve({ body: { success: true } });
+        await accepted;
+        await page.evaluate(() => window.__triggerArrakisStatusPoll());
+        await waitForCondition(() => api.statusRequests === 3, "post-acceptance status poll did not begin");
+        assert.equal(await page.locator("#queue-count").textContent(), "1");
+        assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
+        assert.equal(await page.locator("#cancel-btn").isVisible(), true);
+    } finally {
+        installAcceptance.resolve({ body: { success: true } });
+        await page.close();
+    }
+}
+
+async function verifyPreMutationPollFailureIsIgnored(browser, baseURL) {
+    const staleFailure = createDeferred();
+    const api = {
+        status: createStatus(false),
+        nextStatus: requestNumber => requestNumber === 1
+            ? { body: createStatus(false) }
+            : staleFailure.promise,
+    };
+    const { page } = await newAppPage(
+        browser,
+        baseURL,
+        { width: 1024, height: 760 },
+        api,
+        { manualPolling: true },
+    );
+    try {
+        await page.evaluate(() => { void window.__triggerArrakisStatusPoll(); });
+        await waitForCondition(() => api.statusRequests === 2, "pre-mutation status poll did not begin");
+        await page.locator(".pinned-card .preset-checkbox").first().check();
+        await clickAndAcceptPost(page, "#start-btn", "/api/install");
+        const failed = page.waitForEvent("requestfailed", request => (
+            new URL(request.url()).pathname === "/api/status"
+        ));
+        staleFailure.resolve({ abort: "failed" });
+        await failed;
+        await delay(0);
+        assert.equal(await page.locator("#status-text").textContent(), "INSTALANDO...");
+        assert.equal(await page.locator("#cancel-btn").isDisabled(), false);
+    } finally {
+        staleFailure.resolve({ abort: "failed" });
+        await page.close();
+    }
+}
+
+async function verifyShutdownStaysLockedAfterStatus(browser, baseURL) {
+    const status = createStatus(true);
+    const api = { status };
+    const { page } = await newAppPage(
+        browser,
+        baseURL,
+        { width: 1024, height: 760 },
+        api,
+        { manualPolling: true },
+    );
+    try {
+        await clickAndAcceptPost(page, "#shutdown-btn", "/api/shutdown");
+        await page.evaluate(() => window.__triggerArrakisStatusPoll());
+        await waitForCondition(() => api.statusRequests === 2, "status poll did not finish after shutdown");
+        assert.equal(await page.locator("#shutdown-btn").isDisabled(), true);
+        assert.equal(await page.locator("#shutdown-btn").textContent(), "\n                    DESLIGANDO...\n                ");
+    } finally {
+        await page.close();
+    }
+}
+
+async function verifyCancelError(browser, baseURL) {
     const api = {
         status: createStatus(true),
         actionResponses: {
             "/api/cancel": { status: 409, body: { error: "Cancelamento não aceito" } },
         },
     };
-    const { page } = await newAppPage(browser, { width: 1024, height: 760 }, api);
+    const { page } = await newAppPage(browser, baseURL, { width: 1024, height: 760 }, api);
     try {
         await clickAndCapturePost(page, "#cancel-btn", "/api/cancel");
         await page.locator("#toast-container .toast.error").filter({
@@ -373,9 +588,10 @@ async function verifyCancelError(browser) {
     }
 }
 
-async function verifyEmptyAndErrorStates(browser) {
+async function verifyEmptyAndErrorStates(browser, baseURL) {
     const empty = await newAppPage(
         browser,
+        baseURL,
         { width: 768, height: 760 },
         { status: createStatus(), presets: [] },
         { readySelector: ".catalog-empty" },
@@ -388,6 +604,7 @@ async function verifyEmptyAndErrorStates(browser) {
 
     const failed = await newAppPage(
         browser,
+        baseURL,
         { width: 768, height: 760 },
         { status: createStatus(), presetsResponse: { status: 500, body: { error: "preset failure" } } },
         { readySelector: "#toast-container .toast.error" },
@@ -399,9 +616,9 @@ async function verifyEmptyAndErrorStates(browser) {
     }
 }
 
-async function verifyResponsiveAccessibility(browser) {
+async function verifyResponsiveAccessibility(browser, baseURL) {
     for (const width of [375, 768, 1024, 1440]) {
-        const { page } = await newAppPage(browser, { width, height: 860 }, { status: createStatus() });
+        const { page } = await newAppPage(browser, baseURL, { width, height: 860 }, { status: createStatus() });
         try {
             const dimensions = await page.evaluate(() => ({
                 page: document.documentElement.scrollWidth,
@@ -471,7 +688,7 @@ async function verifyResponsiveAccessibility(browser) {
         }
     }
 
-    const reducedMotion = await newAppPage(browser, { width: 768, height: 760 }, { status: createStatus() });
+    const reducedMotion = await newAppPage(browser, baseURL, { width: 768, height: 760 }, { status: createStatus() });
     try {
         await reducedMotion.page.emulateMedia({ reducedMotion: "reduce" });
         const transitionDuration = await reducedMotion.page.locator("#progress-fill").evaluate(
@@ -484,20 +701,17 @@ async function verifyResponsiveAccessibility(browser) {
 }
 
 async function main() {
-    const staticServer = spawn(
-        "python3",
-        ["-m", "http.server", "8091", "--directory", "web"],
-        { stdio: "ignore" },
-    );
+    const staticServer = await createStaticServer();
     let browser;
     try {
-        await waitForServer();
+        await verifySuiteStaticServer(staticServer);
         browser = await chromium.launch({ executablePath: "/usr/bin/google-chrome", headless: true });
 
         const currentStatus = createStatus();
         const api = { status: currentStatus };
         const { page: desktop, requests, consoleErrors } = await newAppPage(
             browser,
+            staticServer.baseURL,
             { width: 1440, height: 1000 },
             api,
         );
@@ -556,18 +770,22 @@ async function main() {
         await desktop.close();
 
         if (!installing) {
-            await verifyTerminalState(browser, "failed", /A instalação falhou/);
-            await verifyTerminalState(browser, "completed_with_failures", /ComfyUI iniciado, mas alguns itens não baixaram/);
-            await verifyUnreachableInstallLock(browser);
-            await verifySerializedPolling(browser);
-            await verifyLifecycleMutationInvalidatesOlderStatus(browser);
-            await verifyCancelError(browser);
-            await verifyEmptyAndErrorStates(browser);
-            await verifyResponsiveAccessibility(browser);
+            await verifyTerminalState(browser, staticServer.baseURL, "failed", /A instalação falhou/);
+            await verifyTerminalState(browser, staticServer.baseURL, "completed_with_failures", /ComfyUI iniciado, mas alguns itens não baixaram/);
+            await verifyUnreachableInstallLock(browser, staticServer.baseURL);
+            await verifySerializedPolling(browser, staticServer.baseURL);
+            await verifyLifecycleMutationInvalidatesOlderStatus(browser, staticServer.baseURL);
+            await verifyPendingInstallPollCannotApplyOldStatus(browser, staticServer.baseURL);
+            await verifyPreMutationPollFailureIsIgnored(browser, staticServer.baseURL);
+            await verifyShutdownStaysLockedAfterStatus(browser, staticServer.baseURL);
+            await verifyCancelError(browser, staticServer.baseURL);
+            await verifyEmptyAndErrorStates(browser, staticServer.baseURL);
+            await verifyResponsiveAccessibility(browser, staticServer.baseURL);
         }
 
         const { page: mobile } = await newAppPage(
             browser,
+            staticServer.baseURL,
             { width: 375, height: 812 },
             { status: createStatus() },
         );
@@ -582,7 +800,7 @@ async function main() {
         await mobile.close();
     } finally {
         if (browser) await browser.close();
-        staticServer.kill("SIGTERM");
+        await staticServer.close();
     }
 }
 
