@@ -10,8 +10,8 @@
     --text: #eae6f2;
     --text-secondary: #87809c;
     --text-soft: #b0a9c4;
-    --text-muted: #6b6480;
-    --placeholder: #544e68;
+    --text-muted: #aaa3bc;
+    --placeholder: #b0a9c4;
     --accent: #a284f2;
     --accent-light: #c4b2f7;
     --online: #7fd4d0;
@@ -97,6 +97,7 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .workflow-link svg { width: 14px; height: 14px; fill: currentColor; }
 
 .recent-list { padding: 0 18px 28px; }
+.catalog-empty { margin: 14px 18px; color: var(--text-secondary); font-size: 11px; }
 .recent-row {
     display: grid;
     grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -212,12 +213,36 @@ button:focus-visible, input:focus-visible, a:focus-visible {
     .section-bar { padding-inline: 12px; }
     .recent-list { padding-inline: 12px; }
     .recent-row {
-        grid-template-columns: 20px minmax(0, 1fr) auto;
+        grid-template-columns: 44px minmax(0, 1fr) auto;
         grid-template-areas:
             "check name size"
             "check description description"
             "date stats workflows";
     }
+    .flags-block input,
+    .preset-select,
+    .primary-action,
+    .cancel-action,
+    .control-footer button,
+    .manage-dialog__header button,
+    .manage-remove,
+    .workflow-link { min-height: 44px; }
+    .preset-checkbox {
+        width: 44px;
+        height: 44px;
+        flex-basis: 44px;
+        border: 14px solid transparent;
+        background: linear-gradient(var(--section-bg), var(--section-bg)) padding-box;
+        box-shadow: inset 0 0 0 2px var(--text-muted);
+    }
+    .preset-checkbox:checked {
+        border-color: transparent;
+        background: linear-gradient(var(--accent), var(--accent)) padding-box;
+        box-shadow: inset 0 0 0 3px var(--section-bg);
+    }
+    .workflow-link { min-width: 44px; justify-content: center; padding: 0 8px; }
+    .manage-dialog__header button { width: 44px; height: 44px; }
+    .manage-remove { min-width: 44px; }
     .control-footer button { min-height: 44px; }
 }
 

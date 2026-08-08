@@ -5,9 +5,17 @@ const state = {
     isRestarting: false,
     installedNames: [],
     lastProgress: null,
+    statusReachable: true,
 };
 
 let statusPollTimer = null;
+const statusPolling = {
+    cadenceMs: 5000,
+    inFlight: false,
+    requestId: 0,
+    latestAppliedRequestId: 0,
+    restartRestoreTimer: null,
+};
 
 function showToast(message, type = "info") {
     const container = document.getElementById("toast-container");
@@ -78,12 +86,17 @@ async function loadPresets() {
 function renderPresetCatalog() {
     const pinned = state.presets.filter(preset => preset.pinned === true);
     const recent = state.presets.filter(preset => preset.pinned !== true);
-    document.getElementById("pinned-presets").replaceChildren(
-        ...pinned.map(renderPinnedPreset),
-    );
-    document.getElementById("recent-presets").replaceChildren(
-        ...recent.map(renderRecentPreset),
-    );
+    const pinnedContainer = document.getElementById("pinned-presets");
+    const recentContainer = document.getElementById("recent-presets");
+    pinnedContainer.replaceChildren(...pinned.map(renderPinnedPreset));
+    if (state.presets.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "catalog-empty";
+        empty.textContent = "Nenhum preset disponível.";
+        recentContainer.replaceChildren(empty);
+        return;
+    }
+    recentContainer.replaceChildren(...recent.map(renderRecentPreset));
 }
 
 function renderPinnedPreset(preset) {
@@ -107,7 +120,7 @@ function createPresetEntry(preset, className) {
     checkbox.type = "checkbox";
     checkbox.className = "preset-checkbox";
     checkbox.checked = state.selectedNames.includes(preset.name);
-    checkbox.disabled = state.isInstalling;
+    checkbox.disabled = state.isInstalling || !state.statusReachable;
     checkbox.addEventListener("change", () => togglePresetSelection(preset.name));
     const name = document.createElement("strong");
     name.className = "preset-name";
@@ -118,6 +131,14 @@ function createPresetEntry(preset, className) {
     description.className = "preset-description";
     description.textContent = preset.description || "Sem descrição.";
     entry.append(selection, description, createPresetMeta(preset));
+    entry.addEventListener("click", event => {
+        if (
+            state.isInstalling
+            || !state.statusReachable
+            || event.target.closest(".preset-select, .workflow-link")
+        ) return;
+        togglePresetSelection(preset.name);
+    });
     return entry;
 }
 
@@ -190,7 +211,7 @@ function renderQueue() {
         : `${hasUnknown ? "≥ " : ""}${knownTotal.toLocaleString("pt-BR")} GB`;
 
     const startButton = document.getElementById("start-btn");
-    startButton.disabled = selected.length === 0 || state.isInstalling;
+    startButton.disabled = selected.length === 0 || state.isInstalling || !state.statusReachable;
     startButton.textContent = state.isInstalling
         ? "INSTALANDO..."
         : selected.length === 0
@@ -226,9 +247,10 @@ function renderActivity(progress) {
     for (const file of progress?.active || []) {
         const total = file.total > 0 ? ` / ${formatBytes(file.total)}` : "";
         const speed = file.speed_bps > 0 ? ` · ${formatBytes(file.speed_bps)}/s` : "";
+        const backend = file.backend ? ` · ${file.backend}` : "";
         appendActivityLine(
             activity,
-            `${file.filename}: ${formatBytes(file.current)}${total}${speed}`,
+            `${file.filename}: ${formatBytes(file.current)}${total}${speed}${backend}`,
             "active",
         );
     }
@@ -254,36 +276,64 @@ function renderProgress(progress) {
 }
 
 async function pollStatus() {
+    if (statusPolling.inFlight) return;
+    const requestId = ++statusPolling.requestId;
+    statusPolling.inFlight = true;
     try {
         const response = await fetch("/api/status");
         if (!response.ok) {
-            updateStatusUI({ running: false, status: "unreachable" });
+            if (requestId >= statusPolling.latestAppliedRequestId) {
+                statusPolling.latestAppliedRequestId = requestId;
+                updateStatusUI({ status: "unreachable" }, { authoritative: false });
+            }
             return;
         }
-        updateStatusUI(await response.json());
+        const data = await response.json();
+        if (requestId >= statusPolling.latestAppliedRequestId) {
+            statusPolling.latestAppliedRequestId = requestId;
+            updateStatusUI(data, { authoritative: true });
+        }
     } catch {
-        updateStatusUI({ running: false, status: "unreachable" });
+        if (requestId >= statusPolling.latestAppliedRequestId) {
+            statusPolling.latestAppliedRequestId = requestId;
+            updateStatusUI({ status: "unreachable" }, { authoritative: false });
+        }
+    } finally {
+        statusPolling.inFlight = false;
     }
 }
 
-function updateStatusUI(data) {
+function updateStatusUI(data, { authoritative } = { authoritative: true }) {
     const dot = document.getElementById("status-dot");
     const text = document.getElementById("status-text");
     const port = document.getElementById("status-port");
     const restartButton = document.getElementById("restart-btn");
     const cancelButton = document.getElementById("cancel-btn");
+    const shutdownButton = document.getElementById("shutdown-btn");
+    const manageButton = document.getElementById("manage-btn");
+    const flagsInput = document.getElementById("extra-flags-input");
     const wasInstalling = state.isInstalling;
-    const installingChanged = state.isInstalling !== Boolean(data.installing);
-    state.isInstalling = Boolean(data.installing);
+    const hasInstalling = Object.prototype.hasOwnProperty.call(data, "installing")
+        && typeof data.installing === "boolean";
+    if (authoritative && hasInstalling) state.isInstalling = data.installing;
+    const installingChanged = wasInstalling !== state.isInstalling;
+    state.statusReachable = authoritative;
 
     dot.classList.remove("running", "stopped", "starting", "error");
-    port.textContent = data.port ? `PORTA ${data.port}` : "";
+    if (authoritative) port.textContent = data.port ? `PORTA ${data.port}` : "";
 
-    if (state.isInstalling) {
+    if (!authoritative) {
+        dot.classList.add("error");
+        text.textContent = "SERVIDOR INACESSÍVEL";
+        restartButton.disabled = true;
+        cancelButton.hidden = !state.isInstalling;
+        cancelButton.disabled = true;
+    } else if (state.isInstalling) {
         dot.classList.add("starting");
         text.textContent = "INSTALANDO...";
         restartButton.disabled = true;
         cancelButton.hidden = false;
+        cancelButton.disabled = false;
     } else if (data.running) {
         dot.classList.add("running");
         text.textContent = "COMFYUI: RODANDO";
@@ -311,17 +361,20 @@ function updateStatusUI(data) {
         cancelButton.hidden = true;
     }
 
-    if (data.status !== "unreachable") {
+    const controlsLocked = state.isInstalling || !state.statusReachable;
+    shutdownButton.disabled = controlsLocked;
+    manageButton.disabled = controlsLocked;
+    flagsInput.disabled = controlsLocked;
+
+    if (authoritative) {
         state.lastProgress = data.progress || state.lastProgress;
         renderProgress(state.lastProgress);
         renderActivity(state.lastProgress);
     }
-    if (installingChanged || state.isInstalling) {
-        renderPresetCatalog();
-        renderQueue();
-        renderManageDialog();
-    }
-    if (wasInstalling && !state.isInstalling) {
+    renderPresetCatalog();
+    renderQueue();
+    renderManageDialog();
+    if (authoritative && wasInstalling && installingChanged && !state.isInstalling) {
         handleInstallationFinished(data);
     }
 }
@@ -351,8 +404,14 @@ function handleInstallationFinished(data) {
 }
 
 function startStatusPolling() {
-    pollStatus();
-    statusPollTimer = setInterval(pollStatus, 5000);
+    setStatusPollingCadence(5000, true);
+}
+
+function setStatusPollingCadence(cadenceMs, pollImmediately = false) {
+    statusPolling.cadenceMs = cadenceMs;
+    if (statusPollTimer) clearInterval(statusPollTimer);
+    statusPollTimer = setInterval(pollStatus, statusPolling.cadenceMs);
+    if (pollImmediately) pollStatus();
 }
 
 function renderManageDialog() {
@@ -380,20 +439,22 @@ function createManageRow(name) {
     remove.type = "button";
     remove.className = "manage-remove";
     remove.textContent = "REMOVER";
-    remove.disabled = state.isInstalling;
+    remove.setAttribute("aria-label", `Remover preset ${name}`);
+    remove.disabled = state.isInstalling || !state.statusReachable;
     remove.addEventListener("click", () => removePreset(name, remove));
     row.append(label, remove);
     return row;
 }
 
 function openManageDialog() {
+    if (state.isInstalling || !state.statusReachable) return;
     renderManageDialog();
     const dialog = document.getElementById("manage-dialog");
     if (!dialog.open) dialog.showModal();
 }
 
 async function removePreset(presetName, button) {
-    if (state.isInstalling) {
+    if (state.isInstalling || !state.statusReachable) {
         showToast("Aguarde a instalação terminar antes de remover.", "error");
         return;
     }
@@ -435,6 +496,10 @@ async function removePreset(presetName, button) {
 }
 
 async function cancelInstall() {
+    if (!state.statusReachable) {
+        showToast("Não foi possível confirmar o estado da instalação.", "error");
+        return;
+    }
     if (!confirm(
         "Cancelar a instalação?\n\n"
         + "Arquivos concluídos serão preservados e downloads parciais poderão ser retomados ao instalar novamente.",
@@ -444,6 +509,10 @@ async function cancelInstall() {
     try {
         const response = await fetch("/api/cancel", { method: "POST" });
         const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showToast(result.error || `Falha ao solicitar cancelamento (HTTP ${response.status}).`, "error");
+            return;
+        }
         showToast(
             result.cancelled ? "Cancelamento solicitado — preservando o que já foi concluído." : "Nenhuma instalação ativa.",
             "info",
@@ -456,7 +525,7 @@ async function cancelInstall() {
 }
 
 async function startWithPresets() {
-    if (state.selectedNames.length === 0 || state.isInstalling) return;
+    if (state.selectedNames.length === 0 || state.isInstalling || !state.statusReachable) return;
     state.isInstalling = true;
     renderPresetCatalog();
     renderQueue();
@@ -489,7 +558,7 @@ async function startWithPresets() {
 }
 
 async function restartComfyUI() {
-    if (state.isRestarting || state.isInstalling) return;
+    if (state.isRestarting || state.isInstalling || !state.statusReachable) return;
     const button = document.getElementById("restart-btn");
     state.isRestarting = true;
     button.disabled = true;
@@ -501,11 +570,11 @@ async function restartComfyUI() {
         });
         if (!response.ok) throw new Error("Falha no restart");
         showToast("Reiniciando... aguarde o ComfyUI voltar.", "success");
-        const fastPoll = setInterval(pollStatus, 2000);
-        setTimeout(() => {
-            clearInterval(fastPoll);
+        setStatusPollingCadence(2000, true);
+        if (statusPolling.restartRestoreTimer) clearTimeout(statusPolling.restartRestoreTimer);
+        statusPolling.restartRestoreTimer = setTimeout(() => {
             state.isRestarting = false;
-            pollStatus();
+            setStatusPollingCadence(5000, true);
         }, 30000);
     } catch (error) {
         console.error("Erro no restart:", error);
@@ -516,6 +585,7 @@ async function restartComfyUI() {
 }
 
 async function shutdownArrakis() {
+    if (state.isInstalling || !state.statusReachable) return;
     if (!confirm("Desligar o Arrakis Start e o ComfyUI? Downloads incompletos de modelos serão apagados.")) return;
     try {
         const response = await fetch("/api/shutdown", { method: "POST" });
