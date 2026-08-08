@@ -6,6 +6,7 @@ Serves web UI and handles installation requests
 
 import json
 import logging
+import math
 import os
 import signal
 import threading
@@ -36,6 +37,66 @@ try:
     HAS_PROGRESS = True
 except ImportError:
     HAS_PROGRESS = False
+
+
+def serialize_presets(presets: List[dict], installed_presets: set[str]) -> List[dict]:
+    """Return the public preset data used by the web UI."""
+    clean_presets = []
+    for preset in presets:
+        name = preset.get('name', preset.get('_filename', 'Unknown'))
+        if name.lower() == 'base':
+            continue
+
+        raw_workflows = preset.get('workflows')
+        if not isinstance(raw_workflows, list):
+            raw_workflows = [{
+                'label': 'Workflow',
+                'file': preset.get('workflow', ''),
+                'url': preset.get('workflow_url', ''),
+            }]
+        workflows = []
+        for workflow in raw_workflows:
+            if not isinstance(workflow, dict):
+                continue
+            filename = workflow.get('file', '')
+            url = f'/api/workflows/{filename}' if filename else workflow.get('url', '')
+            if url:
+                workflows.append({
+                    'label': workflow.get('label', 'Workflow'),
+                    'url': url,
+                    'local': bool(filename),
+                    'file': filename,
+                })
+
+        raw_size = preset.get('size_gb')
+        size_gb = (
+            raw_size
+            if isinstance(raw_size, (int, float))
+            and not isinstance(raw_size, bool)
+            and math.isfinite(raw_size)
+            and raw_size > 0
+            else None
+        )
+        raw_modified = preset.get('_modified_at')
+        modified_at = (
+            int(raw_modified)
+            if isinstance(raw_modified, (int, float))
+            and not isinstance(raw_modified, bool)
+            and math.isfinite(raw_modified)
+            else 0
+        )
+        clean_presets.append({
+            'name': name,
+            'description': preset.get('description', ''),
+            'models_count': len(preset.get('models', [])),
+            'nodes_count': len(preset.get('nodes', [])),
+            'installed': name in installed_presets,
+            'workflows': workflows,
+            'pinned': preset.get('pinned') is True,
+            'size_gb': size_gb,
+            'modified_at': modified_at,
+        })
+    return clean_presets
 
 
 def _comfy_port(state) -> int:
@@ -132,50 +193,7 @@ class PresetHandler(SimpleHTTPRequestHandler):
             presets = _presets_callback() if _presets_callback else []
             state = _state_manager or get_state_manager()
             installed_presets = set(state.get_installed_presets())
-            
-            # Add installation status to each preset (skip "Base" - it's auto-installed)
-            clean_presets = []
-            for p in presets:
-                preset_name = p.get('name', p.get('_filename', 'Unknown'))
-                
-                # Skip Base preset - it's automatically included
-                if preset_name.lower() == 'base':
-                    continue
-                
-                # Resolve workflows: `workflows` is a list of {label, file|url};
-                # the legacy single `workflow`/`workflow_url` pair becomes a
-                # one-item list. A local file takes priority over an external URL.
-                raw_workflows = p.get('workflows')
-                if not isinstance(raw_workflows, list):
-                    raw_workflows = [{
-                        'label': 'Workflow',
-                        'file': p.get('workflow', ''),
-                        'url': p.get('workflow_url', ''),
-                    }]
-                workflows = []
-                for wf in raw_workflows:
-                    if not isinstance(wf, dict):
-                        continue
-                    wf_file = wf.get('file', '')
-                    wf_url = f'/api/workflows/{wf_file}' if wf_file else wf.get('url', '')
-                    if not wf_url:
-                        continue
-                    workflows.append({
-                        'label': wf.get('label', 'Workflow'),
-                        'url': wf_url,
-                        'local': bool(wf_file),
-                        'file': wf_file,
-                    })
-
-                clean = {
-                    'name': preset_name,
-                    'description': p.get('description', ''),
-                    'models_count': len(p.get('models', [])),
-                    'nodes_count': len(p.get('nodes', [])),
-                    'installed': preset_name in installed_presets,
-                    'workflows': workflows,
-                }
-                clean_presets.append(clean)
+            clean_presets = serialize_presets(presets, installed_presets)
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')

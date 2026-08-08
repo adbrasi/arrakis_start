@@ -270,18 +270,13 @@ def should_ignore_preset_file(preset_file: Path) -> bool:
     return False
 
 
-def preset_added_timestamps() -> Dict[str, float]:
-    """Map preset filename -> unix timestamp of the commit that added it.
-
-    Uses git because on cloud instances the repo is a fresh clone, where every
-    file mtime is the clone time. The log is newest-first, so a file deleted
-    and re-added (or re-enabled from .ignore) counts as added at the re-add.
-    """
+def preset_modified_timestamps() -> Dict[str, float]:
+    """Map preset filename to the latest committed modification timestamp."""
     timestamps: Dict[str, float] = {}
     try:
         result = subprocess.run(
-            ['git', '-C', str(SCRIPT_DIR), 'log', '--diff-filter=A',
-             '--format=%ct', '--name-only', '--', 'presets'],
+            ['git', '-C', str(SCRIPT_DIR), 'log', '--format=%ct',
+             '--name-only', '--', 'presets'],
             capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             return timestamps
@@ -295,36 +290,40 @@ def preset_added_timestamps() -> Dict[str, float]:
             else:
                 timestamps.setdefault(Path(line).name, current_ts)
     except Exception as e:
-        logger.debug(f"Could not read preset added dates from git: {e}")
+        logger.debug(f"Could not read preset modification dates from git: {e}")
     return timestamps
 
 
 def load_presets() -> List[Dict]:
-    """Load all preset JSON files from presets/, newest added first"""
+    """Load all preset JSON files from presets/, newest modified first."""
     presets = []
 
     if not PRESETS_DIR.exists():
         logger.warning(f"Presets directory not found: {PRESETS_DIR}")
         return presets
 
-    added = preset_added_timestamps()
+    modified = preset_modified_timestamps()
 
-    def added_order(preset_file: Path):
-        # Uncommitted presets have no git date; their mtime is recent, which
-        # correctly puts them first.
+    def modified_order(preset_file: Path):
         try:
-            ts = added.get(preset_file.name) or preset_file.stat().st_mtime
+            ts = modified.get(preset_file.name)
+            if ts is None:
+                ts = preset_file.stat().st_mtime
         except OSError:
             ts = 0.0
         return (-ts, preset_file.name.lower())
 
-    for preset_file in sorted(PRESETS_DIR.iterdir(), key=added_order):
+    for preset_file in sorted(PRESETS_DIR.iterdir(), key=modified_order):
         if not preset_file.is_file() or should_ignore_preset_file(preset_file):
             continue
         try:
             with open(preset_file, 'r', encoding='utf-8') as f:
                 preset = json.load(f)
                 preset['_filename'] = preset_file.name
+                modified_at = modified.get(preset_file.name)
+                if modified_at is None:
+                    modified_at = preset_file.stat().st_mtime
+                preset['_modified_at'] = modified_at
                 presets.append(preset)
                 logger.debug(f"Loaded preset: {preset.get('name', preset_file.name)}")
         except Exception as e:
