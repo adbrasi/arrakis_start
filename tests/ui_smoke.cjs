@@ -323,6 +323,27 @@ async function waitForCondition(condition, failureMessage) {
     assert.fail(failureMessage);
 }
 
+async function triggerManualStatusPoll(page, times = 1) {
+    await page.evaluate(count => {
+        for (let index = 0; index < count; index += 1) {
+            void window.__triggerArrakisStatusPoll();
+        }
+    }, times);
+}
+
+async function waitForBrowserFrame(page) {
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+}
+
+async function assertInstallingControls(page) {
+    assert.equal(await page.locator("#queue-count").textContent(), "1");
+    assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
+    assert.equal(await page.locator("#start-btn").isDisabled(), true);
+    assert.equal(await page.locator(".preset-checkbox").first().isDisabled(), true);
+    assert.equal(await page.locator("#cancel-btn").isVisible(), true);
+    assert.equal(await page.locator("#cancel-btn").isDisabled(), false);
+}
+
 function createDeferred() {
     let resolve;
     const promise = new Promise(resolvePromise => {
@@ -438,63 +459,15 @@ async function verifyUnreachableInstallLock(browser, baseURL) {
 
 async function verifySerializedPolling(browser, baseURL) {
     const delayedStatus = createDeferred();
+    const delayedStatusSettled = createDeferred();
     const initialStatus = createStatus(true);
     const api = {
         status: initialStatus,
         nextStatus: requestNumber => requestNumber === 1
             ? { body: initialStatus }
-            : delayedStatus.promise,
-    };
-    const { page } = await newAppPage(browser, baseURL, { width: 1024, height: 760 }, api);
-    try {
-        await waitForCondition(() => api.statusRequests === 2, "second status poll did not begin");
-        await delay(420);
-        assert.equal(api.statusRequests, 2, "status polling issued a concurrent request");
-        delayedStatus.resolve({ body: createStatus(true) });
-        await waitForCondition(() => api.statusRequests >= 3, "serialized polling did not resume");
-        assert.equal(await page.locator("#start-btn").isDisabled(), true);
-    } finally {
-        delayedStatus.resolve({ body: createStatus(true) });
-        await page.close();
-    }
-}
-
-async function verifyLifecycleMutationInvalidatesOlderStatus(browser, baseURL) {
-    const preInstallStatus = createDeferred();
-    const afterInstallStatus = createStatus(true);
-    const api = {
-        status: createStatus(false),
-        nextStatus: requestNumber => {
-            if (requestNumber === 1) return { body: createStatus(false) };
-            if (requestNumber === 2) return preInstallStatus.promise;
-            return { body: afterInstallStatus };
-        },
-    };
-    const { page } = await newAppPage(browser, baseURL, { width: 1024, height: 760 }, api);
-    try {
-        await waitForCondition(() => api.statusRequests === 2, "pre-install status poll did not begin");
-        await page.locator(".pinned-card .preset-checkbox").first().check();
-        await clickAndCapturePost(page, "#start-btn", "/api/install");
-        preInstallStatus.resolve({ body: createStatus(false) });
-        await waitForCondition(() => api.statusRequests >= 3, "post-install status poll did not begin");
-        assert.equal(await page.locator("#queue-count").textContent(), "1");
-        assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
-        assert.equal(await page.locator("#cancel-btn").isVisible(), true);
-    } finally {
-        preInstallStatus.resolve({ body: afterInstallStatus });
-        await page.close();
-    }
-}
-
-async function verifyPendingInstallPollCannotApplyOldStatus(browser, baseURL) {
-    const installAcceptance = createDeferred();
-    const afterInstallStatus = createStatus(true);
-    const api = {
-        status: createStatus(false),
-        actionResponses: { "/api/install": { promise: installAcceptance.promise } },
-        nextStatus: requestNumber => requestNumber === 1
-            ? { body: createStatus(false) }
-            : { body: requestNumber === 2 ? createStatus(false) : afterInstallStatus },
+            : requestNumber === 2
+                ? delayedStatus.promise
+                : { body: initialStatus },
     };
     const { page } = await newAppPage(
         browser,
@@ -504,23 +477,111 @@ async function verifyPendingInstallPollCannotApplyOldStatus(browser, baseURL) {
         { manualPolling: true },
     );
     try {
+        await waitForCondition(() => api.statusRequests === 1, "initial status poll did not begin");
+        await waitForText(page.locator("#status-text"), "INSTALANDO...");
+        await triggerManualStatusPoll(page, 3);
+        await waitForCondition(() => api.statusRequests === 2, "deferred status poll did not begin");
+        assert.equal(api.statusRequests, 2, "status polling issued a concurrent request");
+        delayedStatus.resolve({ body: createStatus(true), settled: delayedStatusSettled });
+        await delayedStatusSettled.promise;
+        await waitForBrowserFrame(page);
+        await triggerManualStatusPoll(page);
+        await waitForCondition(() => api.statusRequests === 3, "next manual status poll did not begin");
+        assert.equal(await page.locator("#start-btn").isDisabled(), true);
+    } finally {
+        delayedStatus.resolve({ body: createStatus(true), settled: delayedStatusSettled });
+        await page.close();
+    }
+}
+
+async function verifyLifecycleMutationInvalidatesOlderStatus(browser, baseURL) {
+    const preInstallStatus = createDeferred();
+    const preInstallStatusSettled = createDeferred();
+    const afterInstallStatus = createStatus(true);
+    const api = {
+        status: createStatus(false),
+        nextStatus: requestNumber => {
+            if (requestNumber === 1) return { body: createStatus(false) };
+            if (requestNumber === 2) return preInstallStatus.promise;
+            return { body: afterInstallStatus };
+        },
+    };
+    const { page } = await newAppPage(
+        browser,
+        baseURL,
+        { width: 1024, height: 760 },
+        api,
+        { manualPolling: true },
+    );
+    try {
+        await waitForCondition(() => api.statusRequests === 1, "initial status poll did not begin");
+        await waitForText(page.locator("#status-text"), "COMFYUI: RODANDO");
+        await triggerManualStatusPoll(page);
+        await waitForCondition(() => api.statusRequests === 2, "pre-install status poll did not begin");
+        await page.locator(".pinned-card .preset-checkbox").first().check();
+        await clickAndAcceptPost(page, "#start-btn", "/api/install");
+        await waitForBrowserFrame(page);
+        preInstallStatus.resolve({ body: createStatus(false), settled: preInstallStatusSettled });
+        await preInstallStatusSettled.promise;
+        await waitForBrowserFrame(page);
+        await assertInstallingControls(page);
+        assert.equal(api.statusRequests, 2, "a post-acceptance status poll started before the stale-state assertion");
+        await triggerManualStatusPoll(page);
+        await waitForCondition(() => api.statusRequests === 3, "post-install status poll did not begin");
+        await assertInstallingControls(page);
+    } finally {
+        preInstallStatus.resolve({ body: afterInstallStatus, settled: preInstallStatusSettled });
+        await page.close();
+    }
+}
+
+async function verifyPendingInstallPollCannotApplyOldStatus(browser, baseURL) {
+    const installAcceptance = createDeferred();
+    const staleStatus = createDeferred();
+    const staleStatusSettled = createDeferred();
+    const afterInstallStatus = createStatus(true);
+    const api = {
+        status: createStatus(false),
+        actionResponses: { "/api/install": { promise: installAcceptance.promise } },
+        nextStatus: requestNumber => requestNumber === 1
+            ? { body: createStatus(false) }
+            : requestNumber === 2
+                ? staleStatus.promise
+                : { body: afterInstallStatus },
+    };
+    const { page } = await newAppPage(
+        browser,
+        baseURL,
+        { width: 1024, height: 760 },
+        api,
+        { manualPolling: true },
+    );
+    try {
+        await waitForCondition(() => api.statusRequests === 1, "initial status poll did not begin");
+        await waitForText(page.locator("#status-text"), "COMFYUI: RODANDO");
         await page.locator(".pinned-card .preset-checkbox").first().check();
         const accepted = page.waitForResponse(response => (
             new URL(response.url()).pathname === "/api/install"
             && response.request().method() === "POST"
         ));
         await clickAndCapturePost(page, "#start-btn", "/api/install");
-        await page.evaluate(() => window.__triggerArrakisStatusPoll());
+        await triggerManualStatusPoll(page);
         await waitForCondition(() => api.statusRequests === 2, "status poll did not begin during install POST");
+        staleStatus.resolve({ body: createStatus(false), settled: staleStatusSettled });
+        await staleStatusSettled.promise;
+        await waitForBrowserFrame(page);
+        await assertInstallingControls(page);
         installAcceptance.resolve({ body: { success: true } });
         await accepted;
-        await page.evaluate(() => window.__triggerArrakisStatusPoll());
+        await waitForBrowserFrame(page);
+        await assertInstallingControls(page);
+        assert.equal(api.statusRequests, 2, "a post-acceptance status poll started before the stale-state assertion");
+        await triggerManualStatusPoll(page);
         await waitForCondition(() => api.statusRequests === 3, "post-acceptance status poll did not begin");
-        assert.equal(await page.locator("#queue-count").textContent(), "1");
-        assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
-        assert.equal(await page.locator("#cancel-btn").isVisible(), true);
+        await assertInstallingControls(page);
     } finally {
         installAcceptance.resolve({ body: { success: true } });
+        staleStatus.resolve({ body: afterInstallStatus, settled: staleStatusSettled });
         await page.close();
     }
 }
