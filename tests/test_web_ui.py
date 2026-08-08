@@ -128,6 +128,69 @@ class PresetSerializationTests(unittest.TestCase):
         self.assertIsNone(result["size_gb"])
         self.assertEqual(result["modified_at"], 0)
 
+    def test_preserves_workflow_list_and_remote_urls(self):
+        presets = [
+            {
+                "name": "Workflow list",
+                "models": [],
+                "nodes": [],
+                "workflows": [
+                    {"label": "Local", "file": "local.json"},
+                    {"label": "Remote", "url": "https://example.com/list.json"},
+                ],
+            },
+            {
+                "name": "Legacy remote",
+                "models": [],
+                "nodes": [],
+                "workflow_url": "https://example.com/legacy.json",
+            },
+        ]
+
+        result = server.serialize_presets(presets, set())
+
+        self.assertEqual(result[0]["workflows"], [
+            {
+                "label": "Local",
+                "url": "/api/workflows/local.json",
+                "local": True,
+                "file": "local.json",
+            },
+            {
+                "label": "Remote",
+                "url": "https://example.com/list.json",
+                "local": False,
+                "file": "",
+            },
+        ])
+        self.assertEqual(result[1]["workflows"], [{
+            "label": "Workflow",
+            "url": "https://example.com/legacy.json",
+            "local": False,
+            "file": "",
+        }])
+
+    def test_non_finite_or_boolean_metadata_uses_safe_public_defaults(self):
+        invalid_values = [True, float("nan"), float("inf"), float("-inf")]
+        presets = [
+            {
+                "name": f"Invalid {index}",
+                "models": [],
+                "nodes": [],
+                "size_gb": value,
+                "_modified_at": value,
+            }
+            for index, value in enumerate(invalid_values)
+        ]
+
+        result = server.serialize_presets(presets, set())
+
+        self.assertEqual(
+            [{"size_gb": preset["size_gb"], "modified_at": preset["modified_at"]}
+             for preset in result],
+            [{"size_gb": None, "modified_at": 0}] * 4,
+        )
+
     def test_base_preset_remains_hidden(self):
         result = server.serialize_presets(
             [{"name": "Base", "models": [], "nodes": []}],
