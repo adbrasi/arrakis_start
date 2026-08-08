@@ -296,7 +296,7 @@ async function verifyUnreachableInstallLock(browser) {
         assert.equal(await page.locator("#start-btn").isDisabled(), true);
         assert.equal(await page.locator(".preset-checkbox").first().isDisabled(), true);
         assert.equal(await page.locator("#restart-btn").isDisabled(), true);
-        assert.equal(await page.locator("#shutdown-btn").isDisabled(), true);
+        assert.equal(await page.locator("#shutdown-btn").isDisabled(), false);
         assert.equal(await page.locator("#manage-btn").isDisabled(), true);
         assert.equal(await page.locator("#cancel-btn").isDisabled(), true);
     } finally {
@@ -323,6 +323,33 @@ async function verifySerializedPolling(browser) {
         assert.equal(await page.locator("#start-btn").isDisabled(), true);
     } finally {
         delayedStatus.resolve({ body: createStatus(true) });
+        await page.close();
+    }
+}
+
+async function verifyLifecycleMutationInvalidatesOlderStatus(browser) {
+    const preInstallStatus = createDeferred();
+    const afterInstallStatus = createStatus(true);
+    const api = {
+        status: createStatus(false),
+        nextStatus: requestNumber => {
+            if (requestNumber === 1) return { body: createStatus(false) };
+            if (requestNumber === 2) return preInstallStatus.promise;
+            return { body: afterInstallStatus };
+        },
+    };
+    const { page } = await newAppPage(browser, { width: 1024, height: 760 }, api);
+    try {
+        await waitForCondition(() => api.statusRequests === 2, "pre-install status poll did not begin");
+        await page.locator(".pinned-card .preset-checkbox").first().check();
+        await clickAndCapturePost(page, "#start-btn", "/api/install");
+        preInstallStatus.resolve({ body: createStatus(false) });
+        await waitForCondition(() => api.statusRequests >= 3, "post-install status poll did not begin");
+        assert.equal(await page.locator("#queue-count").textContent(), "1");
+        assert.equal(await page.locator("#start-btn").textContent(), "INSTALANDO...");
+        assert.equal(await page.locator("#cancel-btn").isVisible(), true);
+    } finally {
+        preInstallStatus.resolve({ body: afterInstallStatus });
         await page.close();
     }
 }
@@ -506,6 +533,9 @@ async function main() {
 
         if (installing) {
             assert.equal(await desktop.locator("#manage-btn").isDisabled(), true);
+            assert.equal(await desktop.locator("#shutdown-btn").isDisabled(), false);
+            const shutdownRequest = await clickAndCapturePost(desktop, "#shutdown-btn", "/api/shutdown");
+            assertActionRequest(shutdownRequest, "/api/shutdown");
         } else {
             await desktop.locator("#manage-btn").click();
             assert.equal(await desktop.locator("#manage-dialog").evaluate(dialog => dialog.open), true);
@@ -530,6 +560,7 @@ async function main() {
             await verifyTerminalState(browser, "completed_with_failures", /ComfyUI iniciado, mas alguns itens não baixaram/);
             await verifyUnreachableInstallLock(browser);
             await verifySerializedPolling(browser);
+            await verifyLifecycleMutationInvalidatesOlderStatus(browser);
             await verifyCancelError(browser);
             await verifyEmptyAndErrorStates(browser);
             await verifyResponsiveAccessibility(browser);

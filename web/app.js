@@ -14,6 +14,7 @@ const statusPolling = {
     inFlight: false,
     requestId: 0,
     latestAppliedRequestId: 0,
+    lifecycleGeneration: 0,
     restartRestoreTimer: null,
 };
 
@@ -278,9 +279,11 @@ function renderProgress(progress) {
 async function pollStatus() {
     if (statusPolling.inFlight) return;
     const requestId = ++statusPolling.requestId;
+    const lifecycleGeneration = statusPolling.lifecycleGeneration;
     statusPolling.inFlight = true;
     try {
         const response = await fetch("/api/status");
+        if (lifecycleGeneration !== statusPolling.lifecycleGeneration) return;
         if (!response.ok) {
             if (requestId >= statusPolling.latestAppliedRequestId) {
                 statusPolling.latestAppliedRequestId = requestId;
@@ -289,6 +292,7 @@ async function pollStatus() {
             return;
         }
         const data = await response.json();
+        if (lifecycleGeneration !== statusPolling.lifecycleGeneration) return;
         if (requestId >= statusPolling.latestAppliedRequestId) {
             statusPolling.latestAppliedRequestId = requestId;
             updateStatusUI(data, { authoritative: true });
@@ -301,6 +305,10 @@ async function pollStatus() {
     } finally {
         statusPolling.inFlight = false;
     }
+}
+
+function invalidateStatusForLifecycleMutation() {
+    statusPolling.lifecycleGeneration += 1;
 }
 
 function updateStatusUI(data, { authoritative } = { authoritative: true }) {
@@ -362,7 +370,7 @@ function updateStatusUI(data, { authoritative } = { authoritative: true }) {
     }
 
     const controlsLocked = state.isInstalling || !state.statusReachable;
-    shutdownButton.disabled = controlsLocked;
+    shutdownButton.disabled = false;
     manageButton.disabled = controlsLocked;
     flagsInput.disabled = controlsLocked;
 
@@ -507,6 +515,7 @@ async function cancelInstall() {
     const button = document.getElementById("cancel-btn");
     button.disabled = true;
     try {
+        invalidateStatusForLifecycleMutation();
         const response = await fetch("/api/cancel", { method: "POST" });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) {
@@ -526,6 +535,7 @@ async function cancelInstall() {
 
 async function startWithPresets() {
     if (state.selectedNames.length === 0 || state.isInstalling || !state.statusReachable) return;
+    invalidateStatusForLifecycleMutation();
     state.isInstalling = true;
     renderPresetCatalog();
     renderQueue();
@@ -564,6 +574,7 @@ async function restartComfyUI() {
     button.disabled = true;
     showToast("Reiniciando ComfyUI...", "info");
     try {
+        invalidateStatusForLifecycleMutation();
         const response = await fetch("/api/restart", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -585,9 +596,9 @@ async function restartComfyUI() {
 }
 
 async function shutdownArrakis() {
-    if (state.isInstalling || !state.statusReachable) return;
     if (!confirm("Desligar o Arrakis Start e o ComfyUI? Downloads incompletos de modelos serão apagados.")) return;
     try {
+        invalidateStatusForLifecycleMutation();
         const response = await fetch("/api/shutdown", { method: "POST" });
         if (!response.ok) {
             showToast("Falha ao desligar.", "error");
