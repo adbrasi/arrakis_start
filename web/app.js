@@ -1,176 +1,340 @@
-// Arrakis Start - UI Logic
+const state = {
+    presets: [],
+    selectedNames: [],
+    isInstalling: false,
+    isRestarting: false,
+    installedNames: [],
+    lastProgress: null,
+};
 
-// Selection is an ordered array (not a Set) to track order
-let selectedPresets = [];
-let isInstalling = false;
-let isRestarting = false;
 let statusPollTimer = null;
 
-// ============================================
-// Toast Notifications
-// ============================================
-function showToast(message, type = 'info') {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
+function showToast(message, type = "info") {
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
     toast.className = `toast ${type}`;
     toast.textContent = message;
     container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.remove();
-    }, 5000);
+    setTimeout(() => toast.remove(), 5000);
 }
 
-// ============================================
-// Status Polling
-// ============================================
-async function pollStatus() {
-    try {
-        const response = await fetch('/api/status');
-        if (!response.ok) {
-            // A server error is not the same as "ComfyUI stopped" — say so.
-            updateStatusUI({ running: false, status: 'unreachable' });
-            return;
-        }
-        const data = await response.json();
-        updateStatusUI(data);
-    } catch {
-        updateStatusUI({ running: false, status: 'unreachable' });
-    }
+function createDownloadIcon() {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 20 20");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M9 2h2v9l3-3 1.4 1.4-5.4 5.4-5.4-5.4L6 8l3 3V2Zm-6 14h14v2H3v-2Z");
+    icon.appendChild(path);
+    return icon;
+}
+
+function formatModifiedDate(timestamp) {
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return "--/--";
+    return new Intl.DateTimeFormat("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+    }).format(new Date(timestamp * 1000));
 }
 
 function formatBytes(bytes) {
-    if (!bytes || bytes < 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let value = bytes;
-    let unit = 0;
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / (1024 ** unit);
     return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
-function renderProgress(progress) {
-    const panel = document.getElementById('progress-panel');
-    if (!panel) return;
-
-    const stages = progress?.stages || {};
-    const stageNames = Object.keys(stages);
-    if (!progress || (!progress.active?.length && !progress.total && !stageNames.length)) {
-        panel.hidden = true;
-        return;
+async function loadPresets() {
+    try {
+        const response = await fetch("/api/presets");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        state.presets = Array.isArray(payload.presets) ? payload.presets : [];
+        const available = new Set(state.presets.map(preset => preset.name));
+        state.selectedNames = state.selectedNames.filter(name => available.has(name));
+        state.installedNames = state.presets
+            .filter(preset => preset.installed)
+            .map(preset => preset.name);
+        renderPresetCatalog();
+        renderQueue();
+        renderManageDialog();
+    } catch (error) {
+        console.error("Failed to load presets:", error);
+        showToast("Falha ao carregar presets.", "error");
     }
-    panel.hidden = false;
+}
 
-    const stageEl = document.getElementById('progress-stage');
-    if (stageEl) {
-        // Lanes run concurrently (models download while nodes install), so each
-        // gets its own line rather than competing for one.
-        stageEl.textContent = '';
-        if (progress.total) {
-            const counts = document.createElement('div');
-            counts.textContent = `Modelos: ${progress.done}/${progress.total}`;
-            stageEl.appendChild(counts);
-        }
-        for (const lane of stageNames) {
-            const line = document.createElement('div');
-            line.textContent = `${lane}: ${stages[lane]}`;
-            stageEl.appendChild(line);
-        }
+function renderPresetCatalog() {
+    const pinned = state.presets.filter(preset => preset.pinned === true);
+    const recent = state.presets.filter(preset => preset.pinned !== true);
+    document.getElementById("pinned-presets").replaceChildren(
+        ...pinned.map(renderPinnedPreset),
+    );
+    document.getElementById("recent-presets").replaceChildren(
+        ...recent.map(renderRecentPreset),
+    );
+}
+
+function renderPinnedPreset(preset) {
+    return createPresetEntry(preset, "preset-card pinned-card");
+}
+
+function renderRecentPreset(preset) {
+    return createPresetEntry(preset, "recent-row");
+}
+
+function createPresetEntry(preset, className) {
+    const entry = document.createElement("article");
+    entry.className = className;
+    entry.classList.toggle("selected", state.selectedNames.includes(preset.name));
+
+    const selection = document.createElement("label");
+    selection.className = "preset-select";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "preset-checkbox";
+    checkbox.checked = state.selectedNames.includes(preset.name);
+    checkbox.disabled = state.isInstalling;
+    checkbox.addEventListener("change", () => togglePresetSelection(preset.name));
+    const name = document.createElement("strong");
+    name.className = "preset-name";
+    name.textContent = preset.name;
+    selection.append(checkbox, name);
+
+    const description = document.createElement("p");
+    description.className = "preset-description";
+    description.textContent = preset.description || "Sem descrição.";
+    entry.append(selection, description, createPresetMeta(preset));
+    return entry;
+}
+
+function createPresetMeta(preset) {
+    const meta = document.createElement("div");
+    meta.className = "preset-meta";
+
+    const date = document.createElement("span");
+    date.className = "preset-date";
+    date.textContent = formatModifiedDate(preset.modified_at);
+    const size = document.createElement("strong");
+    size.className = "preset-size";
+    size.textContent = Number.isFinite(preset.size_gb) ? `${preset.size_gb} GB` : "-- GB";
+    const stats = document.createElement("span");
+    stats.className = "preset-stats";
+    stats.textContent = `${preset.models_count}m · ${preset.nodes_count}n`;
+    meta.append(date, size, stats);
+
+    if (preset.installed) {
+        const installed = document.createElement("span");
+        installed.className = "installed-marker";
+        installed.textContent = "INSTALADO";
+        meta.appendChild(installed);
     }
 
-    const list = document.getElementById('progress-files');
-    if (!list) return;
-    list.textContent = '';
-    for (const file of progress.active || []) {
-        const row = document.createElement('div');
-        row.className = 'progress-row';
-
-        const name = document.createElement('span');
-        name.className = 'progress-name';
-        name.textContent = file.filename + (file.backend ? ` [${file.backend}]` : '');
-        row.appendChild(name);
-
-        const bar = document.createElement('div');
-        bar.className = 'progress-bar';
-        const fill = document.createElement('div');
-        fill.className = 'progress-fill';
-        // No total means no percentage — show bytes rather than a fake 0%.
-        if (file.total > 0) {
-            const pct = Math.min(100, (file.current / file.total) * 100);
-            fill.style.width = `${pct}%`;
+    const workflowGroup = document.createElement("span");
+    workflowGroup.className = "workflow-group";
+    for (const workflow of preset.workflows || []) {
+        const anchor = document.createElement("a");
+        anchor.className = "workflow-link";
+        anchor.href = workflow.url;
+        anchor.append(createDownloadIcon(), document.createTextNode(workflow.label || "Workflow"));
+        anchor.addEventListener("click", event => event.stopPropagation());
+        if (workflow.local) {
+            anchor.download = workflow.file || "workflow.json";
         } else {
-            fill.style.width = '0%';
-            bar.classList.add('indeterminate');
+            anchor.target = "_blank";
+            anchor.rel = "noopener noreferrer";
         }
-        bar.appendChild(fill);
-        row.appendChild(bar);
+        workflowGroup.appendChild(anchor);
+    }
+    meta.appendChild(workflowGroup);
+    return meta;
+}
 
-        const stats = document.createElement('span');
-        stats.className = 'progress-stats';
-        const speed = file.speed_bps ? ` @ ${formatBytes(file.speed_bps)}/s` : '';
-        stats.textContent = file.total > 0
-            ? `${formatBytes(file.current)} / ${formatBytes(file.total)}${speed}`
-            : `${formatBytes(file.current)}${speed}`;
-        row.appendChild(stats);
+function togglePresetSelection(name) {
+    if (state.isInstalling) return;
+    state.selectedNames = state.selectedNames.includes(name)
+        ? state.selectedNames.filter(selected => selected !== name)
+        : [...state.selectedNames, name];
+    renderPresetCatalog();
+    renderQueue();
+}
 
-        list.appendChild(row);
+function renderQueue() {
+    const selected = state.selectedNames
+        .map(name => state.presets.find(preset => preset.name === name))
+        .filter(Boolean);
+    const list = document.getElementById("queue-list");
+    list.replaceChildren(...selected.map(createQueueRow));
+    document.getElementById("queue-count").textContent = String(selected.length);
+
+    const knownTotal = selected.reduce(
+        (sum, preset) => sum + (Number.isFinite(preset.size_gb) ? preset.size_gb : 0),
+        0,
+    );
+    const hasUnknown = selected.some(preset => !Number.isFinite(preset.size_gb));
+    document.getElementById("queue-total").textContent = selected.length === 0
+        ? "0 GB"
+        : `${hasUnknown ? "≥ " : ""}${knownTotal.toLocaleString("pt-BR")} GB`;
+
+    const startButton = document.getElementById("start-btn");
+    startButton.disabled = selected.length === 0 || state.isInstalling;
+    startButton.textContent = state.isInstalling
+        ? "INSTALANDO..."
+        : selected.length === 0
+            ? "SELECIONE UM PRESET"
+            : `INICIAR COM ${selected.length} PRESET${selected.length === 1 ? "" : "S"}`;
+}
+
+function createQueueRow(preset) {
+    const row = document.createElement("div");
+    row.className = "queue-row";
+    const name = document.createElement("span");
+    name.textContent = preset.name;
+    const size = document.createElement("span");
+    size.textContent = Number.isFinite(preset.size_gb) ? `${preset.size_gb} GB` : "-- GB";
+    row.append(name, size);
+    return row;
+}
+
+function appendActivityLine(container, message, type) {
+    const line = document.createElement("p");
+    line.className = `activity-line activity-line--${type}`;
+    line.textContent = message;
+    container.appendChild(line);
+}
+
+function renderActivity(progress) {
+    const activity = document.getElementById("activity-list");
+    activity.replaceChildren();
+
+    for (const [lane, detail] of Object.entries(progress?.stages || {})) {
+        appendActivityLine(activity, `${lane}: ${detail}`, "stage");
+    }
+    for (const file of progress?.active || []) {
+        const total = file.total > 0 ? ` / ${formatBytes(file.total)}` : "";
+        const speed = file.speed_bps > 0 ? ` · ${formatBytes(file.speed_bps)}/s` : "";
+        appendActivityLine(
+            activity,
+            `${file.filename}: ${formatBytes(file.current)}${total}${speed}`,
+            "active",
+        );
+    }
+    for (const file of (progress?.recent || []).slice(-6).reverse()) {
+        appendActivityLine(
+            activity,
+            `${file.ok ? "concluído" : "falhou"}: ${file.filename}`,
+            file.ok ? "success" : "error",
+        );
+    }
+}
+
+function renderProgress(progress) {
+    const progressFill = document.getElementById("progress-fill");
+    const progressSummary = document.getElementById("progress-summary");
+    const done = Number(progress?.done || 0);
+    const total = Number(progress?.total || 0);
+    const percent = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+    progressFill.style.width = `${percent}%`;
+    progressSummary.textContent = total > 0
+        ? `${done}/${total} MODELOS · ${Math.round(percent)}%`
+        : "AGUARDANDO";
+}
+
+async function pollStatus() {
+    try {
+        const response = await fetch("/api/status");
+        if (!response.ok) {
+            updateStatusUI({ running: false, status: "unreachable" });
+            return;
+        }
+        updateStatusUI(await response.json());
+    } catch {
+        updateStatusUI({ running: false, status: "unreachable" });
     }
 }
 
 function updateStatusUI(data) {
-    const dot = document.getElementById('status-dot');
-    const text = document.getElementById('status-text');
-    const restartBtn = document.getElementById('restart-btn');
-    const cancelBtn = document.getElementById('cancel-btn');
-    const startBtn = document.getElementById('start-btn');
+    const dot = document.getElementById("status-dot");
+    const text = document.getElementById("status-text");
+    const port = document.getElementById("status-port");
+    const restartButton = document.getElementById("restart-btn");
+    const cancelButton = document.getElementById("cancel-btn");
+    const wasInstalling = state.isInstalling;
+    const installingChanged = state.isInstalling !== Boolean(data.installing);
+    state.isInstalling = Boolean(data.installing);
 
-    // Remove all status classes
-    dot.classList.remove('running', 'stopped', 'starting', 'error');
+    dot.classList.remove("running", "stopped", "starting", "error");
+    port.textContent = data.port ? `PORTA ${data.port}` : "";
 
-    // An install in progress is authoritative and survives a page reload, so it
-    // is checked before the ComfyUI state: module flags reset on reload, which
-    // used to show "Parado" with the Install button live during a running install.
-    if (data.installing) {
-        isInstalling = true;
-        dot.classList.add('starting');
-        text.textContent = 'Instalando...';
-        restartBtn.disabled = true;
-        if (startBtn) startBtn.disabled = true;
-        if (cancelBtn) cancelBtn.hidden = false;
+    if (state.isInstalling) {
+        dot.classList.add("starting");
+        text.textContent = "INSTALANDO...";
+        restartButton.disabled = true;
+        cancelButton.hidden = false;
+    } else if (data.running) {
+        dot.classList.add("running");
+        text.textContent = "COMFYUI: RODANDO";
+        restartButton.disabled = state.isRestarting;
+        cancelButton.hidden = true;
+    } else if (data.status === "starting") {
+        dot.classList.add("starting");
+        text.textContent = "COMFYUI: INICIANDO...";
+        restartButton.disabled = true;
+        cancelButton.hidden = true;
+    } else if (data.status === "error") {
+        dot.classList.add("error");
+        text.textContent = "COMFYUI: ERRO";
+        restartButton.disabled = state.isRestarting;
+        cancelButton.hidden = true;
+    } else if (data.status === "unreachable") {
+        dot.classList.add("error");
+        text.textContent = "SERVIDOR INACESSÍVEL";
+        restartButton.disabled = true;
+        cancelButton.hidden = true;
     } else {
-        if (isInstalling) {
-            // The install finished while this tab was not the one that started it.
-            isInstalling = false;
-            if (startBtn) startBtn.disabled = false;
-            if (cancelBtn) cancelBtn.hidden = true;
-        }
-
-        if (data.running) {
-            dot.classList.add('running');
-            text.textContent = `ComfyUI: Rodando (porta ${data.port || 8818})`;
-            restartBtn.disabled = isRestarting;
-        } else if (data.status === 'starting') {
-            dot.classList.add('starting');
-            text.textContent = 'ComfyUI: Iniciando...';
-            restartBtn.disabled = true;
-        } else if (data.status === 'error') {
-            dot.classList.add('error');
-            text.textContent = 'ComfyUI: Erro';
-            restartBtn.disabled = isRestarting;
-        } else if (data.status === 'unreachable') {
-            dot.classList.add('error');
-            text.textContent = 'Servidor inacessível';
-            restartBtn.disabled = true;
-        } else {
-            dot.classList.add('stopped');
-            text.textContent = 'ComfyUI: Parado';
-            restartBtn.disabled = isRestarting;
-        }
+        dot.classList.add("stopped");
+        text.textContent = "COMFYUI: PARADO";
+        restartButton.disabled = state.isRestarting;
+        cancelButton.hidden = true;
     }
 
-    renderProgress(data.progress);
+    if (data.status !== "unreachable") {
+        state.lastProgress = data.progress || state.lastProgress;
+        renderProgress(state.lastProgress);
+        renderActivity(state.lastProgress);
+    }
+    if (installingChanged || state.isInstalling) {
+        renderPresetCatalog();
+        renderQueue();
+        renderManageDialog();
+    }
+    if (wasInstalling && !state.isInstalling) {
+        handleInstallationFinished(data);
+    }
+}
+
+function handleInstallationFinished(data) {
+    if (["cancelled", "failed", "start_failed"].includes(data.install_status)) {
+        showToast(
+            data.install_status === "cancelled"
+                ? "Instalação cancelada. Você pode selecionar e instalar novamente para retomar."
+                : data.install_status === "start_failed"
+                    ? "Arquivos instalados, mas o ComfyUI não iniciou. Consulte os logs."
+                    : "A instalação falhou. Consulte os logs e tente novamente.",
+            data.install_status === "cancelled" ? "info" : "error",
+        );
+        return;
+    }
+    if (!data.running) return;
+    state.selectedNames = [];
+    renderQueue();
+    loadPresets();
+    if (data.install_status === "completed_with_failures") {
+        showToast(
+            "ComfyUI iniciado, mas alguns itens não baixaram. Veja os erros no log e execute novamente para retomar só o que falta.",
+            "info",
+        );
+    }
 }
 
 function startStatusPolling() {
@@ -178,522 +342,192 @@ function startStatusPolling() {
     statusPollTimer = setInterval(pollStatus, 5000);
 }
 
-// ============================================
-// Restart ComfyUI
-// ============================================
-async function restartComfyUI() {
-    if (isRestarting || isInstalling) return;
-
-    const restartBtn = document.getElementById('restart-btn');
-    isRestarting = true;
-    restartBtn.disabled = true;
-    restartBtn.classList.add('restarting');
-
-    showToast('Reiniciando ComfyUI...', 'info');
-
-    try {
-        const response = await fetch('/api/restart', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (response.ok) {
-            showToast('Reiniciando... aguarde o ComfyUI voltar.', 'success');
-            // Poll more frequently during restart
-            const fastPoll = setInterval(pollStatus, 2000);
-            setTimeout(() => {
-                clearInterval(fastPoll);
-                isRestarting = false;
-                restartBtn.classList.remove('restarting');
-                restartBtn.disabled = false;
-            }, 30000);
-        } else {
-            throw new Error('Falha no restart');
-        }
-    } catch (error) {
-        console.error('Erro no restart:', error);
-        showToast('Falha ao reiniciar ComfyUI.', 'error');
-        isRestarting = false;
-        restartBtn.classList.remove('restarting');
-        restartBtn.disabled = false;
-    }
-}
-
-// ============================================
-// Load Presets
-// ============================================
-async function loadPresets() {
-    try {
-        const response = await fetch('/api/presets');
-        const data = await response.json();
-
-        const container = document.getElementById('presets-container');
-        const installedList = document.getElementById('installed-presets-list');
-
-        if (!data.presets || data.presets.length === 0) {
-            container.innerHTML = '<div class="loading">Nenhum preset disponivel</div>';
-            return;
-        }
-
-        // Update installed presets list (chips only \u2014 delete UX lives in the popup)
-        const installed = data.presets.filter(p => p.installed).map(p => p.name);
-        if (installed.length === 0) {
-            installedList.innerHTML = '<p class="empty-text">Nenhum preset instalado ainda</p>';
-        } else {
-            installedList.innerHTML = '';
-            installed.forEach(name => {
-                const item = document.createElement('div');
-                item.className = 'installed-item';
-                item.textContent = '\u2713 ' + name;
-                installedList.appendChild(item);
-            });
-        }
-        renderManageList(installed);
-
-        // Render preset cards
-        container.innerHTML = '';
-        // Drop selections whose preset no longer exists (e.g. it was deleted or
-        // renamed), otherwise the button counts presets that are not on screen.
-        const availableNames = new Set(data.presets.map(p => p.name));
-        selectedPresets = selectedPresets.filter(name => availableNames.has(name));
-        data.presets.forEach(preset => {
-            const card = createPresetCard(preset);
-            container.appendChild(card);
-        });
-        // Re-rendering rebuilds the DOM, so restore the selection state that
-        // lives in `selectedPresets` — otherwise the checkboxes render unchecked
-        // while the array still drives the install.
-        restoreSelectionUI();
-        updateAllOrderBadges();
-        updateStartButton();
-
-    } catch (error) {
-        console.error('Falha ao carregar presets:', error);
-        showToast('Falha ao carregar presets', 'error');
-    }
-}
-
-function createPresetCard(preset) {
-    const card = document.createElement('div');
-    card.className = 'preset-card';
-
-    // Selection order badge
-    const orderBadge = document.createElement('div');
-    orderBadge.className = 'selection-order';
-    orderBadge.dataset.presetName = preset.name;
-    card.appendChild(orderBadge);
-
-    // Header: checkbox + title + installed badge
-    const header = document.createElement('div');
-    header.className = 'card-header';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.id = `preset-${preset.name}`;
-    checkbox.className = 'preset-checkbox';
-    checkbox.addEventListener('change', (e) => {
-        e.stopPropagation();
-        if (e.target.checked) {
-            selectedPresets.push(preset.name);
-            card.classList.add('selected');
-        } else {
-            selectedPresets = selectedPresets.filter(n => n !== preset.name);
-            card.classList.remove('selected');
-        }
-        updateAllOrderBadges();
-        updateStartButton();
-    });
-
-    const title = document.createElement('span');
-    title.className = 'card-title';
-    title.textContent = preset.name;
-
-    header.appendChild(checkbox);
-    header.appendChild(title);
-
-    if (preset.installed) {
-        const badge = document.createElement('span');
-        badge.className = 'installed-badge';
-        badge.textContent = '\u2713 Instalado';
-        header.appendChild(badge);
-    }
-
-    // Body: description
-    const body = document.createElement('div');
-    body.className = 'card-body';
-    const desc = document.createElement('p');
-    desc.className = 'description';
-    desc.textContent = preset.description;
-    body.appendChild(desc);
-
-    // Footer: stats + workflow link
-    const footer = document.createElement('div');
-    footer.className = 'card-footer';
-
-    const stats = document.createElement('div');
-    stats.className = 'stats';
-    stats.innerHTML = `<span class="stat">\uD83D\uDCE6 ${preset.models_count} models</span><span class="stat">\uD83D\uDD27 ${preset.nodes_count} nodes</span>`;
-    footer.appendChild(stats);
-
-    for (const wf of preset.workflows || []) {
-        const wfLink = document.createElement('a');
-        wfLink.className = 'workflow-link';
-        wfLink.href = wf.url;
-        wfLink.title = 'Baixar workflow (arraste para o ComfyUI)';
-        wfLink.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 12l-4-4h2.5V2h3v6H12L8 12zm-6 2h12v1.5H2V14z"/></svg>`;
-        wfLink.appendChild(document.createTextNode(` ${wf.label || 'Workflow'}`));
-        if (wf.local) {
-            wfLink.download = wf.file || 'workflow.json';
-        } else {
-            wfLink.target = '_blank';
-            wfLink.rel = 'noopener';
-        }
-        wfLink.addEventListener('click', (e) => e.stopPropagation());
-        footer.appendChild(wfLink);
-    }
-
-    card.appendChild(header);
-    card.appendChild(body);
-    card.appendChild(footer);
-
-    // Make entire card clickable (except checkbox and links)
-    card.addEventListener('click', (e) => {
-        if (e.target === checkbox || e.target.closest('.workflow-link') || isInstalling) return;
-        checkbox.checked = !checkbox.checked;
-        checkbox.dispatchEvent(new Event('change'));
-    });
-
-    return card;
-}
-
-function restoreSelectionUI() {
-    // `selectedPresets` is the source of truth; the DOM is rebuilt on every
-    // render and must be re-synced to it.
-    for (const name of selectedPresets) {
-        const checkbox = document.getElementById(`preset-${name}`);
-        if (!checkbox) continue;
-        checkbox.checked = true;
-        checkbox.closest('.preset-card')?.classList.add('selected');
-    }
-}
-
-function updateAllOrderBadges() {
-    document.querySelectorAll('.selection-order').forEach(badge => {
-        const name = badge.dataset.presetName;
-        const idx = selectedPresets.indexOf(name);
-        if (idx >= 0) {
-            badge.textContent = idx + 1;
-        } else {
-            badge.textContent = '';
-        }
-    });
-}
-
-function updateStartButton() {
-    const startBtn = document.getElementById('start-btn');
-    const count = selectedPresets.length;
-
-    if (count > 0 && !isInstalling) {
-        startBtn.disabled = false;
-        startBtn.textContent = `Iniciar com ${count} Preset${count > 1 ? 's' : ''}`;
-    } else if (!isInstalling) {
-        startBtn.disabled = true;
-        startBtn.textContent = 'Iniciar com Presets Selecionados';
-    }
-}
-
-// ============================================
-// Manage Popup (delete installed presets)
-// ============================================
-function renderManageList(installedNames) {
-    const list = document.getElementById('manage-list');
-    if (!list) return;
-
-    if (!installedNames || installedNames.length === 0) {
-        list.innerHTML = '<p class="empty-text">Nenhum preset instalado ainda.</p>';
+function renderManageDialog() {
+    const list = document.getElementById("manage-list");
+    list.replaceChildren();
+    if (state.installedNames.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "manage-empty";
+        empty.textContent = "Nenhum preset instalado.";
+        list.appendChild(empty);
         return;
     }
-
-    list.innerHTML = '';
-    installedNames.forEach(name => {
-        const row = document.createElement('div');
-        row.className = 'manage-row';
-
-        const label = document.createElement('span');
-        label.className = 'row-label';
-        label.title = name;
-        label.textContent = name;
-
-        const del = document.createElement('button');
-        del.className = 'row-delete';
-        del.type = 'button';
-        del.textContent = 'Deletar';
-        del.setAttribute('aria-label', `Deletar modelos do preset ${name}`);
-        del.addEventListener('click', () => removePreset(name, del));
-
-        row.appendChild(label);
-        row.appendChild(del);
-        list.appendChild(row);
-    });
-}
-
-function toggleManagePopup(force) {
-    const popup = document.getElementById('manage-popup');
-    if (!popup) return;
-    const willOpen = typeof force === 'boolean' ? force : popup.hasAttribute('hidden');
-    if (willOpen) {
-        popup.removeAttribute('hidden');
-    } else {
-        popup.setAttribute('hidden', '');
+    for (const name of state.installedNames) {
+        list.appendChild(createManageRow(name));
     }
 }
 
-// Close popup when clicking outside (or pressing Esc)
-document.addEventListener('click', (e) => {
-    const popup = document.getElementById('manage-popup');
-    const fab = document.getElementById('manage-fab');
-    if (!popup || popup.hasAttribute('hidden')) return;
-    if (popup.contains(e.target) || fab.contains(e.target)) return;
-    toggleManagePopup(false);
-});
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') toggleManagePopup(false);
-});
-
-// ============================================
-// Remove Preset
-// ============================================
-function formatBytes(bytes) {
-    if (!bytes || bytes < 1024) return `${bytes || 0} B`;
-    const units = ['KB', 'MB', 'GB', 'TB'];
-    let size = bytes / 1024;
-    let i = 0;
-    while (size >= 1024 && i < units.length - 1) {
-        size /= 1024;
-        i++;
-    }
-    return `${size.toFixed(2)} ${units[i]}`;
+function createManageRow(name) {
+    const row = document.createElement("div");
+    row.className = "manage-row";
+    const label = document.createElement("span");
+    label.className = "manage-row__name";
+    label.textContent = name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "manage-remove";
+    remove.textContent = "REMOVER";
+    remove.disabled = state.isInstalling;
+    remove.addEventListener("click", () => removePreset(name, remove));
+    row.append(label, remove);
+    return row;
 }
 
-async function removePreset(presetName, btn) {
-    if (isInstalling) {
-        showToast('Aguarde a instalação terminar antes de remover.', 'error');
+function openManageDialog() {
+    renderManageDialog();
+    const dialog = document.getElementById("manage-dialog");
+    if (!dialog.open) dialog.showModal();
+}
+
+async function removePreset(presetName, button) {
+    if (state.isInstalling) {
+        showToast("Aguarde a instalação terminar antes de remover.", "error");
         return;
     }
-    const ok = confirm(
-        `Remover modelos do preset "${presetName}"?\n\n` +
-        `- Apenas modelos exclusivos serão apagados (compartilhados com outros presets ficam).\n` +
-        `- Custom nodes não serão removidos.\n` +
-        `- Modelos sem nome fixo (ex.: Civitai) podem ficar no disco e precisam ser removidos manualmente.`
+    const confirmed = confirm(
+        `Remover modelos do preset "${presetName}"?\n\n`
+        + "- Apenas modelos exclusivos serão apagados (compartilhados com outros presets ficam).\n"
+        + "- Custom nodes não serão removidos.\n"
+        + "- Modelos sem nome fixo (ex.: Civitai) podem ficar no disco e precisam ser removidos manualmente.",
     );
-    if (!ok) return;
+    if (!confirmed) return;
 
-    if (btn) {
-        btn.disabled = true;
-        btn.classList.add('removing');
-    }
-
+    button.disabled = true;
     try {
-        const response = await fetch('/api/uninstall', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ preset: presetName })
+        const response = await fetch("/api/uninstall", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ preset: presetName }),
         });
-
         const result = await response.json().catch(() => ({}));
-
         if (!response.ok || !result.success) {
-            const msg = result.error || `Falha ao remover (HTTP ${response.status})`;
-            showToast(msg, 'error');
+            showToast(result.error || `Falha ao remover (HTTP ${response.status})`, "error");
             return;
         }
-
         const parts = [
             `${result.deleted?.length || 0} arquivo(s) removido(s)`,
-            `${formatBytes(result.bytes_freed || 0)} liberados`
+            `${formatBytes(result.bytes_freed || 0)} liberados`,
         ];
         if (result.shared_kept) parts.push(`${result.shared_kept} mantido(s) por compartilhamento`);
         if (result.civitai_skipped) parts.push(`${result.civitai_skipped} sem nome (Civitai)`);
         if (result.errors?.length) parts.push(`${result.errors.length} erro(s)`);
-        showToast(`✓ ${presetName}: ` + parts.join(' • '), 'success');
-
+        showToast(`✓ ${presetName}: ${parts.join(" • ")}`, "success");
         await loadPresets();
     } catch (error) {
-        console.error('Erro ao remover preset:', error);
-        showToast('Falha ao remover preset (rede/servidor).', 'error');
+        console.error("Erro ao remover preset:", error);
+        showToast("Falha ao remover preset (rede/servidor).", "error");
     } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.classList.remove('removing');
-        }
+        button.disabled = state.isInstalling;
     }
 }
 
-// ============================================
-// Cancel install
-// ============================================
 async function cancelInstall() {
     if (!confirm(
-        'Cancelar a instalação?\n\n' +
-        'Arquivos concluídos serão preservados e downloads parciais poderão ser retomados ao instalar novamente.'
+        "Cancelar a instalação?\n\n"
+        + "Arquivos concluídos serão preservados e downloads parciais poderão ser retomados ao instalar novamente.",
     )) return;
-    const btn = document.getElementById('cancel-btn');
-    if (btn) btn.disabled = true;
+    const button = document.getElementById("cancel-btn");
+    button.disabled = true;
     try {
-        const r = await fetch('/api/cancel', { method: 'POST' });
-        const d = await r.json().catch(() => ({}));
+        const response = await fetch("/api/cancel", { method: "POST" });
+        const result = await response.json().catch(() => ({}));
         showToast(
-            d.cancelled ? 'Cancelamento solicitado — preservando o que já foi concluído.' : 'Nenhuma instalação ativa.',
-            'info'
+            result.cancelled ? "Cancelamento solicitado — preservando o que já foi concluído." : "Nenhuma instalação ativa.",
+            "info",
         );
     } catch {
-        showToast('Falha ao solicitar cancelamento.', 'error');
+        showToast("Falha ao solicitar cancelamento.", "error");
     } finally {
-        if (btn) btn.disabled = false;
+        button.disabled = false;
     }
 }
 
-// ============================================
-// Install & Start
-// ============================================
 async function startWithPresets() {
-    if (selectedPresets.length === 0 || isInstalling) return;
-
-    const startBtn = document.getElementById('start-btn');
-    isInstalling = true;
-    startBtn.disabled = true;
-    startBtn.textContent = 'Instalando...';
-
-    showToast('Instalando presets e iniciando ComfyUI...', 'info');
-
-    const cancelBtn = document.getElementById('cancel-btn');
-    if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.disabled = false; }
+    if (state.selectedNames.length === 0 || state.isInstalling) return;
+    state.isInstalling = true;
+    renderPresetCatalog();
+    renderQueue();
+    renderManageDialog();
+    document.getElementById("cancel-btn").hidden = false;
+    showToast("Instalando presets e iniciando ComfyUI...", "info");
 
     try {
-        const extraFlagsStr = document.getElementById('extra-flags-input').value.trim();
-        const extraFlags = extraFlagsStr ? extraFlagsStr.split(/\s+/).filter(Boolean) : [];
-
-        const response = await fetch('/api/install', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                presets: selectedPresets,
-                extra_flags: extraFlags
-            })
+        const flagsInput = document.getElementById("extra-flags-input");
+        const extraFlags = flagsInput.value.trim().split(/\s+/).filter(Boolean);
+        const response = await fetch("/api/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ presets: state.selectedNames, extra_flags: extraFlags }),
         });
-
-        if (response.ok) {
-            showToast('Instalacao iniciada! ComfyUI sera iniciado quando estiver pronto.', 'success');
-
-            // Poll status until ComfyUI is running again (installation complete)
-            const installPoll = setInterval(async () => {
-                try {
-                    const statusResp = await fetch('/api/status');
-                    const statusData = await statusResp.json();
-                    pollStatus(); // Update UI
-                    const terminalFailure = !statusData.installing &&
-                        ['cancelled', 'failed', 'start_failed'].includes(statusData.install_status);
-                    if (terminalFailure) {
-                        clearInterval(installPoll);
-                        isInstalling = false;
-                        const cb = document.getElementById('cancel-btn');
-                        if (cb) cb.hidden = true;
-                        updateStartButton();
-                        showToast(
-                            statusData.install_status === 'cancelled'
-                                ? 'Instalação cancelada. Você pode selecionar e instalar novamente para retomar.'
-                                : statusData.install_status === 'start_failed'
-                                    ? 'Arquivos instalados, mas o ComfyUI não iniciou. Consulte os logs.'
-                                    : 'A instalação falhou. Consulte os logs e tente novamente.',
-                            statusData.install_status === 'cancelled' ? 'info' : 'error'
-                        );
-                    } else if (statusData.running && !statusData.installing) {
-                        clearInterval(installPoll);
-                        await loadPresets();
-                        selectedPresets = [];
-                        isInstalling = false;
-                        const cb = document.getElementById('cancel-btn');
-                        if (cb) cb.hidden = true;
-                        updateStartButton();
-                        // Launchable but incomplete: ComfyUI is up, and the
-                        // preset stays pending so a re-run resumes only what
-                        // is missing.
-                        if (statusData.install_status === 'completed_with_failures') {
-                            showToast(
-                                'ComfyUI iniciado, mas alguns itens não baixaram. ' +
-                                'Veja os erros no log e execute novamente para retomar só o que falta.',
-                                'info'
-                            );
-                        }
-                    }
-                } catch {
-                    // Keep polling on network errors
-                }
-            }, 3000);
-        } else {
-            // Surface the server's own reason (e.g. the 409 for a concurrent
-            // install) instead of a generic failure the user cannot act on.
-            let serverMessage = '';
-            try {
-                const body = await response.json();
-                serverMessage = body.error || '';
-            } catch {
-                // Non-JSON body; fall through to the generic message.
-            }
-            throw new Error(serverMessage || 'Falha na requisicao de instalacao');
+        if (!response.ok) {
+            const result = await response.json().catch(() => ({}));
+            throw new Error(result.error || "Falha na requisição de instalação");
         }
-
+        showToast("Instalação iniciada! ComfyUI será iniciado quando estiver pronto.", "success");
     } catch (error) {
-        console.error('Erro na instalacao:', error);
-        showToast(error.message || 'Instalacao falhou. Verifique o console para detalhes.', 'error');
-        isInstalling = false;
-        const cb = document.getElementById('cancel-btn');
-        if (cb) cb.hidden = true;
-        startBtn.disabled = false;
-        startBtn.textContent = 'Iniciar com Presets Selecionados';
+        console.error("Erro na instalação:", error);
+        state.isInstalling = false;
+        renderPresetCatalog();
+        renderQueue();
+        renderManageDialog();
+        document.getElementById("cancel-btn").hidden = true;
+        showToast(error.message || "Instalação falhou. Verifique o console para detalhes.", "error");
     }
 }
 
-// ============================================
-// Shutdown
-// ============================================
-async function shutdownArrakis() {
-    if (!confirm(
-        'Desligar o Arrakis Start e o ComfyUI? Downloads incompletos de modelos serão apagados.'
-    )) return;
+async function restartComfyUI() {
+    if (state.isRestarting || state.isInstalling) return;
+    const button = document.getElementById("restart-btn");
+    state.isRestarting = true;
+    button.disabled = true;
+    showToast("Reiniciando ComfyUI...", "info");
     try {
-        const response = await fetch('/api/shutdown', { method: 'POST' });
-        if (response.ok) {
-            showToast('Arrakis Start desligando...', 'success');
-            const shutdownBtn = document.getElementById('shutdown-btn');
-            shutdownBtn.disabled = true;
-            const textNode = Array.from(shutdownBtn.childNodes).find(n => n.nodeType === Node.TEXT_NODE);
-            if (textNode) {
-                textNode.textContent = ' Desligando...';
-            }
-        } else {
-            showToast('Falha ao desligar.', 'error');
-        }
+        const response = await fetch("/api/restart", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        });
+        if (!response.ok) throw new Error("Falha no restart");
+        showToast("Reiniciando... aguarde o ComfyUI voltar.", "success");
+        const fastPoll = setInterval(pollStatus, 2000);
+        setTimeout(() => {
+            clearInterval(fastPoll);
+            state.isRestarting = false;
+            pollStatus();
+        }, 30000);
     } catch (error) {
-        showToast('Arrakis Start desligado.', 'success');
+        console.error("Erro no restart:", error);
+        state.isRestarting = false;
+        button.disabled = false;
+        showToast("Falha ao reiniciar ComfyUI.", "error");
     }
 }
 
-// ============================================
-// Initialize
-// ============================================
-document.addEventListener('DOMContentLoaded', () => {
+async function shutdownArrakis() {
+    if (!confirm("Desligar o Arrakis Start e o ComfyUI? Downloads incompletos de modelos serão apagados.")) return;
+    try {
+        const response = await fetch("/api/shutdown", { method: "POST" });
+        if (!response.ok) {
+            showToast("Falha ao desligar.", "error");
+            return;
+        }
+        const button = document.getElementById("shutdown-btn");
+        button.disabled = true;
+        button.lastChild.textContent = " DESLIGANDO...";
+        showToast("Arrakis Start desligando...", "success");
+    } catch {
+        showToast("Arrakis Start desligado.", "success");
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("start-btn").addEventListener("click", startWithPresets);
+    document.getElementById("cancel-btn").addEventListener("click", cancelInstall);
+    document.getElementById("restart-btn").addEventListener("click", restartComfyUI);
+    document.getElementById("shutdown-btn").addEventListener("click", shutdownArrakis);
+    document.getElementById("manage-btn").addEventListener("click", openManageDialog);
+    document.getElementById("manage-close").addEventListener("click", () => {
+        document.getElementById("manage-dialog").close();
+    });
     loadPresets();
     startStatusPolling();
-    document.getElementById('start-btn').addEventListener('click', startWithPresets);
-    document.getElementById('restart-btn').addEventListener('click', restartComfyUI);
-    document.getElementById('shutdown-btn').addEventListener('click', shutdownArrakis);
-    document.getElementById('manage-fab').addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleManagePopup();
-    });
-    document.getElementById('manage-close').addEventListener('click', () => toggleManagePopup(false));
-
-    // Cancel install
-    document.getElementById('cancel-btn').addEventListener('click', cancelInstall);
 });

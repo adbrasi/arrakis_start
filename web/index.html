@@ -1,104 +1,83 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Arrakis Start - ComfyUI</title>
     <link rel="stylesheet" href="styles.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
-        rel="stylesheet">
 </head>
-
 <body>
-    <div class="container">
-        <main>
-            <!-- Top Bar: Status + Restart -->
-            <section class="top-bar">
-                <div class="status-area">
-                    <span id="status-dot" class="status-dot stopped"></span>
-                    <span id="status-text" class="status-text">ComfyUI: Verificando...</span>
-                </div>
-                <div class="top-bar-right">
-                    <input id="extra-flags-input" type="text" class="extra-flags-input"
-                        placeholder="Flags extras (ex: --disable-xformers)"
-                        title="Flags adicionais para o ComfyUI ao iniciar um preset">
-                    <button id="restart-btn" class="btn-restart" title="Reiniciar ComfyUI com o ultimo preset">
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M13.65 2.35A7.96 7.96 0 008 0C3.58 0 .01 3.58.01 8S3.58 16 8 16c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 018 14 6 6 0 012 8a6 6 0 016-6c1.66 0 3.14.69 4.22 1.78L9 7h7V0l-2.35 2.35z" fill="currentColor"/>
-                        </svg>
-                        Reiniciar ComfyUI
-                    </button>
-                    <button id="shutdown-btn" class="btn-shutdown" title="Desligar Arrakis Start e ComfyUI">
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <path d="M8 1v6h1V1H8zM4.83 3.24A6 6 0 002 8a6 6 0 1012 0 6 6 0 00-2.83-4.76l-.58.82A5 5 0 0113 8a5 5 0 11-8.59-3.94l-.58-.82z" fill="currentColor"/>
-                        </svg>
-                        Desligar
-                    </button>
+    <main id="app-shell" class="app-shell">
+        <section id="preset-catalog" class="preset-catalog" aria-label="Catálogo de presets">
+            <header class="section-bar section-bar--pinned">
+                <span class="section-tag">FIXADOS</span>
+                <span class="section-hint">os que sempre uso</span>
+            </header>
+            <div id="pinned-presets" class="pinned-grid"></div>
+
+            <header class="section-bar">
+                <span class="section-tag section-tag--muted">RECENTES · MODIFICADO</span>
+            </header>
+            <div id="recent-presets" class="recent-list"></div>
+        </section>
+
+        <aside id="control-panel" class="control-panel" aria-label="Controles do Arrakis Start">
+            <section class="status-block" aria-live="polite">
+                <span id="status-dot" class="status-dot stopped" aria-hidden="true"></span>
+                <strong id="status-text">COMFYUI: VERIFICANDO</strong>
+                <span id="status-port" class="status-port"></span>
+            </section>
+
+            <label class="flags-block" for="extra-flags-input">
+                <span class="control-label">FLAGS EXTRAS</span>
+                <input id="extra-flags-input" type="text" placeholder="--disable-xformers">
+            </label>
+
+            <section class="queue-block" aria-labelledby="queue-title">
+                <h2 id="queue-title" class="control-label">FILA · <span id="queue-count">0</span> PRESETS</h2>
+                <div id="queue-list" class="queue-list"></div>
+                <div class="queue-total"><span>TOTAL</span><strong id="queue-total">0 GB</strong></div>
+                <button id="start-btn" class="primary-action" type="button" disabled>SELECIONE UM PRESET</button>
+                <button id="cancel-btn" class="cancel-action" type="button" hidden>CANCELAR INSTALAÇÃO</button>
+                <div class="overall-progress" aria-live="polite">
+                    <div id="progress-summary" class="progress-summary">AGUARDANDO</div>
+                    <div class="progress-track"><span id="progress-fill" class="progress-fill"></span></div>
                 </div>
             </section>
 
-            <!-- Presets Instalados -->
-            <section class="installed-section">
-                <h3>Presets Instalados</h3>
-                <div id="installed-presets-list" class="installed-list">
-                    <p class="loading-text">Carregando...</p>
-                </div>
+            <section class="activity-block" aria-labelledby="activity-title">
+                <h2 id="activity-title" class="control-label">ATIVIDADE</h2>
+                <div id="activity-list" class="activity-list" aria-live="polite"></div>
             </section>
 
-            <!-- Seletor de Presets -->
-            <section class="presets-section">
-                <div id="presets-container" class="presets-grid">
-                    <div class="loading">Carregando presets...</div>
-                </div>
-            </section>
-
-            <!-- Botao de Acao -->
-            <section class="actions-section">
-                <button id="start-btn" class="btn-primary" disabled>
-                    Iniciar com Presets Selecionados
+            <footer class="control-footer">
+                <button id="restart-btn" type="button" title="Reiniciar ComfyUI">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.7 5.3A8 8 0 1 0 18 11h-2a6 6 0 1 1-1-4.3L12 10h6V4l-1.3 1.3Z"/></svg>
+                    REINICIAR
                 </button>
-                <button id="cancel-btn" class="btn-cancel" type="button" hidden>
-                    Cancelar instalação
+                <button id="shutdown-btn" type="button" title="Desligar Arrakis Start">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9 2h2v8H9V2Zm-4.1 2.7 1.4 1.4A5.8 5.8 0 1 0 13.7 6l1.4-1.4A7.8 7.8 0 1 1 4.9 4.7Z"/></svg>
+                    DESLIGAR
                 </button>
-            </section>
+                <button id="manage-btn" type="button" title="Gerenciar presets instalados">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 2h6l1 2h3v2H3V4h3l1-2Zm-2 5h10l-.7 10H5.7L5 7Zm3 2v6h2V9H8Zm4 0v6h-2V9h2Z"/></svg>
+                    DELETAR
+                </button>
+            </footer>
+        </aside>
+    </main>
 
-            <!-- Progresso real de download/instalacao (via /api/status) -->
-            <section id="progress-panel" class="progress-panel" hidden>
-                <div id="progress-stage" class="progress-stage"></div>
-                <div id="progress-files" class="progress-files"></div>
-            </section>
-        </main>
-    </div>
-
-    <!-- Toast Notification Container -->
-    <div id="toast-container" class="toast-container"></div>
-
-    <!-- Floating manage button -->
-    <button id="manage-fab" class="manage-fab" type="button"
-        title="Gerenciar presets instalados" aria-label="Gerenciar presets instalados">
-        <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
-            <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-        </svg>
-    </button>
-
-    <!-- Manage popup (installed presets with delete) -->
-    <aside id="manage-popup" class="manage-popup" hidden role="dialog" aria-labelledby="manage-popup-title">
-        <header class="manage-header">
-            <h4 id="manage-popup-title">Presets instalados</h4>
-            <button id="manage-close" class="manage-close" type="button" aria-label="Fechar">✕</button>
+    <dialog id="manage-dialog" class="manage-dialog" aria-labelledby="manage-title">
+        <header class="manage-dialog__header">
+            <h2 id="manage-title">PRESETS INSTALADOS</h2>
+            <button id="manage-close" type="button" aria-label="Fechar gerenciador">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.7 4.3 4.3 4.3 4.3-4.3 1.4 1.4-4.3 4.3 4.3 4.3-1.4 1.4-4.3-4.3-4.3 4.3-1.4-1.4 4.3-4.3-4.3-4.3 1.4-1.4Z"/></svg>
+            </button>
         </header>
-        <div id="manage-list" class="manage-list">
-            <p class="empty-text">Nenhum preset instalado ainda.</p>
-        </div>
-        <p class="manage-footnote">Apaga só os modelos do preset. Compartilhados ficam. Custom nodes não são removidos.</p>
-    </aside>
+        <div id="manage-list" class="manage-list"></div>
+    </dialog>
 
+    <div id="toast-container" class="toast-container" aria-live="assertive"></div>
     <script src="app.js"></script>
 </body>
-
 </html>
