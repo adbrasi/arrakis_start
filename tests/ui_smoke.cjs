@@ -271,6 +271,11 @@ async function newAppPage(browser, baseURL, viewport, api, options = {}) {
         if (message.type() === "error") consoleErrors.push(message.text());
     });
     page.on("dialog", dialog => dialog.accept());
+    await page.route("https://fonts.googleapis.com/**", route => route.fulfill({
+        status: 200,
+        contentType: "text/css",
+        body: "",
+    }));
     await mockApi(page, api, requests);
     await page.goto(new URL("/", baseURL).href, { waitUntil: "domcontentloaded" });
     await page.locator(options.readySelector ?? ".pinned-card").first().waitFor({ state: "attached" });
@@ -354,6 +359,13 @@ function createDeferred() {
 
 async function verifyCatalogInteraction(page) {
     const card = page.locator(".pinned-card").first();
+    assert.equal(await card.evaluate(element => getComputedStyle(element).cursor), "pointer");
+    assert.equal(
+        await page.locator(".recent-row").first().evaluate(
+            element => getComputedStyle(element).cursor,
+        ),
+        "pointer",
+    );
     await card.locator(".preset-description").click();
     assert.equal(await page.locator("#queue-count").textContent(), "1");
     await card.locator(".preset-meta").click();
@@ -391,7 +403,9 @@ async function verifyLifecycleRequests(page, requests, currentStatus) {
 
     assert.equal(await page.locator("#restart-btn").isDisabled(), false);
     const restartRequest = await clickAndCapturePost(page, "#restart-btn", "/api/restart");
-    assertActionRequest(restartRequest, "/api/restart");
+    assertActionRequest(restartRequest, "/api/restart", {
+        extra_flags: ["--disable-xformers", "--preview-method", "auto"],
+    });
 
     const shutdownRequest = await clickAndCapturePost(page, "#shutdown-btn", "/api/shutdown");
     assertActionRequest(shutdownRequest, "/api/shutdown");
@@ -824,6 +838,26 @@ async function main() {
         );
         assert.equal(await desktop.locator(".pinned-card").count(), 3);
         assert.equal(await desktop.locator(".pinned-card .preset-pin").count(), 3);
+        assert.match(await desktop.locator("#manage-btn").textContent(), /GERENCIAR/);
+        assert.deepEqual(
+            await desktop.evaluate(() => {
+                const element = document.querySelector(".preset-description");
+                return {
+                    color: getComputedStyle(element).color,
+                    fontSize: getComputedStyle(element).fontSize,
+                };
+            }),
+            { color: "rgb(170, 163, 188)", fontSize: "14px" },
+        );
+        for (const selector of [".preset-meta", ".control-label"]) {
+            assert.equal(
+                await desktop.evaluate(
+                    selected => getComputedStyle(document.querySelector(selected)).fontSize,
+                    selector,
+                ),
+                "12px",
+            );
+        }
         if (!installing) await verifyCatalogInteraction(desktop);
 
         const desktopLayout = await desktop.evaluate(() => ({
@@ -837,6 +871,12 @@ async function main() {
             /fila pronta/.test(await desktop.locator("#activity-list").textContent())
         ), "activity did not render");
         assert.match(await desktop.locator("#activity-list").textContent(), /xet/);
+        assert.equal(
+            await desktop.evaluate(
+                () => getComputedStyle(document.querySelector(".activity-line")).fontSize,
+            ),
+            "12px",
+        );
 
         if (installing) {
             assert.equal(await desktop.locator("#start-btn").textContent(), "INSTALANDO...");

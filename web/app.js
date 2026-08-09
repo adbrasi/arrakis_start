@@ -557,6 +557,14 @@ async function cancelInstall() {
     }
 }
 
+function readExtraFlags() {
+    return document.getElementById("extra-flags-input")
+        .value
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+}
+
 async function startWithPresets() {
     if (state.selectedNames.length === 0 || state.isInstalling || !state.statusReachable) return;
     beginLifecycleMutation();
@@ -568,12 +576,13 @@ async function startWithPresets() {
     showToast("Instalando presets e iniciando ComfyUI...", "info");
 
     try {
-        const flagsInput = document.getElementById("extra-flags-input");
-        const extraFlags = flagsInput.value.trim().split(/\s+/).filter(Boolean);
         const response = await fetch("/api/install", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ presets: state.selectedNames, extra_flags: extraFlags }),
+            body: JSON.stringify({
+                presets: state.selectedNames,
+                extra_flags: readExtraFlags(),
+            }),
         });
         if (!response.ok) {
             const result = await response.json().catch(() => ({}));
@@ -604,6 +613,7 @@ async function restartComfyUI() {
         const response = await fetch("/api/restart", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ extra_flags: readExtraFlags() }),
         });
         if (!response.ok) throw new Error("Falha no restart");
         settleLifecycleMutation();
