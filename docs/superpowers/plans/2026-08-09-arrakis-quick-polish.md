@@ -17,6 +17,7 @@
 - Restart flags are runtime-only and must not be persisted.
 - Add `https://github.com/adbrasi/upscale_smooth` exactly once to each target preset.
 - Preserve the existing restart operation reservation and conflict handling.
+- Shutdown and restart must leave no launcher or `main.py` process owned by this exact `COMFY_DIR`.
 - Preserve the untracked `Redesign Arrakis Start/` directory.
 
 ---
@@ -344,7 +345,53 @@ git commit -m "fix: aplica flags atuais ao reiniciar ComfyUI"
 
 ---
 
-### Task 4: Run the finished batch gate
+### Task 4: Stop every managed ComfyUI process
+
+**Files:**
+- Create: `tests/test_process_manager.py`
+- Modify: `tests/test_runtime_stack.py`
+- Modify: `process_manager.py`
+- Modify: `server.py`
+
+**Interfaces:**
+- Produces: `ProcessManager._managed_comfy_server_pids() -> list[int]`
+- Preserves: strict command-line ownership under the exact configured `COMFY_DIR`
+
+- [ ] **Step 1: Reproduce the orphaned process failure**
+
+Create two real temporary `ComfyUI/main.py` processes. Track only the first,
+mock the configured port as unused, call `ensure_stopped()`, and assert both
+processes exit. Also assert `_shutdown_runtime()` calls `ensure_stopped()` when
+`is_running()` reports false.
+
+- [ ] **Step 2: Run the focused tests and verify RED**
+
+```bash
+python -m unittest tests.test_process_manager tests.test_runtime_stack.InstallCoordinatorTests.test_idle_shutdown_still_sweeps_residual_processes -v
+```
+
+- [ ] **Step 3: Implement the strict residual-process sweep**
+
+Identify only the exact configured ComfyUI launcher and `COMFY_DIR/main.py`,
+terminate every matching PID after the tracked/port paths, rescan to prove none
+remain, and call `ensure_stopped()` unconditionally during shutdown.
+
+- [ ] **Step 4: Run focused lifecycle tests and verify GREEN**
+
+```bash
+python -m unittest tests.test_process_manager tests.test_runtime_stack.InstallCoordinatorTests -v
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_process_manager.py tests/test_runtime_stack.py process_manager.py server.py
+git commit -m "fix: encerra todos os processos gerenciados do ComfyUI"
+```
+
+---
+
+### Task 5: Run the finished batch gate
 
 **Files:**
 - Verify only: all files modified in Tasks 1 through 3

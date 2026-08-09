@@ -51,9 +51,21 @@ Add the exact custom-node repository URL `https://github.com/adbrasi/upscale_smo
 
 No model size or workflow metadata changes are required.
 
+## Complete ComfyUI process cleanup
+
+Shutdown and restart must not leave managed ComfyUI launchers or `main.py`
+processes behind. The current tracked-PID and port-owner checks remain the
+first cleanup paths, followed by a strict sweep limited to processes whose
+command line belongs to this Arrakis workspace's exact `COMFY_DIR`.
+
+Shutdown must run `ensure_stopped()` even when the state and configured port
+appear idle, because an orphaned `main.py` may own neither. Restart must only
+start the replacement process after the same cleanup reports success.
+
 ## Verification
 
 - UI smoke coverage must prove the complete clickable card/row cursor, the `GERENCIAR` label, the approved typography values, and the restart request payload.
 - Backend tests must prove restart flags reach `ProcessManager.start()` and invalid flag payloads are rejected without leaking the restart reservation.
 - Preset tests must prove the repository is present exactly once in all four target presets.
+- Process-manager tests must prove two managed `main.py` processes are both stopped, including one that is neither tracked nor the configured port owner.
 - Run the full project gate once after the complete batch is implemented.
