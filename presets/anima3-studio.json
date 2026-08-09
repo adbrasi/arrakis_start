@@ -211,7 +211,8 @@
     "https://github.com/kijai/ComfyUI-Florence2",
     "https://github.com/Merserk/ComfyUI-PiD",
     "https://github.com/BadCafeCode/masquerade-nodes-comfyui",
-    "https://github.com/zombieyang/sd-ppp"
+    "https://github.com/zombieyang/sd-ppp",
+    "https://github.com/adbrasi/upscale_smooth"
   ],
   "workflow": "animaV2.json"
 }

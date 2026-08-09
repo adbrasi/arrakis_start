@@ -113,6 +113,28 @@ class PinkCherryPresetTests(unittest.TestCase):
         self.assertTrue(preset["use_sage_attention"])
 
 
+class UpscaleSmoothPresetTests(unittest.TestCase):
+    TARGET_PRESETS = {
+        "anima3-studio.json",
+        "ltx23-anime-production.json",
+        "minimax-h3-5090.json",
+        "minimax-h3-6000pro-96gb.json",
+    }
+    NODE_URL = "https://github.com/adbrasi/upscale_smooth"
+
+    def test_target_presets_include_upscale_smooth_exactly_once(self):
+        presets = {
+            preset["_filename"]: preset for preset in start.load_presets()
+        }
+
+        for filename in self.TARGET_PRESETS:
+            with self.subTest(filename=filename):
+                self.assertEqual(
+                    presets[filename]["nodes"].count(self.NODE_URL),
+                    1,
+                )
+
+
 class PresetUiMetadataTests(unittest.TestCase):
     EXPECTED = {
         "anima3-studio.json": (True, 42),

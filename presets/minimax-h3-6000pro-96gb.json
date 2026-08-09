@@ -38,6 +38,7 @@
     }
   ],
   "nodes": [
-    "https://github.com/Merserk/ComfyUI-PiD"
+    "https://github.com/Merserk/ComfyUI-PiD",
+    "https://github.com/adbrasi/upscale_smooth"
   ]
 }
