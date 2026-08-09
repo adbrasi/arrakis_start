@@ -693,11 +693,45 @@ async function verifyResponsiveAccessibility(browser, baseURL) {
     for (const width of [375, 768, 1024, 1440]) {
         const { page } = await newAppPage(browser, baseURL, { width, height: 860 }, { status: createStatus() });
         try {
-            const dimensions = await page.evaluate(() => ({
-                page: document.documentElement.scrollWidth,
-                viewport: window.innerWidth,
-            }));
+            const dimensions = await page.evaluate(() => {
+                const shell = document.querySelector(".app-shell").getBoundingClientRect();
+                const panel = document.getElementById("control-panel").getBoundingClientRect();
+                const footerButtons = [...document.querySelectorAll(".control-footer button")].map(button => {
+                    const rect = button.getBoundingClientRect();
+                    const icon = button.querySelector("svg").getBoundingClientRect();
+                    return {
+                        height: rect.height,
+                        fontSize: parseFloat(getComputedStyle(button).fontSize),
+                        iconWidth: icon.width,
+                        iconHeight: icon.height,
+                    };
+                });
+                return {
+                    page: document.documentElement.scrollWidth,
+                    viewport: window.innerWidth,
+                    shellWidth: shell.width,
+                    panelWidth: panel.width,
+                    footerButtons,
+                };
+            });
             assert.equal(dimensions.page, dimensions.viewport, `horizontal overflow at ${width}px`);
+            assert.ok(
+                Math.abs(dimensions.shellWidth - width) <= 1,
+                `shell does not fill ${width}px viewport`,
+            );
+            if (width > 920) {
+                const expectedPanelWidth = Math.min(480, Math.max(360, width * 0.30));
+                assert.ok(
+                    Math.abs(dimensions.panelWidth - expectedPanelWidth) <= 1,
+                    `control panel width is wrong at ${width}px`,
+                );
+            }
+            for (const button of dimensions.footerButtons) {
+                assert.ok(button.height >= 68, `footer button is shorter than 68px at ${width}px`);
+                assert.equal(button.fontSize, 11);
+                assert.equal(button.iconWidth, 20);
+                assert.equal(button.iconHeight, 20);
+            }
 
             if (width === 375) {
                 await page.locator("#manage-btn").click();
@@ -798,7 +832,7 @@ async function main() {
             panelWidth: document.getElementById("control-panel").getBoundingClientRect().width,
         }));
         assert.equal(desktopLayout.columns, 3);
-        assert.ok(desktopLayout.panelWidth >= 298 && desktopLayout.panelWidth <= 302);
+        assert.ok(Math.abs(desktopLayout.panelWidth - 432) <= 1);
         await waitForCondition(async () => (
             /fila pronta/.test(await desktop.locator("#activity-list").textContent())
         ), "activity did not render");

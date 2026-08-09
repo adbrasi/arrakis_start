@@ -42,11 +42,11 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .preset-name { font-family: "Space Grotesk", system-ui, sans-serif; }
 
 .app-shell {
-    width: min(100%, 1280px);
+    width: 100%;
     min-height: 100vh;
-    margin: 0 auto;
+    margin: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-columns: minmax(0, 1fr) clamp(360px, 30vw, 480px);
     background: var(--catalog-bg);
     border-inline: 2px solid var(--border);
 }
@@ -181,10 +181,10 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 .activity-line--error { color: var(--destructive); }
 
 .control-footer { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 2px solid var(--border); }
-.control-footer button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 52px; padding: 7px 4px; color: var(--text-secondary); background: transparent; border: 0; border-right: 1px solid var(--border); font-size: 9px; font-weight: 700; letter-spacing: .03em; transition: color 180ms ease, background-color 180ms ease, opacity 180ms ease; }
+.control-footer button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 68px; padding: 7px 4px; color: var(--text-secondary); background: transparent; border: 0; border-right: 1px solid var(--border); font-size: 11px; font-weight: 700; letter-spacing: .03em; transition: color 180ms ease, background-color 180ms ease, opacity 180ms ease; }
 .control-footer button:last-child { border-right: 0; color: var(--destructive); }
 .control-footer button:hover:not(:disabled) { color: var(--text); background: var(--section-bg); }
-.control-footer svg { width: 16px; height: 16px; fill: currentColor; }
+.control-footer svg { width: 20px; height: 20px; fill: currentColor; }
 
 .toast-container { position: fixed; right: 18px; bottom: 72px; z-index: 10; display: grid; gap: 8px; max-width: min(360px, calc(100vw - 36px)); }
 .toast { padding: 11px 13px; color: var(--text); background: var(--section-bg); border: 2px solid var(--border); box-shadow: 0 10px 30px #0008; font-size: 11px; }
@@ -235,7 +235,6 @@ button:focus-visible, input:focus-visible, a:focus-visible {
     .preset-select,
     .primary-action,
     .cancel-action,
-    .control-footer button,
     .manage-dialog__header button,
     .manage-remove,
     .workflow-link { min-height: 44px; }
@@ -255,7 +254,6 @@ button:focus-visible, input:focus-visible, a:focus-visible {
     .workflow-link { min-width: 44px; justify-content: center; padding: 0 8px; }
     .manage-dialog__header button { width: 44px; height: 44px; }
     .manage-remove { min-width: 44px; }
-    .control-footer button { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
