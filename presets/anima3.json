@@ -39,7 +39,8 @@
     "https://github.com/omar92/ComfyUI-QualityOfLifeSuit_Omar92",
     "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public",
     "https://github.com/rgthree/rgthree-comfy",
-    "https://github.com/Merserk/ComfyUI-PiD"
+    "https://github.com/Merserk/ComfyUI-PiD",
+    "https://github.com/BadCafeCode/masquerade-nodes-comfyui"
   ],
   "workflow": "animaV2.json"
 }
