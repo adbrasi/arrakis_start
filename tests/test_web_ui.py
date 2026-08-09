@@ -491,6 +491,7 @@ class UninstallEndpointTests(unittest.TestCase):
             "restart-stop",
             "restart-start",
             "shutdown-cleanup",
+            "restart-stop",
         ])
         self.assertTrue(start.reserve_install_slot())
         start.finish_install_reservation("failed")

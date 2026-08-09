@@ -121,7 +121,10 @@ def _shutdown_runtime(terminate_process: bool = False):
         pm = ProcessManager(state)
         if pm.is_running():
             logger.info("Stopping ComfyUI before shutdown...")
-            pm.ensure_stopped(port=_comfy_port(state), timeout=15)
+        else:
+            logger.info("Checking for residual ComfyUI processes before shutdown...")
+        if not pm.ensure_stopped(port=_comfy_port(state), timeout=15):
+            raise RuntimeError("Failed to stop all managed ComfyUI processes")
         if terminate_process:
             os.kill(os.getpid(), signal.SIGTERM)
 

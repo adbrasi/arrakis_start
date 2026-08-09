@@ -359,6 +359,21 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertTrue(start.reserve_install_slot())
         start.finish_install_reservation('failed')
 
+    def test_idle_shutdown_still_sweeps_residual_processes(self):
+        process_manager = Mock()
+        process_manager.is_running.return_value = False
+        process_manager.ensure_stopped.return_value = True
+
+        with patch('downloader.cleanup_incomplete_downloads'), \
+                patch.object(server, '_state_manager', object()), \
+                patch('process_manager.ProcessManager', return_value=process_manager):
+            server._shutdown_runtime()
+
+        process_manager.ensure_stopped.assert_called_once_with(
+            port=server.COMFY_PORT,
+            timeout=15,
+        )
+
     def test_idle_shutdown_reserves_slot_before_cleaning_partials(self):
         cleanup_entered = threading.Event()
         allow_cleanup = threading.Event()

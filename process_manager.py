@@ -129,6 +129,55 @@ class ProcessManager:
             return True
         return False
 
+    @staticmethod
+    def _same_path(value: str, expected: Path) -> bool:
+        """Compare command-line paths without accepting substring matches."""
+        try:
+            return Path(value).resolve() == expected.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    @classmethod
+    def _cmdline_is_managed_comfy_server(cls, cmdline: List[str]) -> bool:
+        """Return true only for ComfyUI processes owned by this workspace."""
+        if not cls._cmdline_is_comfy_server(cmdline):
+            return False
+
+        tokens = [str(token) for token in cmdline]
+        expected_main = COMFY_DIR / 'main.py'
+        for token in tokens:
+            if os.path.basename(token).lower() == 'main.py' \
+                    and cls._same_path(token, expected_main):
+                return True
+
+        if 'launch' not in [token.lower() for token in tokens]:
+            return False
+        if not any(cls._same_path(token, Path(COMFY_CLI)) for token in tokens):
+            return False
+        for index, token in enumerate(tokens[:-1]):
+            if token == '--workspace' and cls._same_path(tokens[index + 1], COMFY_DIR):
+                return True
+        return False
+
+    def _managed_comfy_server_pids(self) -> List[int]:
+        """Find every live ComfyUI launcher/server owned by this workspace."""
+        managed = []
+        try:
+            processes = psutil.process_iter(['pid', 'cmdline'])
+        except Exception as exc:
+            logger.warning(f"Could not enumerate ComfyUI processes: {exc}")
+            return managed
+
+        for process in processes:
+            try:
+                pid = int(process.info['pid'])
+                cmdline = process.info.get('cmdline') or []
+                if pid != os.getpid() and self._cmdline_is_managed_comfy_server(cmdline):
+                    managed.append(pid)
+            except (KeyError, TypeError, ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return sorted(set(managed))
+
     def _is_comfy_process(self, pid: Optional[int]) -> bool:
         """Identity check: does this PID belong to a ComfyUI server we may stop?"""
         if not pid or int(pid) == os.getpid():
@@ -612,6 +661,16 @@ class ProcessManager:
                 )
                 ok = False
 
+        # A launcher can exit or lose its socket while leaving main.py alive.
+        # PID state and the configured port cannot discover that orphan, so
+        # sweep every server whose command line belongs to this exact workspace.
+        for managed_pid in self._managed_comfy_server_pids():
+            logger.warning(
+                f"Found residual managed ComfyUI process PID {managed_pid}; stopping it."
+            )
+            ok = self._terminate_tree(managed_pid, timeout=timeout) and ok
+            stopped_any = True
+
         logger.info(f"Waiting for port {port} to be released...")
         released = False
         deadline = time.monotonic() + max(timeout, 1)
@@ -644,6 +703,13 @@ class ProcessManager:
                     f"(owner PID: {owner_pid})"
                 )
                 ok = False
+
+        remaining_managed = self._managed_comfy_server_pids()
+        if remaining_managed:
+            logger.error(
+                f"Managed ComfyUI process(es) still alive after stop: {remaining_managed}"
+            )
+            ok = False
 
         # The banner claims success, so it needs both halves: something was
         # actually stopped AND every stop attempt worked.
