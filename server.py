@@ -273,9 +273,41 @@ class PresetHandler(SimpleHTTPRequestHandler):
             self._send_json_error(500, "Falha ao obter status")
 
     def _handle_restart(self):
-        """Handle ComfyUI restart request (kill + start with last preset flags)"""
+        """Handle ComfyUI restart with the current UI-provided extra flags."""
         restart_reserved = False
         try:
+            try:
+                content_length = int(self.headers.get('Content-Length', '0'))
+            except (TypeError, ValueError):
+                self._send_json_error(400, "Content-Length inválido")
+                return
+            if content_length < 0:
+                self._send_json_error(400, "Content-Length inválido")
+                return
+            if content_length > 1024 * 1024:
+                self._send_json_error(413, "Request body too large")
+                return
+            try:
+                data = (
+                    json.loads(self.rfile.read(content_length).decode())
+                    if content_length else {}
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_json_error(400, "JSON inválido")
+                return
+            if not isinstance(data, dict):
+                self._send_json_error(400, "O corpo deve ser um objeto JSON")
+                return
+            extra_flags = data.get('extra_flags', [])
+            if not isinstance(extra_flags, list) or not all(
+                isinstance(flag, str) for flag in extra_flags
+            ):
+                self._send_json_error(
+                    400,
+                    "extra_flags deve ser uma lista de strings",
+                )
+                return
+
             from process_manager import ProcessManager
             from start import finish_restart_reservation, reserve_restart_slot
 
@@ -300,8 +332,8 @@ class PresetHandler(SimpleHTTPRequestHandler):
                     import time
                     time.sleep(2)
 
-                    # Start with existing preset flags from state
-                    started = pm.start()
+                    # ProcessManager merges these with the stored preset flags.
+                    started = pm.start(flags=extra_flags) if extra_flags else pm.start()
                     if started:
                         logger.info("ComfyUI restarted successfully via web UI")
                     else:

@@ -228,10 +228,17 @@ class UninstallEndpointTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def post_restart(self):
+    def post_restart(self, extra_flags=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        body = None if extra_flags is None else json.dumps({"extra_flags": extra_flags})
+        headers = {} if body is None else {"Content-Type": "application/json"}
         try:
-            connection.request("POST", "/api/restart")
+            connection.request(
+                "POST",
+                "/api/restart",
+                body=body,
+                headers=headers,
+            )
             response = connection.getresponse()
             return response.status, json.loads(response.read().decode())
         finally:
@@ -380,6 +387,42 @@ class UninstallEndpointTests(unittest.TestCase):
             "kill",
         ])
         cleanup_partials.assert_called_once_with(start.MODELS_DIR)
+
+    def test_restart_passes_current_extra_flags_to_start(self):
+        restart_finished = threading.Event()
+        process_manager = Mock()
+        process_manager.ensure_stopped.return_value = True
+        process_manager.start.return_value = True
+        flags = ["--disable-xformers", "--preview-method", "auto"]
+        original_finish = start.finish_restart_reservation
+
+        def record_finish():
+            original_finish()
+            restart_finished.set()
+
+        with patch.object(server, "_state_manager", object()), \
+                patch("process_manager.ProcessManager", return_value=process_manager), \
+                patch("start.finish_restart_reservation", side_effect=record_finish), \
+                patch("time.sleep"):
+            status, payload = self.post_restart(flags)
+            self.assertEqual(status, 202)
+            self.assertIs(payload["success"], True)
+            self.assertTrue(restart_finished.wait(timeout=2))
+
+        process_manager.start.assert_called_once_with(flags=flags)
+
+    def test_restart_rejects_non_list_extra_flags(self):
+        with patch.object(server, "_state_manager", object()), \
+                patch("process_manager.ProcessManager") as process_manager:
+            status, payload = self.post_restart("--disable-xformers")
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload, {
+            "error": "extra_flags deve ser uma lista de strings",
+        })
+        process_manager.assert_not_called()
+        self.assertTrue(start.reserve_install_slot())
+        start.finish_install_reservation("failed")
 
     def test_restart_is_rejected_during_uninstall_with_pending_shutdown(self):
         uninstall_entered = threading.Event()
