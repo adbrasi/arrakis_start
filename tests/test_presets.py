@@ -123,7 +123,7 @@ class PresetUiMetadataTests(unittest.TestCase):
         "flux2-klein-9b-base.json": (False, 24),
         "gerar_imagens_validacao.json": (False, 9),
         "ideogram4.json": (False, 21),
-        "krea2-full.json": (True, 35),
+        "krea2-full.json": (True, 39),
         "krea2.json": (False, 28),
         "ltx-gerador_nsfw.json": (False, 37),
         "ltx-lip-sync-gemma-q4.json": (False, 54),
