@@ -359,13 +359,11 @@ function createDeferred() {
 
 async function verifyCatalogInteraction(page) {
     const card = page.locator(".pinned-card").first();
-    assert.equal(await card.evaluate(element => getComputedStyle(element).cursor), "pointer");
-    assert.equal(
-        await page.locator(".recent-row").first().evaluate(
-            element => getComputedStyle(element).cursor,
-        ),
-        "pointer",
-    );
+    const cursors = await page.evaluate(() => ({
+        pinned: getComputedStyle(document.querySelector(".pinned-card")).cursor,
+        recent: getComputedStyle(document.querySelector(".recent-row")).cursor,
+    }));
+    assert.deepEqual(cursors, { pinned: "pointer", recent: "pointer" });
     await card.locator(".preset-description").click();
     assert.equal(await page.locator("#queue-count").textContent(), "1");
     await card.locator(".preset-meta").click();
