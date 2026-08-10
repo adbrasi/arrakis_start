@@ -40,6 +40,11 @@
       "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
       "dir": "vae",
       "filename": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v/resolve/main/checkpoints/comfy/minih33_quick-step00002500_comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minih33_quick-step00002500_comfy.safetensors"
     }
   ],
   "nodes": [
