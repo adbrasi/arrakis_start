@@ -18,16 +18,27 @@ class SageAttentionInstallerTests(unittest.TestCase):
     def test_build_action_is_forwarded_to_remote_installer(self, run_command):
         run_command.return_value = (0, ['ok'])
 
-        result = start._run_sageattention_installer(
-            Path('/workspace/comfy/.venv/bin/activate'),
-            action='build',
-            env={'TEST_ENV': '1'}
-        )
+        with patch.object(
+            start,
+            'SAGEATTENTION_WORK_DIR',
+            Path('/workspace/comfy/.cache/sageattention'),
+            create=True,
+        ):
+            result = start._run_sageattention_installer(
+                Path('/workspace/comfy/.venv/bin/activate'),
+                action='build',
+                env={'TEST_ENV': '1'}
+            )
 
         self.assertEqual(result, (True, ['ok']))
         command = run_command.call_args.args[0]
         self.assertIn('| bash -s -- build', command[-1])
-        self.assertEqual(run_command.call_args.kwargs['env'], {'TEST_ENV': '1'})
+        installer_env = run_command.call_args.kwargs['env']
+        self.assertEqual(installer_env['TEST_ENV'], '1')
+        self.assertEqual(
+            installer_env['WORK_DIR'],
+            '/workspace/comfy/.cache/sageattention',
+        )
 
     @patch('start._run_sageattention_installer')
     def test_rebuild_preserves_torch_and_hf_publish_token(self, installer):

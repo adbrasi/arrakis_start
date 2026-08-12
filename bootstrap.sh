@@ -932,7 +932,10 @@ install_arrakis_repo() {
 
 checkout_has_local_changes() {
     local dest="$1"
-    [ -z "$(git -C "$dest" status --porcelain --untracked-files=all)" ]
+    # Runtime state is intentionally stored inside the persistent checkout. It is
+    # owned by Arrakis, not by Git, and must never block the next automatic update.
+    [ -z "$(git -C "$dest" status --porcelain --untracked-files=all \
+        -- . ':(exclude)data/**' ':(exclude).build-sageattention/**')" ]
 }
 
 ensure_arrakis_ref_fetchspec() {

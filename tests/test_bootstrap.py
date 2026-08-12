@@ -247,6 +247,34 @@ class BootstrapGitRefTests(unittest.TestCase):
             0,
         )
 
+    def test_runtime_state_does_not_block_automatic_update(self):
+        destination = self.root / "runtime-state-main"
+        self.clone_shallow_main(destination)
+        state_file = destination / "data" / "state.json"
+        state_file.parent.mkdir()
+        state_file.write_text('{"installed_presets": []}\n', encoding="utf-8")
+        sage_registry = destination / ".build-sageattention" / "hf-registry.json"
+        sage_registry.parent.mkdir()
+        sage_registry.write_text('{"builds": []}\n', encoding="utf-8")
+
+        result = self.run_bootstrap(
+            "update_arrakis_repo "
+            f"{shlex.quote(str(destination))} "
+            f"{shlex.quote(self.remote.as_uri())} "
+            f"{shlex.quote(FEATURE_REF)}"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.git("branch", "--show-current", cwd=destination), FEATURE_REF)
+        self.assertEqual(
+            state_file.read_text(encoding="utf-8"),
+            '{"installed_presets": []}\n',
+        )
+        self.assertEqual(
+            sage_registry.read_text(encoding="utf-8"),
+            '{"builds": []}\n',
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

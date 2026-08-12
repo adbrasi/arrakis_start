@@ -74,6 +74,10 @@ SAGEATTENTION_INSTALLER_URL = os.environ.get(
     'SAGEATTENTION_INSTALLER_URL',
     'https://raw.githubusercontent.com/adbrasi/sageattention220-ultimate-installer/refs/heads/main/install_sageattention220_wheel.sh'
 )
+SAGEATTENTION_WORK_DIR = Path(os.environ.get(
+    'SAGEATTENTION_WORK_DIR',
+    str(COMFY_BASE / '.cache' / 'sageattention'),
+))
 SAGEATTENTION_INSTALL_ATTEMPTS = _safe_int_env('SAGEATTENTION_INSTALL_ATTEMPTS', 3)
 SAGEATTENTION_RETRY_DELAY_SECONDS = _safe_int_env('SAGEATTENTION_RETRY_DELAY_SECONDS', 8)
 
@@ -1229,6 +1233,8 @@ def _run_sageattention_installer(
         f"Starting SageAttention installer "
         f"(action={action}, url={SAGEATTENTION_INSTALLER_URL}, attempts={attempts})"
     )
+    installer_env = dict(env) if env is not None else _venv_env()
+    installer_env.setdefault('WORK_DIR', str(SAGEATTENTION_WORK_DIR))
 
     curl_shell = (
         f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
@@ -1250,7 +1256,7 @@ def _run_sageattention_installer(
             curl_cmd,
             f"SageAttention unified installer (curl attempt {attempt}/{attempts})",
             log_prefix='sage',
-            env=env,
+            env=installer_env,
             timeout_sec=SAGEATTENTION_TIMEOUT_SECONDS,
             progress_stage='runtime',
         )
@@ -1267,7 +1273,7 @@ def _run_sageattention_installer(
             wget_cmd,
             f"SageAttention unified installer (wget fallback {attempt}/{attempts})",
             log_prefix='sage',
-            env=env,
+            env=installer_env,
             timeout_sec=SAGEATTENTION_TIMEOUT_SECONDS,
             progress_stage='runtime',
         )
