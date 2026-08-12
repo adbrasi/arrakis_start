@@ -20,14 +20,17 @@ Store the following exact official assets without URL query strings:
 
 - `diffusion_models/ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors`
 - `text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors`
+- `text_encoders/gemma4_e2b_it_bf16.safetensors`
 - `vae/ltx-2.5-video-vae-bf16.safetensors`
 - `vae/ltx-2.5-audio-vae-bf16.safetensors`
 - `loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors`
 - `latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors`
+- `latent_upscale_models/ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors`
+- `model_patches/ltx-2.5-duration-head-bf16.safetensors`
 
-These six files have distinct runtime roles: base transformer, text encoder, video decoder, audio decoder, fast-sampling adapter, and spatial latent upscaler. Every workflow reuses them; the preset contains no alternative checkpoint or fallback model.
+These nine files have distinct runtime roles: base transformer, generation text encoder, prompt-enhancer text encoder, video decoder, audio decoder, fast-sampling adapter, spatial latent upscaler, temporal latent upscaler, and automatic-duration predictor. Every workflow reuses the applicable components; the preset contains no alternative checkpoint or fallback model.
 
-The diffusion VAE is the only video VAE. The convolutional VAE is not installed. The separate distilled transformer is not installed because the development transformer plus distilled LoRA supplies the requested fast mode. The temporal upscaler and duration head are not used by these workflows and are therefore not installed. The optional Gemma prompt-enhancer checkpoint is also omitted; prompts go directly through the LTX 2.5 text encoder.
+The diffusion VAE is the only video VAE. The convolutional VAE is not installed. The separate distilled transformer is not installed because the development transformer plus distilled LoRA supplies the requested fast mode. Gemma E2B provides optional prompt enhancement, the duration head provides automatic clip-length prediction, and the temporal upscaler provides optional 2x temporal refinement in the two-stage workflow.
 
 The Hugging Face repository is gated. Arrakis records the public resolve URLs, while installation relies on the user's existing authenticated Hugging Face environment.
 
@@ -47,7 +50,7 @@ No TAELTX 2.5 model is registered because none is published. The KJNodes samplin
 
 The preset requires current ComfyUI LTX 2.5 core support. Model loading uses the single ComfyUI INT8 ConvRot development checkpoint, with normal ComfyUI offload behavior for the RTX 5090's 32 GB VRAM.
 
-The dev single-stage workflow runs full guided sampling before decoding with tiled `ltx-2.5-video-vae-bf16`. The dev two-stage workflow performs guided low-resolution generation, 2x latent spatial upscaling, distilled-LoRA refinement, then tiled diffusion-VAE decode. The fast workflow applies the distilled LoRA to the development transformer and uses the official distilled 8-step sigma schedule.
+All three workflows expose prompt enhancement and automatic duration as user controls. The dev single-stage workflow runs full guided sampling before decoding with tiled `ltx-2.5-video-vae-bf16`. The dev two-stage workflow performs guided low-resolution generation, 2x latent spatial upscaling, distilled-LoRA refinement, optional 2x temporal latent refinement, then tiled diffusion-VAE decode. The fast workflow applies the distilled LoRA to the development transformer and uses the official distilled 8-step sigma schedule.
 
 The KJNodes preview override sits on the sampling model path. Final output always comes from the real LTX 2.5 video VAE, never from the approximate sampler preview.
 
