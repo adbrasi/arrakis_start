@@ -1,4 +1,6 @@
+import json
 import unittest
+from pathlib import Path
 
 import start
 
@@ -81,6 +83,70 @@ class LTX25CompletePresetTests(unittest.TestCase):
                 "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
             ],
         )
+
+    def test_workflows_use_dev_stack_and_expected_sampling_modes(self):
+        workflow_dir = Path(__file__).resolve().parents[1] / "workflows"
+        contracts = {
+            "ltx25_dev_single_stage_5090.json": {
+                "lora": False,
+                "scheduler": "LTXVScheduler",
+                "two_stage": False,
+            },
+            "ltx25_dev_two_stage_5090.json": {
+                "lora": True,
+                "scheduler": "LTXVScheduler",
+                "two_stage": True,
+            },
+            "ltx25_distilled_lora_5090.json": {
+                "lora": True,
+                "scheduler": "ManualSigmas",
+                "two_stage": False,
+            },
+        }
+
+        for filename, contract in contracts.items():
+            with self.subTest(filename=filename):
+                workflow = json.loads((workflow_dir / filename).read_text())
+                serialized = json.dumps(workflow)
+                model_loader_types = {
+                    "UNETLoader",
+                    "VAELoader",
+                    "CLIPLoader",
+                    "LatentUpscaleModelLoader",
+                    "LoraLoaderModelOnly",
+                }
+                model_loader_values = json.dumps(
+                    [
+                        node.get("widgets_values", [])
+                        for graph in workflow["definitions"]["subgraphs"]
+                        for node in graph["nodes"]
+                        if node["type"] in model_loader_types
+                    ]
+                )
+                types = {
+                    node["type"]
+                    for graph in workflow["definitions"]["subgraphs"]
+                    for node in graph["nodes"]
+                }
+
+                self.assertIn(
+                    "ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors",
+                    model_loader_values,
+                )
+                self.assertNotIn("distilled-transformer", model_loader_values)
+                self.assertNotIn("video-vae-conv", model_loader_values)
+                self.assertIn("gemma4_e2b_it_bf16.safetensors", model_loader_values)
+                self.assertIn("ltx-2.5-video-vae-bf16.safetensors", model_loader_values)
+                self.assertIn("ltx-2.5-audio-vae-bf16.safetensors", model_loader_values)
+                self.assertIn("LTX2SamplingPreviewOverride", types)
+                self.assertIn(contract["scheduler"], types)
+                self.assertEqual("LoraLoaderModelOnly" in types, contract["lora"])
+                self.assertEqual("Upscale and re-sampler (3 steps)" in serialized, contract["two_stage"])
+                if contract["lora"]:
+                    self.assertIn(
+                        "ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+                        model_loader_values,
+                    )
 
 
 class AnimeGenWanPresetTests(unittest.TestCase):
