@@ -54,6 +54,7 @@
   ],
   "nodes": [
     "https://github.com/Merserk/ComfyUI-PiD",
-    "https://github.com/adbrasi/upscale_smooth"
+    "https://github.com/adbrasi/upscale_smooth",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public"
   ]
 }
