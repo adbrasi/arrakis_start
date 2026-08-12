@@ -40,6 +40,11 @@
       "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v/resolve/main/checkpoints/comfy/minih33_quick-step00002500_comfy.safetensors?download=true",
       "dir": "loras",
       "filename": "minih33_quick-step00002500_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00007000_comfy.safetensors",
+      "dir": "loras",
+      "filename": "minih33_v3-step00007000_comfy.safetensors"
     }
   ],
   "nodes": [
