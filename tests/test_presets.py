@@ -3,6 +3,86 @@ import unittest
 import start
 
 
+class LTX25CompletePresetTests(unittest.TestCase):
+    EXPECTED_MODELS = [
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors",
+            "dir": "diffusion_models",
+            "filename": "ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+            "dir": "text_encoders",
+            "filename": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e2b_it_bf16.safetensors",
+            "dir": "text_encoders",
+            "filename": "gemma4_e2b_it_bf16.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-bf16.safetensors",
+            "dir": "vae",
+            "filename": "ltx-2.5-video-vae-bf16.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors",
+            "dir": "vae",
+            "filename": "ltx-2.5-audio-vae-bf16.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+            "dir": "loras",
+            "filename": "ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+            "dir": "latent_upscale_models",
+            "filename": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/latent_upscale_models/ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors",
+            "dir": "latent_upscale_models",
+            "filename": "ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors",
+        },
+        {
+            "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/model_patches/ltx-2.5-duration-head-bf16.safetensors",
+            "dir": "model_patches",
+            "filename": "ltx-2.5-duration-head-bf16.safetensors",
+        },
+    ]
+
+    def test_loads_complete_non_duplicated_ltx25_stack(self):
+        presets = {
+            preset["_filename"]: preset for preset in start.load_presets()
+        }
+        preset = presets["ltx25-5090-complete.json"]
+
+        self.assertEqual(preset["name"], "LTX 2.5 COMPLETE - RTX 5090")
+        self.assertEqual(preset["models"], self.EXPECTED_MODELS)
+        self.assertEqual(
+            len({(model["dir"], model["filename"]) for model in preset["models"]}),
+            len(preset["models"]),
+        )
+        self.assertTrue(all("?" not in model["url"] for model in preset["models"]))
+        self.assertEqual(
+            preset["workflows"],
+            [
+                {"label": "DEV single-stage", "file": "ltx25_dev_single_stage_5090.json"},
+                {"label": "DEV two-stage", "file": "ltx25_dev_two_stage_5090.json"},
+                {"label": "Distilled LoRA 8 steps", "file": "ltx25_distilled_lora_5090.json"},
+            ],
+        )
+        self.assertEqual(
+            preset["nodes"],
+            [
+                "https://github.com/adbrasi/ComfyUI-LTXVideo",
+                "https://github.com/kijai/ComfyUI-KJNodes",
+                "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+            ],
+        )
+
+
 class AnimeGenWanPresetTests(unittest.TestCase):
     def test_loads_animegen_wan_2_2_with_exact_gguf_pair(self):
         presets = {
@@ -156,6 +236,7 @@ class PresetUiMetadataTests(unittest.TestCase):
         "ltx23-gerador_nsfw-sulphur.json": (False, 39),
         "ltx23-gerador_nsfw.json": (False, 39),
         "ltx23-production-base.json": (False, 58),
+        "ltx25-5090-complete.json": (True, 55),
         "minimax-h3-5090.json": (True, 91),
         "minimax-h3-6000pro-96gb.json": (False, 190),
         "qwen-image.json": (False, 15),

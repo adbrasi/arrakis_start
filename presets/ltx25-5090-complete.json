@@ -1,0 +1,74 @@
+{
+  "name": "LTX 2.5 COMPLETE - RTX 5090",
+  "description": "LTX 2.5 completo para RTX 5090 32GB: transformer DEV INT8 ConvRot, Gemma 4 INT8, prompt enhancer Gemma E2B, Diffusion Video VAE, Audio VAE, LoRA distilled, upscalers espacial e temporal e duration head. Inclui workflows DEV single-stage, DEV two-stage e Distilled LoRA em 8 passos. Requer ComfyUI 0.32.0+ e acesso aceito ao repositório Lightricks/LTX-2.5. ~55GB.",
+  "pinned": true,
+  "size_gb": 55,
+  "workflows": [
+    {
+      "label": "DEV single-stage",
+      "file": "ltx25_dev_single_stage_5090.json"
+    },
+    {
+      "label": "DEV two-stage",
+      "file": "ltx25_dev_two_stage_5090.json"
+    },
+    {
+      "label": "Distilled LoRA 8 steps",
+      "file": "ltx25_distilled_lora_5090.json"
+    }
+  ],
+  "use_sage_attention": true,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors",
+      "dir": "diffusion_models",
+      "filename": "ltx-2.5-22b-dev-transformer-comfy-int8-convrot.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+      "dir": "text_encoders",
+      "filename": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e2b_it_bf16.safetensors",
+      "dir": "text_encoders",
+      "filename": "gemma4_e2b_it_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-video-vae-bf16.safetensors",
+      "dir": "vae",
+      "filename": "ltx-2.5-video-vae-bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/vae/ltx-2.5-audio-vae-bf16.safetensors",
+      "dir": "vae",
+      "filename": "ltx-2.5-audio-vae-bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+      "dir": "loras",
+      "filename": "ltx-2.5-22b-distilled-lora-450-bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/latent_upscale_models/ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors",
+      "dir": "latent_upscale_models",
+      "filename": "ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Lightricks/LTX-2.5/resolve/main/model_patches/ltx-2.5-duration-head-bf16.safetensors",
+      "dir": "model_patches",
+      "filename": "ltx-2.5-duration-head-bf16.safetensors"
+    }
+  ],
+  "nodes": [
+    "https://github.com/adbrasi/ComfyUI-LTXVideo",
+    "https://github.com/kijai/ComfyUI-KJNodes",
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
+  ]
+}
