@@ -50,6 +50,16 @@
       "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00007500_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_v3-step00007500_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00010000_comfy.safetensors",
+      "dir": "loras",
+      "filename": "minih33_v3-step00010000_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00013500_comfy.safetensors",
+      "dir": "loras",
+      "filename": "minih33_v3-step00013500_comfy.safetensors"
     }
   ],
   "nodes": [
