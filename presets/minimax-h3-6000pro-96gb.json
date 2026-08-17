@@ -2,7 +2,7 @@
   "name": "MiniMax H3 6000 Pro 96GB",
   "description": "MiniMax H3 (03/08/2026) para RTX PRO 6000 96GB — tudo BF16: diffusion fl2va/ref2va (66GB cada) + text encoder BF16 (52GB), qualidade máxima sem offload. T2V/I2V/R2V com áudio estéreo nativo, 768p base. Requer ComfyUI 0.30.1+. ~190GB.",
   "pinned": false,
-  "size_gb": 190,
+  "size_gb": 196,
   "workflows": [
     { "label": "T2V", "file": "minimax_h3_6000pro_t2v.json" },
     { "label": "I2V", "file": "minimax_h3_6000pro_i2v.json" },
@@ -60,6 +60,56 @@
       "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00013500_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_v3-step00013500_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00017500_comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minih33_v3-step00017500_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-jiggle/resolve/main/checkpoints/comfy/minih33_jiggle-step00002500_comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minih33_jiggle-step00002500_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-videovibe/resolve/main/checkpoints/comfy/minih33_vibe-step00010000_comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minih33_vibe-step00010000_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-videovibe/resolve/main/checkpoints/comfy/minih33_vibe-step00007500_comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minih33_vibe-step00007500_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/minih33-smoothloop/resolve/main/checkpoints/comfy/minih33_smooth-step00002000_comfy.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minih33_smooth-step00002000_comfy.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Abiray/MiniMax-H3-Turbo-Lora-Pruned-ComfyUI/resolve/main/minimax_h3_turbo_4step_ckpt850_V1.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minimax_h3_turbo_4step_ckpt850_V1.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Abiray/MiniMax-H3-Turbo-Lora-Pruned-ComfyUI/resolve/main/minimax_h3_turbo_4step_ckpt600_V4.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minimax_h3_turbo_4step_ckpt600_V4.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/resolve/main/minimax_h3_turbo_v4_step600.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minimax_h3_turbo_v4_step600.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/resolve/main/minimax_h3_turbo_v4_step600_ema.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minimax_h3_turbo_v4_step600_ema.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/joyfox/MiniMax-H3-Turbo/resolve/main/minimax_h3_fl2va_4step_lora.safetensors?download=true",
+      "dir": "loras",
+      "filename": "minimax_h3_fl2va_4step_lora.safetensors"
     }
   ],
   "nodes": [

@@ -105,6 +105,11 @@
       "url": "https://huggingface.co/lodestones/Kroma/resolve/main/kroma-v0.1-rl.safetensors?download=true",
       "dir": "loras",
       "filename": "kroma-v0.1-rl.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/lovenime2-krea2/resolve/main/lovenime2-krea2-000005.safetensors?download=true",
+      "dir": "loras",
+      "filename": "lovenime2-krea2-000005.safetensors"
     }
   ],
   "nodes": [

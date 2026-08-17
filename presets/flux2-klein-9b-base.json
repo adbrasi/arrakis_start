@@ -2,7 +2,7 @@
   "name": "Flux2 Klein 9B Base",
   "description": "FLUX.2 [klein] 9B base preset with community-tested nodes for edit/inpaint/acceleration and Klein LoRAs for testing.",
   "pinned": false,
-  "size_gb": 24,
+  "size_gb": 25,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
@@ -60,6 +60,16 @@
       "url": "https://huggingface.co/dx8152/Flux2-Klein-9B-Consistency/resolve/main/Flux2-Klein-9B-consistency-V2.safetensors?download=true",
       "dir": "loras",
       "filename": "Flux2-Klein-9B-consistency-V2.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/lovstyleanimex3/resolve/main/lovstyleanimex3-000004.safetensors?download=true",
+      "dir": "loras",
+      "filename": "lovstyleanimex3-000004.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/AdwolfCzar/lovstyleanimex3/resolve/main/lovstyleanimex3.safetensors?download=true",
+      "dir": "loras",
+      "filename": "lovstyleanimex3.safetensors"
     }
   ],
   "nodes": [
