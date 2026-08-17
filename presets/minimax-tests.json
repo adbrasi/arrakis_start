@@ -3,7 +3,7 @@
   "description": "MiniMax H3 bancada de testes — diffusion pruned INT8 ConvRot fl2va/ref2va + hybrid fl2va/ref2va b25-49 INT8, text encoder INT8, TAEH3 preview VAE, LoRAs Turbo oficiais (fl2v 4/8step, ref2v 4step) e pacote completo MiniH3 (loop v3, jiggle, videovibe, smoothloop). Nodes da comunidade: Turbo, Contex-Loop, Motion-Context, LatentUpscale, Extender. ~104GB.",
   "pinned": true,
   "size_gb": 104,
-  "use_sage_attention": true,
+  "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
     {
