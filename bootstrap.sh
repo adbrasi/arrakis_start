@@ -1115,8 +1115,9 @@ main() {
     export TMPDIR="/workspace/.tmp"
     export GIT_LFS_SKIP_SMUDGE=1
     export MAX_JOBS="${MAX_JOBS:-32}"
-    export HF_HUB_ENABLE_HF_TRANSFER=1
-    export HF_TRANSFER_CONCURRENCY="${HF_TRANSFER_CONCURRENCY:-16}"
+    # hf_transfer is deprecated upstream in favor of the XET backend
+    # (HF_XET_HIGH_PERFORMANCE below); exporting HF_HUB_ENABLE_HF_TRANSFER
+    # without the package installed makes huggingface_hub refuse to download.
     export NVCC_APPEND_FLAGS="${NVCC_APPEND_FLAGS:---threads 8}"
     # PyTorch 2.9+ renamed PYTORCH_CUDA_ALLOC_CONF to PYTORCH_ALLOC_CONF (backend-agnostic).
     # Export both so old and new torch builds work without warnings.

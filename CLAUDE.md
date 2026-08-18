@@ -27,7 +27,7 @@ python start.py --start-comfy
 curl -L https://raw.githubusercontent.com/adbrasi/arrakis_start/main/bootstrap.sh | bash
 ```
 
-No test suite or linter is configured.
+Tests: `PYTHONPATH=. python3 -m unittest tests.test_downloader` from the repo root. No linter is configured.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ No test suite or linter is configured.
 |---|---|
 | `bootstrap.sh` | Cloud entry point — installs ComfyUI, venv, cloudflared, then starts web selector. Optionally cleans a pre-existing template `/workspace/ComfyUI` before installing. |
 | `start.py` | Main orchestrator — loads presets, installs nodes/models/pip deps, launches ComfyUI. Drives the runtime-stack decision (standard torch vs SageAttention installer). |
-| `downloader.py` | Parallel download manager using aria2c (default 16 connections; 8 for HuggingFace LFS), with `hf_hub_download` fallback and Civitai/direct URL support. |
+| `downloader.py` | Parallel download manager. HuggingFace chain: XET worker → aria2c (8 connections) → `hf_hub_download` HTTP → wget; other URLs use aria2c (16 connections) → wget. Civitai/direct URL support. |
 | `server.py` | HTTP server (port 8090) serving the web UI and REST API (`/api/presets`, `/api/install`, etc.). |
 | `process_manager.py` | ComfyUI lifecycle (start/stop/restart/health check) via comfy-cli with psutil fallback. |
 | `state.py` | Thread-safe persistent state in JSON (`installed_presets`, `installed_models`, `comfyui_status`, etc.) written atomically via `tempfile` + `os.replace`. |
@@ -82,8 +82,9 @@ The web UI auto-detects new JSON files — adding a preset requires no code chan
 | `DOWNLOAD_SPEED_LIMIT` | aria2c bandwidth throttle (e.g. `50M`; default off). |
 | `ARIA2_CONNECTIONS` / `ARIA2_HF_CONNECTIONS` | Parallel connections per download (defaults: 16 / 8). |
 | `HF_XET_HIGH_PERFORMANCE` | Toggle HF Xet high-perf mode; auto-disabled below `HF_XET_HP_MIN_RAM_GB` (default 48). |
-| `XET_NO_PROGRESS_SECONDS` | Abandon XET for the HTTP fallback after this long with no delivered bytes at all (default 240). A slow-but-growing warm-up never trips it. |
-| `XET_MIN_BYTES_PER_SEC` / `XET_RATE_GRACE_SECONDS` | Long-window throughput floor for XET, applied only after the grace window (defaults 100 KB/s after 600 s) to catch a transfer still crawling long past any warm-up. |
+| `XET_NO_PROGRESS_SECONDS` | Abandon XET for the aria2c fallback after this long with no delivered bytes at all (default 240). A slow-but-growing warm-up never trips it. |
+| `HF_MIN_BYTES_PER_SEC` / `HF_RATE_GRACE_SECONDS` | Sliding-window throughput floor for XET and hub-HTTP transfers (defaults 10 MB/s after 180 s), divided by the number of concurrently active transfers so bandwidth sharing never trips it. A tripped transfer falls through to multi-connection aria2c instead of crawling for hours. |
+| `DOWNLOAD_OVERALL_STALL_SECONDS` | Batch backstop: abort the whole download batch after this long with no new bytes from ANY file (default 900). Progress-based — a huge file transferring at full speed for 30+ minutes never trips it. |
 | `NODE_PIP_STALL_SECONDS` | Kill a custom-node `pip install` after this long with no output, CPU or I/O (default 300). This is the real liveness guard — a pip starved of bandwidth by concurrent model downloads is slow, not hung. |
 | `NODE_PIP_TIMEOUT_SECONDS` | Wall-clock backstop for the same command (default 1800), for a child that spins forever without ever going quiet. |
 | `TORCH_INDEX_URL` | Torch wheel index (default: CUDA 12.8 build). |

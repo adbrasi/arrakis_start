@@ -218,24 +218,43 @@ class DownloadManager:
         # for workers to unwind instead of racing them.
         self._inflight = 0
         self._inflight_cv = threading.Condition()
+        # Shared byte-growth ledger, fed by _publish_progress (the funnel every
+        # backend reports through). Serves two consumers: the progress-based
+        # batch watchdog in download_all(), and the active-transfer count that
+        # splits the per-file throughput floor so bandwidth sharing between
+        # concurrent downloads never reads as a throttled route.
+        self._growth_lock = threading.Lock()
+        self._last_growth: Dict[str, float] = {}
+        self._last_bytes: Dict[str, int] = {}
+        self._batch_progress_ts = time.monotonic()
+        # Batch-level abort, distinct from user cancellation: when the batch
+        # watchdog gives up it must also stop every worker from starting the
+        # next backend in its fallback chain, or an orphan keeps downloading
+        # after the batch already reported failure.
+        self._batch_abort = threading.Event()
 
-        # XET liveness policy. A healthy XET transfer can legitimately start at
-        # tens of KB/s before it accelerates, so neither default may punish a
-        # slow start: the first only fires when delivered bytes stop moving
-        # entirely, and the second only after a long grace window.
+        # Transfer liveness policy. The no-progress guard fires only when
+        # delivered bytes stop moving entirely (a healthy XET transfer can
+        # legitimately start at tens of KB/s before accelerating sharply). The
+        # throughput floor instead catches "alive but crawling": measured over
+        # a sliding window, only after a grace period, and divided by the
+        # number of concurrently active transfers — a single stream stuck on a
+        # throttled route trips it, a busy link does not. A tripped transfer is
+        # handed to the next backend (multi-connection aria2c), which is what
+        # actually beats a per-connection CDN clamp.
         self.xet_no_progress_seconds = max(
             0, int(os.environ.get('XET_NO_PROGRESS_SECONDS', '240') or '240')
         )
-        self.xet_rate_grace_seconds = max(
-            0, int(os.environ.get('XET_RATE_GRACE_SECONDS', '600') or '600')
+        self.hf_rate_grace_seconds = max(
+            0, int(os.environ.get('HF_RATE_GRACE_SECONDS', '180') or '180')
         )
-        self.xet_min_rate_bps = max(
-            0, int(os.environ.get('XET_MIN_BYTES_PER_SEC', str(100 * 1024)) or 0)
+        self.hf_min_rate_bps = max(
+            0, int(os.environ.get('HF_MIN_BYTES_PER_SEC', str(10_000_000)) or 0)
         )
         logger.info(
-            f"XET liveness: sem-progresso={self.xet_no_progress_seconds}s, "
-            f"piso={self._fmt_speed(self.xet_min_rate_bps)} após "
-            f"{self.xet_rate_grace_seconds}s"
+            f"Liveness: sem-progresso XET={self.xet_no_progress_seconds}s, "
+            f"piso={self._fmt_speed(self.hf_min_rate_bps)} após "
+            f"{self.hf_rate_grace_seconds}s (dividido entre transfers ativos)"
         )
 
         # Keep partial Hugging Face payloads outside ComfyUI's model folders.
@@ -331,9 +350,11 @@ class DownloadManager:
             return list(self.config_conflicts)
 
     def _token_tail(self, token: str) -> str:
+        # No token material in logs, not even a suffix — length is enough to
+        # tell "picked up the right token" from "picked up something truncated".
         if not token:
             return "missing"
-        return f"...{token[-6:]}" if len(token) > 6 else "(short/invalid)"
+        return f"set ({len(token)} chars)"
 
     @staticmethod
     def _parse_size_token(token: str) -> int:
@@ -359,6 +380,13 @@ class DownloadManager:
         whose total size is unknown must render "N GB @ speed" instead of a
         fabricated 0%.
         """
+        if filename and current:
+            with self._growth_lock:
+                if current > self._last_bytes.get(filename, 0):
+                    self._last_bytes[filename] = current
+                    now = time.monotonic()
+                    self._last_growth[filename] = now
+                    self._batch_progress_ts = now
         if not HAS_PROGRESS:
             return
         try:
@@ -369,12 +397,44 @@ class DownloadManager:
             logger.debug(f"progress publish failed: {e}")
 
     def _finish_progress(self, filename: str, ok: bool, reason: str = "") -> None:
+        with self._growth_lock:
+            self._last_growth.pop(filename, None)
+            self._last_bytes.pop(filename, None)
+            # A completed file is batch progress even when nothing else moved.
+            self._batch_progress_ts = time.monotonic()
         if not HAS_PROGRESS:
             return
         try:
             progress_registry.finish_download(filename, ok, self._sanitize_log(reason))
         except Exception as e:
             logger.debug(f"progress finish failed: {e}")
+
+    def _active_transfer_count(self, window: float = 60.0) -> int:
+        """Transfers that delivered bytes within the last ``window`` seconds."""
+        now = time.monotonic()
+        with self._growth_lock:
+            return sum(1 for ts in self._last_growth.values() if now - ts <= window)
+
+    @staticmethod
+    def _window_rate(samples) -> float:
+        """Average throughput (bytes/sec) across a (ts, bytes) sample window.
+
+        Returns +inf while the window is too short to judge, so callers can
+        compare against a floor without a separate warm-up branch.
+        """
+        if len(samples) < 2:
+            return float('inf')
+        span = samples[-1][0] - samples[0][0]
+        if span <= 0:
+            return float('inf')
+        return (samples[-1][1] - samples[0][1]) / span
+
+    def _batch_stopped(self) -> bool:
+        """True when no further backend may start for any download."""
+        return self._cancelled or self._batch_abort.is_set()
+
+    def _stop_reason(self) -> str:
+        return 'cancelled_by_user' if self._cancelled else 'batch_aborted'
 
     def _make_secret_argfile(self, prefix: str, content: str) -> Path:
         """Write ``content`` to a 0600 temp file so secrets stay out of argv.
@@ -425,10 +485,14 @@ class DownloadManager:
         for secret in (getattr(self, 'hf_token', ''), getattr(self, 'civitai_token', '')):
             if secret and len(str(secret)) >= 8:
                 result = result.replace(str(secret), '<redacted>')
-        # Catch tokens embedded in query strings even if the value differs from
-        # the ones we hold (e.g. a pre-signed URL echoed back by the server).
+        # Catch credentials embedded in query strings even if the value differs
+        # from the ones we hold: plain tokens, and the signature material of
+        # pre-signed CDN URLs (CloudFront/S3-style) that aria2c echoes verbatim
+        # in redirect lines and failure tails.
         result = re.sub(
-            r'((?:token|api[_-]?key|access_token)=)[^&\s"\']+',
+            r'(?<![a-z0-9_])'
+            r'((?:token|api[_-]?key|access_token|x-amz-[a-z-]+|signature'
+            r'|expires|policy|key-pair-id|jwt|sig)=)[^&\s"\']+',
             r'\1<redacted>',
             result,
             flags=re.IGNORECASE,
@@ -1035,12 +1099,16 @@ class DownloadManager:
           then accelerates sharply, so a plain rate threshold would kill it
           during a perfectly normal warm-up.
 
-        So for XET the failure signal is *delivered bytes not growing at all*,
-        measured from the worker's own progress events (which a warming-up
-        transfer keeps emitting), plus a deliberately generous long-window rate
-        floor that only catches a transfer still crawling long after any warm-up
-        would be over. Both are env-tunable and default to values a normal slow
-        start never reaches.
+        So for XET the dead-transfer signal is *delivered bytes not growing at
+        all*, measured from the worker's own progress events (which a
+        warming-up transfer keeps emitting).
+
+        Independently, BOTH backends get a sliding-window throughput floor:
+        after a grace period, a transfer whose recent average stays below the
+        floor (split across concurrently active transfers, so a busy link is
+        never mistaken for a throttled route) is killed so the caller falls
+        through to multi-connection aria2c. "Alive at 850 KB/s" on a 20 GB
+        file is a 6-hour crawl the old no-progress guards considered healthy.
         """
         to = self.aria2_stall_timeout_seconds
         warn_after = max(30, to // 4) if to > 0 else 0
@@ -1058,6 +1126,10 @@ class DownloadManager:
         warned = False
         best_bytes = prev_size
         last_growth_ts = now0
+        # Sliding sample window for the throughput floor. Delta-based, so bytes
+        # already on disk from a resumed partial never inflate the rate.
+        rate_window = 60.0
+        rate_samples = deque()
         while True:
             time.sleep(poll)
             if process.poll() is not None or self._cancelled:
@@ -1129,22 +1201,33 @@ class DownloadManager:
                     logger.error(
                         f"{backend_label} travado em {filename}: nenhum byte novo "
                         f"(disco nem eventos) há {idle:.0f}s — encerrando e caindo "
-                        "para o fallback HTTP"
+                        "para o aria2c"
                     )
                     self._terminate_process(process)
                     return
-                elapsed = now - started_at
-                if (self.xet_min_rate_bps > 0
-                        and self.xet_rate_grace_seconds > 0
-                        and elapsed > self.xet_rate_grace_seconds
-                        and (best_bytes / elapsed) < self.xet_min_rate_bps):
+
+            # Sliding-window throughput floor, XET and HTTP alike. Trips only
+            # after the grace period, and the floor is split across active
+            # transfers: a file crawling alone is a throttled route (demote to
+            # aria2c); files sharing a saturated link are left alone.
+            rate_samples.append((now, best_bytes))
+            while len(rate_samples) > 1 and now - rate_samples[0][0] > rate_window:
+                rate_samples.popleft()
+            elapsed = now - started_at
+            if (self.hf_min_rate_bps > 0
+                    and self.hf_rate_grace_seconds > 0
+                    and elapsed > self.hf_rate_grace_seconds):
+                rate = self._window_rate(rate_samples)
+                floor = self.hf_min_rate_bps / max(1, self._active_transfer_count())
+                if rate < floor:
                     stall_state['killed'] = True
+                    stall_state['slow'] = True
                     logger.error(
                         f"{backend_label} arrastando em {filename}: "
-                        f"{self._fmt_speed(best_bytes / elapsed)} de média em "
-                        f"{elapsed:.0f}s (piso "
-                        f"{self._fmt_speed(self.xet_min_rate_bps)}) — encerrando e "
-                        "caindo para o fallback HTTP"
+                        f"{self._fmt_speed(rate)} nos últimos "
+                        f"{rate_samples[-1][0] - rate_samples[0][0]:.0f}s (piso "
+                        f"{self._fmt_speed(floor)}) — encerrando e caindo para o "
+                        "próximo backend"
                     )
                     self._terminate_process(process)
                     return
@@ -1484,7 +1567,7 @@ class DownloadManager:
 
         max_retries = 3
         for attempt in range(1, max_retries + 1):
-            if self._cancelled:
+            if self._batch_stopped():
                 return False
 
             ok, reason, stage = self._download_file(url, target_dir, filename)
@@ -1642,13 +1725,20 @@ class DownloadManager:
         completed = 0
         success_lock = threading.Lock()
 
-        # Hard backstop against an infinite hang: if NO download completes for this
-        # many seconds, every still-pending download is treated as stuck (e.g. a
-        # silent hf_xet stream on a huge file that dodges the per-path stall check
-        # because the read loop is blocked) — we abandon them, warn, and move on so
-        # a single file can never freeze the whole install. Generous by default so
-        # legitimately large/slow downloads still finish; tune via env.
-        overall_stall = max(120, int(os.environ.get('DOWNLOAD_OVERALL_STALL_SECONDS', '1800') or '1800'))
+        # Hard backstop against an infinite hang: if NO download delivers a
+        # single new byte (and none completes) for this many seconds, every
+        # still-pending download is treated as stuck (e.g. a blocked read loop
+        # that dodges the per-path stall checks) — we abandon them, warn, and
+        # move on so a single file can never freeze the whole install. This is
+        # deliberately a PROGRESS timeout, not a completion timeout: a 100 GB
+        # file transferring at full speed for 30 minutes without finishing is
+        # working, not stalled. Tune via env.
+        overall_stall = max(120, int(os.environ.get('DOWNLOAD_OVERALL_STALL_SECONDS', '900') or '900'))
+        self._batch_abort.clear()
+        with self._growth_lock:
+            self._last_growth.clear()
+            self._last_bytes.clear()
+            self._batch_progress_ts = time.monotonic()
 
         executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dl')
         future_to_idx = {}
@@ -1662,22 +1752,27 @@ class DownloadManager:
         stalled_out = False
         try:
             while pending:
-                done_set, pending = wait(pending, timeout=overall_stall, return_when=FIRST_COMPLETED)
+                done_set, pending = wait(pending, timeout=30, return_when=FIRST_COMPLETED)
                 if self._cancelled:
                     for future in pending:
                         future.cancel()
                     aborted = True
                     break
                 if not done_set:
-                    # Nothing finished within the window. Only the futures that
-                    # actually started are stuck — the rest never got a worker
-                    # slot, so reporting them as stalled would blame downloads
-                    # that were never attempted.
+                    # Nothing finished in this poll — stall only if the byte
+                    # ledger has ALSO been silent for the whole window (any
+                    # backend delivering bytes bumps _batch_progress_ts).
+                    idle = time.monotonic() - self._batch_progress_ts
+                    if idle <= overall_stall:
+                        continue
+                    # Only the futures that actually started are stuck — the
+                    # rest never got a worker slot, so reporting them as
+                    # stalled would blame downloads that were never attempted.
                     running = {f for f in pending if f.running()} or set(pending)
                     queued = pending - running
                     stuck = sorted(future_to_idx[f] for f in running)
                     logger.error(
-                        f"{len(running)} download(s) sem NENHUMA conclusão há >{overall_stall}s — "
+                        f"{len(running)} download(s) sem NENHUM byte novo há >{overall_stall}s — "
                         f"abortando o lote: {', '.join(str(i) for i in stuck)}"
                     )
                     for f in running:
@@ -1709,10 +1804,24 @@ class DownloadManager:
                                 stage='aborted'
                             )
                             f.cancel()
-                    # Kill the stuck subprocesses so the worker threads unwind,
-                    # but do NOT call cancel(): this is a stall, not a user
-                    # cancellation, and it must not be reported as one.
+                    # Abort order matters: raise the batch-abort flag FIRST so
+                    # no worker starts the next backend in its fallback chain,
+                    # THEN kill the stuck subprocesses, THEN wait for the
+                    # workers to actually unwind. Without the flag + wait, a
+                    # worker treats its killed subprocess as a backend failure
+                    # and keeps downloading via the next backend while the
+                    # batch has already been reported as failed — an orphan
+                    # transfer racing ComfyUI startup. Do NOT call cancel():
+                    # this is a stall, not a user cancellation, and it must
+                    # not be reported as one.
+                    self._batch_abort.set()
                     self._terminate_active_processes()
+                    if not self._wait_for_workers(timeout=30.0):
+                        # A worker slipped a fresh subprocess past the first
+                        # sweep (it was between its gate check and Popen);
+                        # the abort flag stops anything new, kill stragglers.
+                        self._terminate_active_processes()
+                        self._wait_for_workers(timeout=15.0)
                     stalled_out = True
                     aborted = True
                     break
@@ -1784,6 +1893,7 @@ class DownloadManager:
         url = self._sanitize_source_url(url)
         is_civitai_source = 'civitai.com' in url
         hf_auth_failure = ''
+        reason = ''
 
         # Create target directory
         dest_dir = self.models_dir / target_dir
@@ -1824,42 +1934,60 @@ class DownloadManager:
             logger.error(reason)
             return False, reason, 'precheck'
 
-        # HuggingFace priority: use the killable hf_xet worker first. Gated on an
-        # importable huggingface_hub, not on the `hf` console script.
-        if self._cancelled:
-            return False, 'cancelled_by_user', 'cancel'
+        # HuggingFace chain: XET → aria2c → hub HTTP → wget. The killable
+        # hf_xet worker goes first (gated on an importable huggingface_hub, not
+        # on the `hf` console script); when it dies or crawls, the cause is
+        # usually a throttled single route, which multi-connection aria2c beats
+        # — so aria2c is the FIRST fallback. huggingface_hub's classic HTTP
+        # rides the same throttled route as a single stream, so it is demoted
+        # to a compatibility fallback (auth negotiation quirks aria2c cannot
+        # reproduce), no longer the preferred second option.
+        tried_aria2c = False
+        if self._batch_stopped():
+            return False, self._stop_reason(), 'cancel'
         if 'huggingface.co' in url and getattr(self, 'has_hf_hub', False):
             result, reason = self._download_hf_direct(url, dest_dir, filename)
             self._record_attempt(url, 'hf-xet', result, reason)
             if result:
                 return True, 'ok', 'hf-xet'
-            if self._cancelled:
-                return False, 'cancelled_by_user', 'cancel'
-            # Only after XET itself fails, use Hub HTTP before generic downloaders.
+            if self._batch_stopped():
+                return False, self._stop_reason(), 'cancel'
+            hf_auth_failure = self._classify_hf_auth_error(reason)
+            if hf_auth_failure and 'gated_model_not_accepted' in hf_auth_failure:
+                # Gated model not accepted: no downloader helps, the user
+                # needs to accept the license on huggingface.co.
+                return False, hf_auth_failure, 'auth'
+
+            if self.has_aria2c:
+                tried_aria2c = True
+                aria_ok, aria_reason = self._download_aria2c(
+                    url, dest_dir, filename, prefer_content_disposition=False
+                )
+                self._record_attempt(url, 'aria2c', aria_ok, aria_reason)
+                if aria_ok:
+                    return True, 'ok', 'aria2c'
+                if self._batch_stopped():
+                    return False, self._stop_reason(), 'cancel'
+
             hub_ok, hub_reason = self._download_hf_via_python(url, dest_dir, filename)
             self._record_attempt(url, 'hf-hub-python', hub_ok, hub_reason)
             if hub_ok:
                 return True, 'ok', 'hf-hub-python'
-            if self._cancelled:
-                return False, 'cancelled_by_user', 'cancel'
+            if self._batch_stopped():
+                return False, self._stop_reason(), 'cancel'
 
-            # Classify auth errors but DO NOT fail-fast yet — aria2c with
-            # Authorization header can succeed where hf CLI / hf_hub fail
-            # (e.g. token format issues, hf_xet JWT negotiation bugs).
             hf_auth_failure = self._classify_hf_auth_error(f"{reason} || {hub_reason}")
             if hf_auth_failure:
                 if 'gated_model_not_accepted' in hf_auth_failure:
-                    # Gated model not accepted: aria2c won't help either,
-                    # the user needs to accept the license on huggingface.co.
                     return False, hf_auth_failure, 'auth'
                 logger.warning(
-                    f"HF CLI + Python API falharam com auth error ({hf_auth_failure}), "
-                    f"tentando aria2c/wget como fallback..."
+                    f"Backends HF falharam com auth error ({hf_auth_failure}), "
+                    f"tentando wget como último recurso..."
                 )
 
         # Resolve Civitai URL with authenticated redirect handling
-        if self._cancelled:
-            return False, 'cancelled_by_user', 'cancel'
+        if self._batch_stopped():
+            return False, self._stop_reason(), 'cancel'
         if is_civitai_source:
             resolved_url, resolve_reason = self._resolve_civitai_download_url(url)
             if not resolved_url:
@@ -1892,8 +2020,9 @@ class DownloadManager:
             # Add CivitAI token for generic path if needed
             download_url = self._add_civitai_token(url)
 
-        # Download with aria2c or wget
-        if self.has_aria2c:
+        # Generic tail: aria2c (unless the HF chain already ran it), then wget
+        # as the single-stream last resort.
+        if self.has_aria2c and not tried_aria2c:
             ok, reason = self._download_aria2c(
                 download_url,
                 dest_dir,
@@ -1903,33 +2032,21 @@ class DownloadManager:
             self._record_attempt(url, 'aria2c', ok, reason)
             if ok:
                 return True, 'ok', 'aria2c'
-            if self._cancelled:
-                return False, 'cancelled_by_user', 'cancel'
-            fallback_ok, fallback_reason = self._download_wget(
-                download_url,
-                dest_dir / filename,
-                prefer_content_disposition=False
-            )
-            self._record_attempt(url, 'wget-fallback', fallback_ok, fallback_reason)
-            if fallback_ok:
-                return True, 'ok', 'wget-fallback'
-            # If HF CLI had an auth error and aria2c/wget also failed,
-            # report as auth (non-retryable) to avoid pointless retries.
-            if hf_auth_failure:
-                return False, hf_auth_failure, 'auth'
-            return False, fallback_reason or reason, 'aria2c->wget'
-        else:
-            ok, reason = self._download_wget(
-                download_url,
-                dest_path,
-                prefer_content_disposition=False
-            )
-            self._record_attempt(url, 'wget', ok, reason)
-            if ok:
-                return True, 'ok', 'wget'
-            if hf_auth_failure:
-                return False, hf_auth_failure, 'auth'
-            return False, reason, 'wget'
+            if self._batch_stopped():
+                return False, self._stop_reason(), 'cancel'
+        fallback_ok, fallback_reason = self._download_wget(
+            download_url,
+            (dest_dir / filename) if filename else dest_path,
+            prefer_content_disposition=False
+        )
+        self._record_attempt(url, 'wget-fallback', fallback_ok, fallback_reason)
+        if fallback_ok:
+            return True, 'ok', 'wget-fallback'
+        # If the HF chain had an auth error and aria2c/wget also failed,
+        # report as auth (non-retryable) to avoid pointless retries.
+        if hf_auth_failure:
+            return False, hf_auth_failure, 'auth'
+        return False, fallback_reason or reason, 'aria2c->wget'
     
     def _add_civitai_token(self, url: str) -> str:
         """Add CivitAI API token to URL if needed"""
@@ -2116,7 +2233,12 @@ class DownloadManager:
                     return False, reason
 
             logger.error(f"HF download failed with code {process.returncode}")
-            r = f"hf_xet_exit_{process.returncode}"
+            if stall_state.get('slow'):
+                r = 'hf_xet_slow_transfer_below_floor'
+            elif stall_state.get('killed'):
+                r = 'hf_xet_no_progress_stall'
+            else:
+                r = f"hf_xet_exit_{process.returncode}"
             return False, (f"{r} | tail: {' || '.join(tail)}" if tail else r)
 
         except Exception as e:
@@ -2221,6 +2343,8 @@ class DownloadManager:
                 if process.returncode == 0 and not stall_state['killed']:
                     return False, reason
 
+            if stall_state.get('slow'):
+                return False, "hf_python_slow_transfer_below_floor"
             if stall_state['killed']:
                 return False, f"hf_python_stall_timeout_{self.aria2_stall_timeout_seconds}s"
             r = f"hf_python_exit_{process.returncode}"

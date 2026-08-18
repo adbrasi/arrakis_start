@@ -37,13 +37,20 @@ class DownloadStagingTests(unittest.TestCase):
         manager._cancelled = False
         manager._inflight = 0
         manager._inflight_cv = threading.Condition()
-        # XET liveness policy (see DownloadManager.__init__).
+        # Transfer liveness policy (see DownloadManager.__init__).
         manager.xet_no_progress_seconds = 240
-        manager.xet_rate_grace_seconds = 600
-        manager.xet_min_rate_bps = 100 * 1024
+        manager.hf_rate_grace_seconds = 180
+        manager.hf_min_rate_bps = 10_000_000
+        # Shared growth ledger + batch abort (see DownloadManager.__init__).
+        manager._growth_lock = threading.Lock()
+        manager._last_growth = {}
+        manager._last_bytes = {}
+        manager._batch_progress_ts = 0.0
+        manager._batch_abort = threading.Event()
         # An importable huggingface_hub is what enables the HF backends.
         manager.has_hf_hub = True
         manager.has_hf_xet = True
+        manager.has_aria2c = True
         return manager
 
     def test_hf_work_dirs_are_isolated_and_stable(self):
@@ -264,8 +271,12 @@ class DownloadStagingTests(unittest.TestCase):
         """Drive the observer over a scripted clock until the process exits."""
         # One extra poll than clock samples so the loop always terminates.
         process = _ProcessSequence([None] * (len(clock) - 1) + [0])
+        # The active-transfer count reads the real clock; pin it so the floor
+        # under test is exactly hf_min_rate_bps and the scripted monotonic
+        # samples are consumed only by the observer loop itself.
         with patch.object(manager, '_tree_bytes', side_effect=tree_bytes), \
                 patch.object(manager, '_terminate_process') as terminate, \
+                patch.object(manager, '_active_transfer_count', return_value=1), \
                 patch('downloader.time.sleep'), \
                 patch('downloader.time.monotonic', side_effect=clock):
             manager._run_disk_watchdog(
@@ -280,15 +291,17 @@ class DownloadStagingTests(unittest.TestCase):
             )
         return terminate
 
-    def test_xet_slow_but_growing_warmup_is_never_killed(self):
+    def test_xet_slow_but_growing_warmup_is_never_killed_inside_grace(self):
         """A healthy XET transfer starts at tens of KB/s before it accelerates.
 
-        Delivered bytes keep growing the whole time, so neither the
-        no-progress rule nor the long-window rate floor may fire — the floor is
-        only allowed to catch a transfer that stops moving.
+        Delivered bytes keep growing the whole time and the grace window has
+        not elapsed, so neither the no-progress rule nor the throughput floor
+        may fire — the floor only judges a transfer past its grace period.
         """
         manager = self._manager(Path('/tmp/models'))
         manager.aria2_stall_timeout_seconds = 120
+        manager.hf_rate_grace_seconds = 600
+        manager.hf_min_rate_bps = 100 * 1024
         state = {'last_progress': 0.0, 'killed': False, 'last_bytes': 0,
                  'event_bytes': 0}
 
@@ -338,13 +351,13 @@ class DownloadStagingTests(unittest.TestCase):
         terminate.assert_called_once()
         self.assertTrue(state['killed'])
 
-    def test_xet_rate_floor_does_not_fire_before_the_grace_window(self):
+    def test_rate_floor_does_not_fire_before_the_grace_window(self):
         """A crawling transfer is tolerated until the grace window elapses."""
         manager = self._manager(Path('/tmp/models'))
         manager.aria2_stall_timeout_seconds = 120
         manager.xet_no_progress_seconds = 0        # isolate the rate floor
-        manager.xet_rate_grace_seconds = 600
-        manager.xet_min_rate_bps = 100 * 1024
+        manager.hf_rate_grace_seconds = 600
+        manager.hf_min_rate_bps = 100 * 1024
 
         state = {'last_progress': 0.0, 'killed': False, 'last_bytes': 0,
                  'event_bytes': 1}
@@ -355,21 +368,34 @@ class DownloadStagingTests(unittest.TestCase):
         terminate.assert_not_called()
         self.assertFalse(state['killed'])
 
-    def test_xet_rate_floor_fires_after_the_grace_window(self):
+    def test_rate_floor_fires_after_the_grace_window(self):
+        """~31 KB/s sustained past grace: the observed production crawl.
+
+        The floor judges a sliding window (last ~60s of samples), so the clock
+        must tick at the real poll cadence for the window to hold ≥2 samples.
+        """
         manager = self._manager(Path('/tmp/models'))
         manager.aria2_stall_timeout_seconds = 120
         manager.xet_no_progress_seconds = 0        # isolate the rate floor
-        manager.xet_rate_grace_seconds = 600
-        manager.xet_min_rate_bps = 100 * 1024
+        manager.hf_rate_grace_seconds = 600
+        manager.hf_min_rate_bps = 100 * 1024
 
-        # ~31 KB/s sustained past the grace window: the observed production rate.
-        state = {'last_progress': 0.0, 'killed': False, 'last_bytes': 0,
-                 'event_bytes': int(31 * 1024 * 700)}
+        class _Crawling(dict):
+            def get(self, key, default=None):
+                if key == 'event_bytes':
+                    self['_n'] = super().get('_n', 0) + 1
+                    return int(self['_n'] * 10 * 31 * 1024)
+                return super().get(key, default)
+
+        state = _Crawling({'last_progress': 0.0, 'killed': False,
+                           'last_bytes': 0, 'event_bytes': 0})
+        clock = [0.0] + [10.0 * i for i in range(1, 71)]
         terminate = self._run_xet_watchdog(
-            manager, [0.0, 350.0, 700.0], [(0, 0)] * 3, state
+            manager, clock, [(0, 0)] * len(clock), state
         )
         terminate.assert_called_once()
         self.assertTrue(state['killed'])
+        self.assertTrue(state.get('slow'))
 
     def test_http_retains_disk_stall_termination(self):
         """The HTTP path must keep killing on disk silence (its valid signal)."""
@@ -479,6 +505,173 @@ class DownloadStagingTests(unittest.TestCase):
                 'civitai_resolve_http_404',
             )
         )
+
+    def test_hf_fallback_order_is_aria2c_before_hub_http(self):
+        """When XET fails, multi-connection aria2c must run BEFORE hub HTTP.
+
+        Hub HTTP is a single stream on the same throttled route that killed
+        XET; putting it second cost a real install 47 minutes at ~2 MB/s for
+        bytes aria2c then moved in 16 minutes.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(Path(temp_dir) / 'models')
+
+            with patch.object(manager, '_download_hf_direct',
+                              return_value=(False, 'hf_xet_exit_1')), \
+                    patch.object(manager, '_download_aria2c',
+                                 return_value=(True, '')) as aria, \
+                    patch.object(manager, '_download_hf_via_python') as hub:
+                ok, reason, stage = manager._download_file(
+                    'https://huggingface.co/org/repo/resolve/main/model.safetensors',
+                    'checkpoints',
+                    'model.safetensors',
+                )
+
+            self.assertTrue(ok)
+            self.assertEqual(stage, 'aria2c')
+            aria.assert_called_once()
+            hub.assert_not_called()
+
+    def test_batch_abort_stops_the_fallback_chain(self):
+        """A batch abort must stop a worker from starting the next backend.
+
+        Without this gate, the stall watchdog killed a subprocess, the worker
+        read that as a backend failure and kept downloading via aria2c while
+        the batch had already been reported as failed (orphan transfer racing
+        ComfyUI startup).
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = self._manager(Path(temp_dir) / 'models')
+
+            def abort_mid_transfer(*_args):
+                manager._batch_abort.set()
+                return False, 'hf_xet_exit_-15'
+
+            with patch.object(manager, '_download_hf_direct',
+                              side_effect=abort_mid_transfer), \
+                    patch.object(manager, '_download_aria2c') as aria, \
+                    patch.object(manager, '_download_hf_via_python') as hub:
+                ok, reason, stage = manager._download_file(
+                    'https://huggingface.co/org/repo/resolve/main/model.safetensors',
+                    'checkpoints',
+                    'model.safetensors',
+                )
+
+            self.assertFalse(ok)
+            self.assertEqual((reason, stage), ('batch_aborted', 'cancel'))
+            aria.assert_not_called()
+            hub.assert_not_called()
+
+    def test_http_alive_but_crawling_is_killed_after_grace(self):
+        """The production bug: HTTP at ~31 KB/s forever counted as healthy.
+
+        Disk bytes keep growing (so the no-new-bytes stall guard stays quiet),
+        but the sliding-window rate sits far below the floor — after the grace
+        window the observer must kill the process so aria2c can take over.
+        """
+        manager = self._manager(Path('/tmp/models'))
+        manager.aria2_stall_timeout_seconds = 120
+
+        clock = [0.0] + [10.0 * i for i in range(1, 26)]
+        tree = [(int(i * 10 * 31 * 1024), 0) for i in range(len(clock))]
+        process = _ProcessSequence([None] * (len(clock) - 1) + [0])
+        state = {'last_progress': 0.0, 'killed': False, 'last_bytes': 0,
+                 'event_bytes': 0}
+
+        with patch.object(manager, '_tree_bytes', side_effect=tree), \
+                patch.object(manager, '_terminate_process') as terminate, \
+                patch.object(manager, '_active_transfer_count', return_value=1), \
+                patch.object(manager, '_publish_progress'), \
+                patch('downloader.time.sleep'), \
+                patch('downloader.time.monotonic', side_effect=clock):
+            manager._run_disk_watchdog(
+                process,
+                Path('/tmp/staging'),
+                Path('/tmp/final'),
+                'model.safetensors',
+                20_000_000_000,
+                state,
+                terminate_on_stall=True,
+                backend_label='HTTP',
+            )
+
+        terminate.assert_called_once()
+        self.assertTrue(state['killed'])
+        self.assertTrue(state.get('slow'))
+
+    def test_rate_floor_is_split_across_active_transfers(self):
+        """Bandwidth sharing on a busy link must never read as throttling."""
+        manager = self._manager(Path('/tmp/models'))
+        manager.aria2_stall_timeout_seconds = 120
+        manager.xet_no_progress_seconds = 0
+        manager.hf_rate_grace_seconds = 60
+        manager.hf_min_rate_bps = 10_000_000
+
+        # 2 MB/s with 8 active transfers: below the raw floor, above the split
+        # floor (10 MB/s ÷ 8 = 1.25 MB/s) — must survive.
+        clock = [0.0] + [10.0 * i for i in range(1, 16)]
+        tree = [(int(i * 10 * 2_000_000), 0) for i in range(len(clock))]
+        process = _ProcessSequence([None] * (len(clock) - 1) + [0])
+        state = {'last_progress': 0.0, 'killed': False, 'last_bytes': 0,
+                 'event_bytes': 0}
+
+        with patch.object(manager, '_tree_bytes', side_effect=tree), \
+                patch.object(manager, '_terminate_process') as terminate, \
+                patch.object(manager, '_active_transfer_count', return_value=8), \
+                patch.object(manager, '_publish_progress'), \
+                patch('downloader.time.sleep'), \
+                patch('downloader.time.monotonic', side_effect=clock):
+            manager._run_disk_watchdog(
+                process,
+                Path('/tmp/staging'),
+                Path('/tmp/final'),
+                'model.safetensors',
+                20_000_000_000,
+                state,
+                terminate_on_stall=True,
+                backend_label='HTTP',
+            )
+
+        terminate.assert_not_called()
+        self.assertFalse(state['killed'])
+
+    def test_window_rate_needs_two_samples_and_measures_deltas(self):
+        self.assertEqual(DownloadManager._window_rate([]), float('inf'))
+        self.assertEqual(DownloadManager._window_rate([(0.0, 500)]), float('inf'))
+        self.assertEqual(
+            DownloadManager._window_rate([(0.0, 1000), (10.0, 2000)]), 100.0
+        )
+        # Pre-existing bytes from a resumed partial must not inflate the rate.
+        self.assertEqual(
+            DownloadManager._window_rate([(0.0, 10 ** 12), (10.0, 10 ** 12)]), 0.0
+        )
+
+    def test_sanitize_log_redacts_signed_cdn_urls_but_keeps_benign_params(self):
+        manager = self._manager(Path('/tmp/models'))
+        line = (
+            'redirect: https://cdn-lfs.hf.co/repo/file'
+            '?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef123'
+            '&Expires=1755555555&Key-Pair-Id=KEYPAIR99&token=sekrit'
+            '&download=true'
+        )
+
+        result = manager._sanitize_log(line)
+
+        self.assertNotIn('deadbeef123', result)
+        self.assertNotIn('1755555555', result)
+        self.assertNotIn('KEYPAIR99', result)
+        self.assertNotIn('sekrit', result)
+        self.assertIn('download=true', result)
+
+    def test_token_tail_leaks_no_token_material(self):
+        manager = self._manager(Path('/tmp/models'))
+        token = 'hf_abcdefghijklmnop'
+
+        tail = manager._token_tail(token)
+
+        for fragment in (token[i:i + 4] for i in range(len(token) - 3)):
+            self.assertNotIn(fragment, tail)
+        self.assertEqual(manager._token_tail(''), 'missing')
 
 
 if __name__ == '__main__':
