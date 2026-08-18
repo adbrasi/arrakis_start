@@ -44,7 +44,7 @@ Tests: `PYTHONPATH=. python3 -m unittest tests.test_downloader` from the repo ro
 
 **Data flow:** Web UI → `server.py` API → `start.py` orchestrator → `downloader.py` + node installer → `state.py` persistence. Progress flows back the other way through `progress.py`, which `/api/status` serves to the polling UI — cloud hosts expose only the web port, so a second socket could not reach the browser.
 
-**Runtime stack selection:** When any active preset sets `use_sage_attention: true`, `start.py` runs the unified SageAttention installer (`SAGEATTENTION_INSTALLER_URL`) and passes `--use-sage-attention` to ComfyUI. If the downloaded wheel cannot import against the active PyTorch ABI, it rebuilds SageAttention from source and publishes the compatible wheel when `HF_TOKEN` is available. Otherwise it installs the standard torch wheel selected for the detected driver.
+**Runtime stack selection:** When any active preset sets `use_sage_attention: true` or `install_sage_attention: true`, `start.py` runs the unified SageAttention installer (`SAGEATTENTION_INSTALLER_URL`); the `--use-sage-attention` launch flag is added only when an installed preset sets `use_sage_attention: true` (and the wheel actually imports). If the downloaded wheel cannot import against the active PyTorch ABI, it rebuilds SageAttention from source and publishes the compatible wheel when `HF_TOKEN` is available. Otherwise it installs the standard torch wheel selected for the detected driver.
 
 ## Preset System
 
@@ -54,7 +54,7 @@ Presets are JSON files in `presets/`. Each defines models to download, custom no
 - **Disabled presets:** renamed to `*.json.ignore`
 - **Hidden presets:** prefixed with `.`
 
-Key preset fields: `name`, `description`, `pinned`, `size_gb`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention`, `workflows[]` (list of `{label, file|url}` — `file` is a local file in `workflows/` and wins over `url`). The legacy single `workflow`/`workflow_url` pair is still accepted and becomes a one-item list.
+Key preset fields: `name`, `description`, `pinned`, `size_gb`, `models[]` (`url`/`dir`/`filename`), `nodes[]` (git URLs), `pip_commands[]` (each with optional `condition` — e.g. `cuda_available` — and `allow_failure`), `comfyui_flags[]`, `use_sage_attention` (install the wheel AND launch ComfyUI with `--use-sage-attention`), `install_sage_attention` (install the wheel only — available for node-level use, no launch flag), `workflows[]` (list of `{label, file|url}` — `file` is a local file in `workflows/` and wins over `url`). The legacy single `workflow`/`workflow_url` pair is still accepted and becomes a one-item list.
 
 ```json
 {

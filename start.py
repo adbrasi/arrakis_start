@@ -1326,8 +1326,15 @@ def _fallback_to_standard_runtime(state, reason: str) -> bool:
     return True
 
 
-def configure_runtime_stack(use_sage_attention: bool) -> bool:
-    """Configure runtime stack only when SageAttention is explicitly requested."""
+def configure_runtime_stack(install_sage_attention: bool) -> bool:
+    """Ensure the requested runtime stack is installed and importable.
+
+    This only manages what exists in the venv (the ``runtime_stack`` state
+    marker reflects importability). Whether ComfyUI LAUNCHES with
+    ``--use-sage-attention`` is a separate decision made from preset intent in
+    ``_persist_comfyui_flags`` — a preset may want the wheel available for
+    node-level use without forcing the global attention override.
+    """
     state = get_state_manager()
     current_stack = state.get_runtime_stack()
     detected_stack = _detect_runtime_stack()
@@ -1340,7 +1347,7 @@ def configure_runtime_stack(use_sage_attention: bool) -> bool:
         state.set_runtime_stack(detected_stack)
         current_stack = detected_stack
 
-    if use_sage_attention:
+    if install_sage_attention:
         if current_stack == 'sageattention':
             logger.info("SageAttention runtime already active, skipping reconfiguration")
             return True
@@ -1628,7 +1635,8 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     downloads = []
     nodes = []
     pip_commands = []
-    use_sage_attention = False
+    use_sage_attention = False        # launch ComfyUI with --use-sage-attention
+    install_sage_attention = False    # ensure the wheel only, no launch flag
     processed_presets = []
     known_models: List[Dict[str, Any]] = []
 
@@ -1671,6 +1679,12 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
         if bool(preset.get('use_sage_attention', False)):
             use_sage_attention = True
             logger.info(f"Preset '{preset_name}' enables SageAttention runtime stack")
+        if bool(preset.get('install_sage_attention', False)):
+            install_sage_attention = True
+            logger.info(
+                f"Preset '{preset_name}' installs SageAttention "
+                "(wheel disponível, sem flag de launch)"
+            )
 
         # Collect preset-specific pip commands
         if 'pip_commands' in preset:
@@ -1680,7 +1694,9 @@ def _install_presets_impl(preset_names: List[str], include_base: bool = True) ->
     if _install_cancel_event.is_set():
         return INSTALL_CANCELLED
     _set_progress_stage('runtime', 'configurando runtime stack')
-    if not configure_runtime_stack(use_sage_attention=use_sage_attention):
+    if not configure_runtime_stack(
+        install_sage_attention=use_sage_attention or install_sage_attention
+    ):
         logger.error("Installation failed during runtime stack configuration")
         _set_progress_stage('erro', 'falha ao configurar runtime stack')
         return INSTALL_FAILED
@@ -1949,13 +1965,24 @@ def _persist_comfyui_flags(state, preset_map: Dict[str, Dict[str, Any]]) -> None
 
     Flags must come from the union of installed presets: rebuilding the list from
     a single install request dropped the flags of presets that are still
-    installed. The SageAttention flag is derived from the runtime stack because
-    that reflects what is really in the venv — installing the wheel is useless
-    unless ComfyUI is launched with --use-sage-attention.
+    installed. The SageAttention flag is preset INTENT (`use_sage_attention`),
+    gated by the runtime stack actually holding an importable wheel — a preset
+    with only `install_sage_attention` gets the wheel for node-level use and
+    must NOT force the global attention override at launch.
     """
     flags: List[str] = []
-    if state.get_runtime_stack() == 'sageattention':
-        flags.append('--use-sage-attention')
+    wants_sage_flag = any(
+        bool((preset_map.get(name) or {}).get('use_sage_attention', False))
+        for name in state.get_installed_presets()
+    )
+    if wants_sage_flag:
+        if state.get_runtime_stack() == 'sageattention':
+            flags.append('--use-sage-attention')
+        else:
+            logger.warning(
+                "Preset pede --use-sage-attention, mas o runtime stack não tem "
+                "SageAttention importável; iniciando sem a flag."
+            )
 
     for preset_name in state.get_installed_presets():
         preset = preset_map.get(preset_name)

@@ -4,6 +4,7 @@
   "pinned": true,
   "size_gb": 104,
   "use_sage_attention": false,
+  "install_sage_attention": true,
   "comfyui_flags": [],
   "models": [
     {
