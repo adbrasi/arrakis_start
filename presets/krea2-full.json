@@ -57,51 +57,6 @@
       "filename": "ctx_rushado_adapter_model.safetensors"
     },
     {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_darkbrush.safetensors",
-      "dir": "loras",
-      "filename": "krea2_darkbrush.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_dotmatrix.safetensors",
-      "dir": "loras",
-      "filename": "krea2_dotmatrix.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_kidsdrawing.safetensors",
-      "dir": "loras",
-      "filename": "krea2_kidsdrawing.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_neondrip.safetensors",
-      "dir": "loras",
-      "filename": "krea2_neondrip.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_rainywindow.safetensors",
-      "dir": "loras",
-      "filename": "krea2_rainywindow.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_retroanime.safetensors",
-      "dir": "loras",
-      "filename": "krea2_retroanime.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_softwatercolor.safetensors",
-      "dir": "loras",
-      "filename": "krea2_softwatercolor.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_sunsetblur.safetensors",
-      "dir": "loras",
-      "filename": "krea2_sunsetblur.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/loras/krea2_vintagetarot.safetensors",
-      "dir": "loras",
-      "filename": "krea2_vintagetarot.safetensors"
-    },
-    {
       "url": "https://huggingface.co/lodestones/Kroma/resolve/main/kroma-v0.1-rl.safetensors?download=true",
       "dir": "loras",
       "filename": "kroma-v0.1-rl.safetensors"
