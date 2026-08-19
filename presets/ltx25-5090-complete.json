@@ -1,7 +1,7 @@
 {
   "name": "LTX 2.5 COMPLETE - RTX 5090",
   "description": "LTX 2.5 completo para RTX 5090 32GB: transformer DEV INT8 ConvRot, Gemma 4 INT8, prompt enhancer Gemma E2B, Diffusion Video VAE, Audio VAE, LoRA distilled, upscalers espacial e temporal e duration head. Inclui workflows DEV single-stage, DEV two-stage e Distilled LoRA em 8 passos. Requer ComfyUI 0.32.0+ e acesso aceito ao repositório Lightricks/LTX-2.5. ~55GB.",
-  "pinned": true,
+  "pinned": false,
   "size_gb": 55,
   "workflows": [
     {
