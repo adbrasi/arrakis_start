@@ -1,0 +1,24 @@
+{
+  "name": "Upscaler de papai",
+  "description": "Upscale 2x de anime — AnimeSharpV4 RCAN e AnimeSharpV3, com VideoHelperSuite e upscale_smooth. ~1GB.",
+  "pinned": true,
+  "size_gb": 1,
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Kim2091/2x-AnimeSharpV4/resolve/main/2x-AnimeSharpV4_RCAN.safetensors",
+      "dir": "upscale_models",
+      "filename": "2x-AnimeSharpV4_RCAN.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Kim2091/AnimeSharpV3/resolve/main/2x-AnimeSharpV3.pth",
+      "dir": "upscale_models",
+      "filename": "2x-AnimeSharpV3.pth"
+    }
+  ],
+  "nodes": [
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "https://github.com/adbrasi/upscale_smooth"
+  ]
+}
