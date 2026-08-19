@@ -1,7 +1,7 @@
 {
   "name": "MiniMax Tests",
   "description": "MiniMax H3 bancada de testes — diffusion pruned INT8 ConvRot fl2va/ref2va + hybrid fl2va/ref2va b25-49 INT8, text encoder INT8, TAEH3 preview VAE, LoRAs Turbo oficiais (fl2v 4/8step, ref2v 4step) e pacote completo MiniH3 (loop v3, jiggle, videovibe, smoothloop). Nodes da comunidade: Turbo, Contex-Loop, Motion-Context, LatentUpscale, Extender. ~104GB.",
-  "pinned": true,
+  "pinned": false,
   "size_gb": 104,
   "use_sage_attention": false,
   "install_sage_attention": true,
@@ -18,7 +18,7 @@
       "filename": "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
     },
     {
-      "url": "https://huggingface.co/smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models/resolve/main/minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors?download=true",
+      "url": "https://huggingface.co/smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models/resolve/main/minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors",
       "dir": "diffusion_models",
       "filename": "minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors"
     },
@@ -58,12 +58,12 @@
       "filename": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
     },
     {
-      "url": "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/resolve/main/minimax_h3_turbo_v4_step600_ema.safetensors?download=true",
+      "url": "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/resolve/main/minimax_h3_turbo_v4_step600_ema.safetensors",
       "dir": "loras",
       "filename": "minimax_h3_turbo_v4_step600_ema.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v/resolve/main/checkpoints/comfy/minih33_quick-step00002500_comfy.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v/resolve/main/checkpoints/comfy/minih33_quick-step00002500_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_quick-step00002500_comfy.safetensors"
     },
@@ -88,27 +88,27 @@
       "filename": "minih33_v3-step00013500_comfy.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00017500_comfy.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/minih33-loop-i2v-v3/resolve/main/checkpoints/comfy/minih33_v3-step00017500_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_v3-step00017500_comfy.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/minih33-jiggle/resolve/main/checkpoints/comfy/minih33_jiggle-step00002500_comfy.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/minih33-jiggle/resolve/main/checkpoints/comfy/minih33_jiggle-step00002500_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_jiggle-step00002500_comfy.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/minih33-videovibe/resolve/main/checkpoints/comfy/minih33_vibe-step00010000_comfy.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/minih33-videovibe/resolve/main/checkpoints/comfy/minih33_vibe-step00010000_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_vibe-step00010000_comfy.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/minih33-videovibe/resolve/main/checkpoints/comfy/minih33_vibe-step00007500_comfy.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/minih33-videovibe/resolve/main/checkpoints/comfy/minih33_vibe-step00007500_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_vibe-step00007500_comfy.safetensors"
     },
     {
-      "url": "https://huggingface.co/AdwolfCzar/minih33-smoothloop/resolve/main/checkpoints/comfy/minih33_smooth-step00002000_comfy.safetensors?download=true",
+      "url": "https://huggingface.co/AdwolfCzar/minih33-smoothloop/resolve/main/checkpoints/comfy/minih33_smooth-step00002000_comfy.safetensors",
       "dir": "loras",
       "filename": "minih33_smooth-step00002000_comfy.safetensors"
     }
