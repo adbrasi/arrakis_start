@@ -2,7 +2,7 @@
   "name": "First Last Frame MinimaxH3",
   "description": "MiniMax H3 first/last frame (fl2va) — diffusion pruned INT8 ConvRot, text encoder Qwen3-VL 32B INT8, VAEs de vídeo/áudio, TAEH3 preview e LoRAs Turbo (fl2v 8step, ref2v 4step) + pacote MiniH3 (loop, jiggle, videovibe, smoothloop). ~63GB.",
   "pinned": true,
-  "size_gb": 63,
+  "size_gb": 60,
   "use_sage_attention": false,
   "install_sage_attention": true,
   "comfyui_flags": [],
