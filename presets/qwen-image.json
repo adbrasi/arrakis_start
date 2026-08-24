@@ -2,7 +2,7 @@
   "name": "Qwen Image Edit 2511",
   "description": "Qwen Image Edit 2511 models with Lightning LoRAs and GGUF support",
   "pinned": false,
-  "size_gb": 53,
+  "size_gb": 32,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "models": [
@@ -10,11 +10,6 @@
       "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
       "dir": "diffusion_models",
       "filename": "qwen_image_edit_2511_fp8mixed.safetensors"
-    },
-    {
-      "url": "https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q8_0.gguf",
-      "dir": "diffusion_models",
-      "filename": "qwen-image-edit-2511-Q8_0.gguf"
     },
     {
       "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
@@ -49,6 +44,9 @@
   ],
   "nodes": [
     "https://github.com/city96/ComfyUI-GGUF",
-    "https://github.com/Merserk/ComfyUI-PiD"
+    "https://github.com/Merserk/ComfyUI-PiD",
+    "https://github.com/adbrasi/ComfyI2I",
+    "https://github.com/rgthree/rgthree-comfy",
+    "https://github.com/adbrasi/rota_do_imperador-openrouter-single-node-public"
   ]
 }
