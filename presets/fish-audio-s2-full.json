@@ -1,0 +1,77 @@
+{
+  "name": "Fish Audio S2 Full",
+  "description": "Fish Audio S2 Pro em precisao total — TTS zero-shot com clonagem de voz a partir de 10-30s de referencia, tags de emocao inline e 83 idiomas. ~24GB VRAM (ou ~16-18GB com quantizacao BNB NF4/INT8 no proprio node). Qualidade de referencia.",
+  "pinned": false,
+  "size_gb": 12,
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "workflows": [
+    {
+      "label": "TTS + Voice Clone",
+      "file": "fish_audio_s2_tts.json"
+    }
+  ],
+  "pip_commands": [
+    {
+      "command": "pip install descript-audiotools>=0.7.2 --no-deps",
+      "description": "descript-audiotools sem deps (pin protobuf<5 quebra outros nodes)"
+    },
+    {
+      "command": "pip install descript-audio-codec --no-deps",
+      "description": "descript-audio-codec sem deps (mesmo motivo)"
+    }
+  ],
+  "models": [
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/codec.pth",
+      "dir": "fishaudioS2",
+      "filename": "codec.pth"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/model-00001-of-00002.safetensors",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "model-00001-of-00002.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/model-00002-of-00002.safetensors",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "model-00002-of-00002.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/model.safetensors.index.json",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "model.safetensors.index.json"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/config.json",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "config.json"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/special_tokens_map.json",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "special_tokens_map.json"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/tokenizer.json",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "tokenizer.json"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/tokenizer_config.json",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "tokenizer_config.json"
+    },
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/chat_template.jinja",
+      "dir": "fishaudioS2/s2-pro",
+      "filename": "chat_template.jinja"
+    }
+  ],
+  "nodes": [
+    "https://github.com/Saganaki22/ComfyUI-FishAudioS2",
+    "https://github.com/melMass/comfy_mtb",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/Merserk/ComfyUI-PiD"
+  ]
+}

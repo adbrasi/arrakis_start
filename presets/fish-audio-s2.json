@@ -1,0 +1,72 @@
+{
+  "name": "Fish Audio S2 (FP8)",
+  "description": "Fish Audio S2 Pro em FP8 — TTS zero-shot com clonagem de voz a partir de 10-30s de referencia, tags de emocao inline e 83 idiomas. ~20GB VRAM, exige Ada/Blackwell (4090/5090/RTX PRO 6000). Nodes de TTS, voice clone e multi-speaker.",
+  "pinned": false,
+  "size_gb": 9,
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "workflows": [
+    {
+      "label": "TTS + Voice Clone",
+      "file": "fish_audio_s2_tts.json"
+    }
+  ],
+  "pip_commands": [
+    {
+      "command": "pip install descript-audiotools>=0.7.2 --no-deps",
+      "description": "descript-audiotools sem deps (pin protobuf<5 quebra outros nodes)"
+    },
+    {
+      "command": "pip install descript-audio-codec --no-deps",
+      "description": "descript-audio-codec sem deps (mesmo motivo)"
+    }
+  ],
+  "models": [
+    {
+      "url": "https://huggingface.co/fishaudio/s2-pro/resolve/main/codec.pth",
+      "dir": "fishaudioS2",
+      "filename": "codec.pth"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/model.safetensors",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "model.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/quantization_info.json",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "quantization_info.json"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/config.json",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "config.json"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/special_tokens_map.json",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "special_tokens_map.json"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/tokenizer.json",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "tokenizer.json"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/tokenizer_config.json",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "tokenizer_config.json"
+    },
+    {
+      "url": "https://huggingface.co/drbaph/s2-pro-fp8/resolve/main/chat_template.jinja",
+      "dir": "fishaudioS2/s2-pro-fp8",
+      "filename": "chat_template.jinja"
+    }
+  ],
+  "nodes": [
+    "https://github.com/Saganaki22/ComfyUI-FishAudioS2",
+    "https://github.com/melMass/comfy_mtb",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/Merserk/ComfyUI-PiD"
+  ]
+}
