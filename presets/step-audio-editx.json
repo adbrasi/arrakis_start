@@ -1,0 +1,125 @@
+{
+  "name": "Step Audio EditX",
+  "description": "Edicao de audio com Step-Audio-EditX (node do Saganaki22) — emocao, estilo, velocidade, paralinguistica e denoise em clipes de 0.5s a 30s. Modelo completo bfloat16 sem quantizacao (~14-18GB VRAM). Workflow de edit com transcricao automatica via Whisper (mtb).",
+  "pinned": false,
+  "size_gb": 10,
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "workflows": [
+    { "label": "Audio Edit", "file": "step_audio_editx_edit.json" }
+  ],
+  "models": [
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/model-00001.safetensors",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "model-00001.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/model.safetensors.index.json",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "model.safetensors.index.json"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/config.json",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "config.json"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/configuration_step1.py",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "configuration_step1.py"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/modeling_step1.py",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "modeling_step1.py"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/tokenizer.model",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "tokenizer.model"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/tokenizer_config.json",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX",
+      "filename": "tokenizer_config.json"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/CosyVoice-300M-25Hz/cosyvoice.yaml",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX/CosyVoice-300M-25Hz",
+      "filename": "cosyvoice.yaml"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/CosyVoice-300M-25Hz/FLOW_VERSION",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX/CosyVoice-300M-25Hz",
+      "filename": "FLOW_VERSION"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/CosyVoice-300M-25Hz/flow.pt",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX/CosyVoice-300M-25Hz",
+      "filename": "flow.pt"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/CosyVoice-300M-25Hz/hift.pt",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX/CosyVoice-300M-25Hz",
+      "filename": "hift.pt"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/CosyVoice-300M-25Hz/campplus.onnx",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX/CosyVoice-300M-25Hz",
+      "filename": "campplus.onnx"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-EditX/resolve/main/CosyVoice-300M-25Hz/speech_tokenizer_v1.onnx",
+      "dir": "Step-Audio-EditX/Step-Audio-EditX/CosyVoice-300M-25Hz",
+      "filename": "speech_tokenizer_v1.onnx"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/linguistic_tokenizer.npy",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer",
+      "filename": "linguistic_tokenizer.npy"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/speech_tokenizer_v1.onnx",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer",
+      "filename": "speech_tokenizer_v1.onnx"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online/model.pt",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online",
+      "filename": "model.pt"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online/configuration.json",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online",
+      "filename": "configuration.json"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online/config.yaml",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online",
+      "filename": "config.yaml"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online/am.mvn",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online",
+      "filename": "am.mvn"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online/tokens.json",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online",
+      "filename": "tokens.json"
+    },
+    {
+      "url": "https://huggingface.co/stepfun-ai/Step-Audio-Tokenizer/resolve/main/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online/seg_dict",
+      "dir": "Step-Audio-EditX/Step-Audio-Tokenizer/dengcunqin/speech_paraformer-large_asr_nat-zh-cantonese-en-16k-vocab8501-online",
+      "filename": "seg_dict"
+    }
+  ],
+  "nodes": [
+    "https://github.com/Saganaki22/ComfyUI-Step_Audio_EditX_TTS",
+    "https://github.com/melMass/comfy_mtb",
+    "https://github.com/yolain/ComfyUI-Easy-Use",
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "https://github.com/Merserk/ComfyUI-PiD"
+  ]
+}
