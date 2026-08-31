@@ -1,12 +1,23 @@
 {
   "name": "Step Audio EditX",
-  "description": "Edicao de audio com Step-Audio-EditX (node do Saganaki22) — emocao, estilo, velocidade, paralinguistica e denoise em clipes de 0.5s a 30s. Modelo completo bfloat16 sem quantizacao (~14-18GB VRAM). Workflow de edit com transcricao automatica via Whisper (mtb).",
+  "description": "Step-Audio-EditX (node do Saganaki22): clonagem de voz zero-shot (~11-14GB VRAM) e edicao de audio — emocao, estilo, velocidade, paralinguistica e denoise em clipes de 0.5s a 30s (~14-18GB VRAM). Modelo completo bfloat16 sem quantizacao. Workflows de clone, edit e AIO com transcricao automatica via Whisper (mtb).",
   "pinned": false,
   "size_gb": 10,
   "use_sage_attention": false,
   "comfyui_flags": [],
   "workflows": [
-    { "label": "Audio Edit", "file": "step_audio_editx_edit.json" }
+    {
+      "label": "Voice Clone",
+      "file": "step_audio_editx_clone.json"
+    },
+    {
+      "label": "Audio Edit",
+      "file": "step_audio_editx_edit.json"
+    },
+    {
+      "label": "Clone + Edit (AIO)",
+      "file": "step_audio_editx_aio.json"
+    }
   ],
   "models": [
     {
