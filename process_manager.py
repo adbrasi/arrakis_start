@@ -447,6 +447,16 @@ class ProcessManager:
         except Exception as exc:
             logger.warning(f"torch driver-compat guard skipped: {exc}")
 
+        # Re-derive the preset flags and the ComfyUI user settings from the
+        # presets on disk. Doing it here — not at install time — is what makes a
+        # `git pull` of a changed preset take effect on the next restart. Same
+        # deferred import as above, for the same circular-dependency reason.
+        try:
+            from start import prepare_launch
+            prepare_launch()
+        except Exception as exc:
+            logger.warning(f"pre-launch prep skipped: {exc}")
+
         # Default flags
         default_flags = [
             '--listen', '0.0.0.0',

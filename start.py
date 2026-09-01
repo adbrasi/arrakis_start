@@ -2631,6 +2631,29 @@ def _seed_comfyui_locale() -> None:
         logger.warning(f"Não consegui fixar o idioma do ComfyUI: {e}")
 
 
+def prepare_launch() -> None:
+    """Refresh everything ComfyUI reads at boot, from the presets on disk.
+
+    Called by ``ProcessManager.start`` — the one choke point every launch goes
+    through, CLI and web UI alike.
+
+    ``comfyui_flags`` used to be written only during an install, so editing a
+    preset's flags did nothing until that preset was reinstalled: pulling a fix
+    and restarting left the old flags in state. The flags are *derived* data —
+    the union of what the installed presets ask for — so deriving them at launch
+    is both simpler and always correct. A preset edit now takes effect on the
+    next restart, which is what pulling a fix is supposed to mean.
+    """
+    try:
+        state = get_state_manager()
+        preset_map = {p.get('name', p['_filename']): p for p in load_presets()}
+        _persist_comfyui_flags(state, preset_map)
+    except Exception as e:
+        logger.warning(f"Não consegui recalcular as flags dos presets: {e}")
+
+    _seed_comfyui_locale()
+
+
 def start_comfyui() -> bool:
     """Start ComfyUI through the process manager.
 
@@ -2640,7 +2663,6 @@ def start_comfyui() -> bool:
     for the healthcheck and records the PID in state.
     """
     logger.info(f"Starting ComfyUI on port {COMFY_PORT}")
-    _seed_comfyui_locale()
     state = get_state_manager()
     flags = state.get_comfyui_flags()
     if flags:
