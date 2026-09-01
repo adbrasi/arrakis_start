@@ -2591,6 +2591,46 @@ def start_web_server():
     run_server(port=WEB_PORT, presets_callback=load_presets)
 
 
+def _seed_comfyui_locale() -> None:
+    """Default the ComfyUI interface to English.
+
+    `Comfy.Locale` has no fixed default in the frontend: it falls back to
+    `getDefaultLocale()`, which resolves `navigator.languages`. A pt-BR browser
+    therefore lands on a pt-BR interface on every fresh instance. Writing the key
+    before first load pins English.
+
+    An existing value is left untouched — this establishes the default, it does
+    not override a language the user picked in the ComfyUI settings.
+    """
+    settings_path = COMFY_DIR / 'user' / 'default' / 'comfy.settings.json'
+    settings: Dict[str, Any] = {}
+
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as e:
+            logger.warning(f"comfy.settings.json ilegível ({e}); idioma não alterado")
+            return
+        if not isinstance(settings, dict):
+            logger.warning("comfy.settings.json não é um objeto; idioma não alterado")
+            return
+        if 'Comfy.Locale' in settings:
+            return
+
+    settings['Comfy.Locale'] = 'en'
+    try:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            'w', encoding='utf-8', dir=settings_path.parent, delete=False
+        ) as tmp:
+            json.dump(settings, tmp, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, settings_path)
+        logger.info("Interface do ComfyUI fixada em inglês (Comfy.Locale=en)")
+    except OSError as e:
+        logger.warning(f"Não consegui fixar o idioma do ComfyUI: {e}")
+
+
 def start_comfyui() -> bool:
     """Start ComfyUI through the process manager.
 
@@ -2600,6 +2640,7 @@ def start_comfyui() -> bool:
     for the healthcheck and records the PID in state.
     """
     logger.info(f"Starting ComfyUI on port {COMFY_PORT}")
+    _seed_comfyui_locale()
     state = get_state_manager()
     flags = state.get_comfyui_flags()
     if flags:
