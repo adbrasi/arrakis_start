@@ -1,8 +1,8 @@
 {
   "name": "MiniMax Tests",
-  "description": "MiniMax H3 bancada de testes — diffusion pruned INT8 ConvRot fl2va/ref2va + hybrid fl2va/ref2va b25-49 INT8, text encoder INT8, TAEH3 preview VAE, LoRAs Turbo oficiais (fl2v 4/8step, ref2v 4step) e pacote completo MiniH3 (loop v3, jiggle, videovibe, smoothloop). Nodes da comunidade: Turbo, Contex-Loop, Motion-Context, LatentUpscale, Extender. ~104GB.",
+  "description": "MiniMax H3 bancada de testes — diffusion pruned INT8 ConvRot fl2va/ref2va + hybrid fl2va/ref2va b25-49 INT8, text encoder Qwen3-VL 32B NVFP4 AWQ, TAEH3 preview VAE, LoRAs Turbo oficiais (fl2v 4/8step, ref2v 4step) e pacote completo MiniH3 (loop v3, jiggle, videovibe, smoothloop). Nodes da comunidade: Turbo, Contex-Loop, Motion-Context, LatentUpscale, Extender. ~93GB.",
   "pinned": false,
-  "size_gb": 102,
+  "size_gb": 91,
   "use_sage_attention": false,
   "install_sage_attention": true,
   "comfyui_flags": [],
@@ -23,9 +23,9 @@
       "filename": "minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors"
     },
     {
-      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
       "dir": "text_encoders",
-      "filename": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+      "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
     },
     {
       "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",

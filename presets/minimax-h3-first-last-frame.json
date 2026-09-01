@@ -1,8 +1,8 @@
 {
   "name": "First Last Frame MinimaxH3",
-  "description": "MiniMax H3 first/last frame (fl2va) — diffusion pruned INT8 ConvRot, text encoder Qwen3-VL 32B INT8, VAEs de vídeo/áudio, TAEH3 preview e LoRAs Turbo (fl2v 8step, ref2v 4step) + pacote MiniH3 (loop, jiggle, videovibe, smoothloop). ~63GB.",
+  "description": "MiniMax H3 first/last frame (fl2va) — diffusion pruned INT8 ConvRot, text encoder Qwen3-VL 32B NVFP4 AWQ, VAEs de vídeo/áudio, TAEH3 preview e LoRAs Turbo (fl2v 8step, ref2v 4step) + pacote MiniH3 (loop, jiggle, videovibe, smoothloop). ~52GB.",
   "pinned": true,
-  "size_gb": 60,
+  "size_gb": 49,
   "use_sage_attention": false,
   "install_sage_attention": true,
   "comfyui_flags": [],
@@ -23,9 +23,9 @@
       "filename": "minimax_h3_audio_vae_fp32.safetensors"
     },
     {
-      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
       "dir": "text_encoders",
-      "filename": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+      "filename": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
     },
     {
       "url": "https://github.com/madebyollin/taehv/raw/main/safetensors/taeh3.safetensors",
