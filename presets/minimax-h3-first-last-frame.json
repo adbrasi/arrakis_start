@@ -1,8 +1,8 @@
 {
   "name": "First Last Frame MinimaxH3",
-  "description": "MiniMax H3 first/last frame (fl2va) — diffusion pruned INT8 ConvRot, text encoder Qwen3-VL 32B NVFP4 AWQ, VAEs de vídeo/áudio, TAEH3 preview e LoRAs Turbo (fl2v 8step, ref2v 4step) + pacote MiniH3 (loop, jiggle, videovibe, smoothloop). ~52GB.",
+  "description": "MiniMax H3 first/last frame (fl2va) — diffusion pruned INT8 ConvRot, text encoder Qwen3-VL 32B NVFP4 AWQ, VAEs de vídeo/áudio, TAEH3 preview e LoRAs Turbo (fl2v 8step e 8step 768p, ref2v 4step) + pacote MiniH3 (loop, jiggle, videovibe, smoothloop). ~54GB.",
   "pinned": true,
-  "size_gb": 49,
+  "size_gb": 51,
   "use_sage_attention": false,
   "install_sage_attention": true,
   "comfyui_flags": [],
@@ -36,6 +36,11 @@
       "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
       "dir": "loras",
       "filename": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      "dir": "loras",
+      "filename": "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
     },
     {
       "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
