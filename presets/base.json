@@ -4,7 +4,7 @@
   "pinned": false,
   "size_gb": 1,
   "use_sage_attention": false,
-  "comfyui_flags": ["--enable-manager-legacy-ui"],
+  "comfyui_flags": ["--enable-manager"],
   "models": [],
   "nodes": [
     "https://github.com/ltdrdata/ComfyUI-Manager",
