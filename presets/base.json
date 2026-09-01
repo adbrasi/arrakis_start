@@ -4,7 +4,10 @@
   "pinned": false,
   "size_gb": 1,
   "use_sage_attention": false,
-  "comfyui_flags": ["--enable-manager"],
+  "comfyui_flags": [
+    "--enable-manager",
+    "--enable-cors-header"
+  ],
   "models": [],
   "nodes": [
     "https://github.com/ltdrdata/ComfyUI-Manager",
