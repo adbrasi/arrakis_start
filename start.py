@@ -1219,77 +1219,78 @@ def _run_sageattention_installer(
     action: str = 'auto',
     env: Optional[Dict[str, str]] = None
 ) -> Tuple[bool, List[str]]:
-    """
-    Run SageAttention installer with retry/backoff.
-    Uses pipefail so download failures are not masked by the shell pipe.
-    """
+    """Download with retry/backoff, then execute the installer exactly once."""
     if action not in {'auto', 'build'}:
         raise ValueError(f"Unsupported SageAttention installer action: {action}")
 
     attempts = max(SAGEATTENTION_INSTALL_ATTEMPTS, 1)
     retry_delay = max(SAGEATTENTION_RETRY_DELAY_SECONDS, 1)
     last_output: List[str] = []
-    logger.info(
-        f"Starting SageAttention installer "
-        f"(action={action}, url={SAGEATTENTION_INSTALLER_URL}, attempts={attempts})"
-    )
     installer_env = dict(env) if env is not None else _venv_env()
     installer_env.setdefault('WORK_DIR', str(SAGEATTENTION_WORK_DIR))
+    # SageAttention 2.2 defaults to C++17; current Torch headers require C++20.
+    # Use the upstream build interface for both host and CUDA compilation.
+    installer_env.setdefault('CXX_APPEND_FLAGS', '-std=c++20')
+    installer_env.setdefault('NVCC_APPEND_FLAGS', '-std=c++20 --threads 8')
 
-    curl_shell = (
-        f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
-        f"curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "
-        f"--connect-timeout 30 --max-time 300 {shlex.quote(SAGEATTENTION_INSTALLER_URL)} "
-        f"| bash -s -- {shlex.quote(action)}"
-    )
-    wget_shell = (
-        f"set -o pipefail && source {shlex.quote(str(comfy_activate))} && "
-        f"wget -qO- --timeout=30 --tries=5 {shlex.quote(SAGEATTENTION_INSTALLER_URL)} "
-        f"| bash -s -- {shlex.quote(action)}"
-    )
+    with tempfile.TemporaryDirectory(prefix='arrakis-sage-') as temp_dir:
+        installer_path = Path(temp_dir) / 'installer.sh'
+        download_commands = [
+            ('curl', [
+                'curl', '-fsSL', '--retry', '5', '--retry-delay', '3',
+                '--retry-all-errors', '--connect-timeout', '30', '--max-time', '300',
+                '-o', str(installer_path), SAGEATTENTION_INSTALLER_URL,
+            ]),
+            ('wget', [
+                'wget', '-q', '--timeout=30', '--tries=5',
+                '-O', str(installer_path), SAGEATTENTION_INSTALLER_URL,
+            ]),
+        ]
+        downloaded = False
+        for attempt in range(1, attempts + 1):
+            for downloader, command in download_commands:
+                if _install_cancel_event.is_set():
+                    return False, last_output
+                result_code, last_output = _run_streaming_command(
+                    command,
+                    f"SageAttention installer download ({downloader} {attempt}/{attempts})",
+                    log_prefix='sage',
+                    env=installer_env,
+                    timeout_sec=300,
+                    progress_stage='runtime',
+                )
+                if result_code == 0:
+                    downloaded = True
+                    break
+                logger.warning(
+                    f"SageAttention installer download via {downloader} failed "
+                    f"(exit {result_code})"
+                )
+            if downloaded:
+                break
+            if attempt < attempts:
+                logger.info(f"Retrying SageAttention download in {retry_delay}s...")
+                if _install_cancel_event.wait(retry_delay):
+                    return False, last_output
 
-    for attempt in range(1, attempts + 1):
-        if _install_cancel_event.is_set():
+        if not downloaded or _install_cancel_event.is_set():
             return False, last_output
-        curl_cmd = ['bash', '-lc', curl_shell]
+
+        shell = (
+            f"source {shlex.quote(str(comfy_activate))} && "
+            f"bash {shlex.quote(str(installer_path))} {shlex.quote(action)}"
+        )
         result_code, output_lines = _run_streaming_command(
-            curl_cmd,
-            f"SageAttention unified installer (curl attempt {attempt}/{attempts})",
+            ['bash', '-lc', shell],
+            f"SageAttention unified installer ({action})",
             log_prefix='sage',
             env=installer_env,
             timeout_sec=SAGEATTENTION_TIMEOUT_SECONDS,
             progress_stage='runtime',
         )
-        last_output = output_lines
-        if result_code == 0:
-            return True, output_lines
-        if _install_cancel_event.is_set():
-            return False, output_lines
-
-        logger.warning(f"SageAttention installer via curl failed (exit {result_code})")
-
-        wget_cmd = ['bash', '-lc', wget_shell]
-        result_code, output_lines = _run_streaming_command(
-            wget_cmd,
-            f"SageAttention unified installer (wget fallback {attempt}/{attempts})",
-            log_prefix='sage',
-            env=installer_env,
-            timeout_sec=SAGEATTENTION_TIMEOUT_SECONDS,
-            progress_stage='runtime',
-        )
-        last_output = output_lines
-        if result_code == 0:
-            return True, output_lines
-        if _install_cancel_event.is_set():
-            return False, output_lines
-
-        logger.warning(f"SageAttention installer via wget failed (exit {result_code})")
-        if attempt < attempts:
-            logger.info(f"Retrying SageAttention installer in {retry_delay}s...")
-            if _install_cancel_event.wait(retry_delay):
-                return False, last_output
-
-    return False, last_output
+        if result_code != 0:
+            logger.warning(f"SageAttention installer failed (exit {result_code})")
+        return result_code == 0, output_lines
 
 
 def _rebuild_sageattention_for_current_torch(
@@ -1366,7 +1367,7 @@ def configure_runtime_stack(install_sage_attention: bool) -> bool:
                 )
             return _fallback_to_standard_runtime(
                 state,
-                "SageAttention installer failed after retries",
+                "SageAttention installer failed",
             )
 
         comfy_python = _comfy_python()

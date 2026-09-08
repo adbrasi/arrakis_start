@@ -32,13 +32,67 @@ class SageAttentionInstallerTests(unittest.TestCase):
 
         self.assertEqual(result, (True, ['ok']))
         command = run_command.call_args.args[0]
-        self.assertIn('| bash -s -- build', command[-1])
+        self.assertIn('installer.sh build', command[-1])
         installer_env = run_command.call_args.kwargs['env']
         self.assertEqual(installer_env['TEST_ENV'], '1')
         self.assertEqual(
             installer_env['WORK_DIR'],
             '/workspace/comfy/.cache/sageattention',
         )
+
+    @patch('start._run_streaming_command')
+    def test_compilation_failure_is_not_retried(self, run_command):
+        run_command.side_effect = [(0, ['downloaded']), (1, ['compile failed'])]
+        result = start._run_sageattention_installer(Path('/venv/bin/activate'), env={})
+        self.assertEqual(result, (False, ['compile failed']))
+        self.assertEqual(run_command.call_count, 2)
+        build_env = run_command.call_args.kwargs['env']
+        self.assertEqual(build_env['CXX_APPEND_FLAGS'], '-std=c++20')
+        self.assertEqual(build_env['NVCC_APPEND_FLAGS'], '-std=c++20 --threads 8')
+
+    @patch('start._run_streaming_command')
+    def test_download_failure_uses_wget_before_executing_once(self, run_command):
+        run_command.side_effect = [(22, ['download failed']), (0, []), (0, ['installed'])]
+        result = start._run_sageattention_installer(Path('/venv/bin/activate'))
+        self.assertEqual(result, (True, ['installed']))
+        self.assertEqual(
+            [c.args[0][0] for c in run_command.call_args_list], ['curl', 'wget', 'bash']
+        )
+
+    @patch('start._run_streaming_command')
+    def test_failed_downloads_never_execute_installer(self, run_command):
+        run_command.return_value = (22, ['download failed'])
+        with patch.object(start, 'SAGEATTENTION_INSTALL_ATTEMPTS', 1):
+            result = start._run_sageattention_installer(Path('/venv/bin/activate'))
+        self.assertEqual(result, (False, ['download failed']))
+        self.assertEqual(
+            [c.args[0][0] for c in run_command.call_args_list], ['curl', 'wget']
+        )
+
+    def test_downloaded_script_receives_build_flags_and_is_cleaned_up(self):
+        with tempfile.TemporaryDirectory(prefix='sage test ') as temp_dir:
+            activate = Path(temp_dir) / 'activate'
+            activate.write_text('export TEST_ACTIVATED=yes\n')
+            downloaded_paths = []
+
+            def run_command(command, *args, **kwargs):
+                if command[0] == 'curl':
+                    script = Path(command[command.index('-o') + 1])
+                    downloaded_paths.append(script)
+                    script.write_text(
+                        'printf "%s|%s|%s|%s\\n" "$1" "$TEST_ACTIVATED" '
+                        '"$CXX_APPEND_FLAGS" "$NVCC_APPEND_FLAGS"\n'
+                    )
+                    return 0, []
+                result = subprocess.run(
+                    command, env=kwargs['env'], capture_output=True, text=True, timeout=10
+                )
+                return result.returncode, result.stdout.splitlines()
+
+            with patch('start._run_streaming_command', side_effect=run_command):
+                result = start._run_sageattention_installer(activate, action='build', env={})
+            self.assertEqual(result, (True, ['build|yes|-std=c++20|-std=c++20 --threads 8']))
+            self.assertFalse(downloaded_paths[0].exists())
 
     @patch('start._run_sageattention_installer')
     def test_rebuild_preserves_torch_and_hf_publish_token(self, installer):
@@ -93,7 +147,7 @@ class SageAttentionInstallerTests(unittest.TestCase):
                         'start._run_sageattention_installer',
                         return_value=(False, ['ABI mismatch']),
                     ):
-                result = start.configure_runtime_stack(use_sage_attention=True)
+                result = start.configure_runtime_stack(install_sage_attention=True)
             start._persist_comfyui_flags(
                 state,
                 {'Video Preset': {'comfyui_flags': []}},
@@ -114,7 +168,7 @@ class SageAttentionInstallerTests(unittest.TestCase):
                         'start._run_sageattention_installer',
                         return_value=(False, ['ABI mismatch']),
                     ):
-                result = start.configure_runtime_stack(use_sage_attention=True)
+                result = start.configure_runtime_stack(install_sage_attention=True)
 
         self.assertFalse(result)
         self.assertEqual(state.get_runtime_stack(), 'unknown')
@@ -149,7 +203,7 @@ class SageAttentionInstallerTests(unittest.TestCase):
         state = get_state_manager.return_value
         state.get_runtime_stack.return_value = 'unknown'
 
-        self.assertTrue(start.configure_runtime_stack(use_sage_attention=True))
+        self.assertTrue(start.configure_runtime_stack(install_sage_attention=True))
 
         installer.assert_called_once()
         rebuild.assert_called_once()
