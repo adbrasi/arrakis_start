@@ -4,11 +4,11 @@
 
 Arrakis Start provisions ComfyUI on VastAI and RunPod instances. A small web selector lets the user choose presets, install their models and custom nodes, watch progress, and start ComfyUI. The cloud installation normally lives at `/workspace/comfy/arrakis_start`, with the Python environment at `/workspace/comfy/.venv`. The selector uses port 8090; ComfyUI defaults to port 8818.
 
-Start with the file for the task at hand. Read adjacent tests and configuration before editing. The table below is the shortest route through the codebase.
+Start with the file for the task at hand. Inspect the relevant implementation and configuration before editing. Read tests when changing application code; the preset-only rule below takes precedence for data-only preset work. The table below is the shortest route through the codebase.
 
 | Task | Start here | Then check |
 | --- | --- | --- |
-| Add or repair a preset | `presets/<name>.json`, `start.py:load_presets` | `server.py:serialize_presets`, `tests/test_presets.py`, `tests/test_web_ui.py` |
+| Add, remove, or repair a preset | `presets/<name>.json`, related `workflows/` files | `start.py:load_presets`, `server.py:serialize_presets` only if the data format is unclear |
 | Model download or resume | `downloader.py` | `hf_xet_worker.py`, `tests/test_downloader.py`, `tests/test_hf_xet_worker.py` |
 | Custom nodes or Python packages | `start.py:_install_presets_impl` | `start.py` node/pip helpers, `tests/test_runtime_stack.py` |
 | Install/bootstrap | `bootstrap.sh` | `tests/test_bootstrap.py`, `requirements.txt` |
@@ -62,14 +62,18 @@ The [Qwen Image 2.1 research license](https://huggingface.co/Qwen/Qwen-Image-2.1
 
 ## Verification and operational boundaries
 
-Run focused checks for the edited area, then the repository's relevant suite from the root:
+**Preset-only changes:** When the request only adds, removes, or edits files in `presets/` and their related workflow JSON files, do not run unit, integration, end-to-end, UI smoke, or full-suite tests. Do not create or edit test files for these changes. Do not run a test suite just because an existing metadata test enumerates presets or was already failing. This is the user's explicit preference; keep preset maintenance fast.
+
+For preset-only work, inspect the JSON for valid syntax, confirm that model URLs point to the exact published files, and check that referenced local workflows exist and use the intended model filenames. These are data checks, not a reason to start ComfyUI, download model weights, or run the test suite. Report any part that could not be checked without implying runtime execution.
+
+When application code changes, run focused checks for the edited area and then the relevant repository suite from the root:
 
 ```bash
 PYTHONPATH=. python3 -m unittest tests.test_presets tests.test_web_ui
 PYTHONPATH=. python3 -m unittest discover -s tests
 ```
 
-For a preset, also parse its JSON, call `start.load_presets()` and `server.serialize_presets()`, check every model URL against the publisher's exact file tree, and confirm every local workflow exists and names the installed models. Run the UI smoke check (`node tests/ui_smoke.cjs`) when selector behavior changes. No linter is configured. A unit or metadata test can be stale; distinguish a pre-existing failure from a new one and report both. These checks do not prove model inference, GPU memory fit, native runtime compatibility, or the ability to execute a workflow on a live pod.
+Run the UI smoke check (`node tests/ui_smoke.cjs`) when selector behavior changes. No linter is configured. If a code change's test suite fails on a stale preset expectation, distinguish that pre-existing failure from the new change. Data checks and test suites do not prove model inference, GPU memory fit, native runtime compatibility, or the ability to execute a workflow on a live pod.
 
 On a cloud pod, use `/workspace/comfy/.venv/bin/python` for runtime checks. The SageAttention path must be verified with that interpreter and, for actual acceleration, a ComfyUI run; a successful installer return alone is insufficient. Model URLs and custom-node branches can change after a preset is committed. Preserve user models, download partials, and unrelated working-tree changes while debugging. Do not print tokens or credentials in logs.
 
