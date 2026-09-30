@@ -1,0 +1,42 @@
+{
+  "name": "Qwen Image 2.1 Edit (INT8 ConvRot)",
+  "description": "Image editing with Qwen Image 2.1: official INT8 ConvRot model and encoders, plus original and texture-fix BF16 VAEs. The editing workflow selects the texture-fix VAE to reduce fine grid artifacts. Qwen's research license requires a separate license for commercial use.",
+  "pinned": true,
+  "size_gb": 28,
+  "use_sage_attention": false,
+  "comfyui_flags": [],
+  "models": [
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/diffusion_models/qwen_image_2.1_int8_convrot.safetensors",
+      "dir": "diffusion_models",
+      "filename": "qwen_image_2.1_int8_convrot.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3vl_8b_int8_convrot.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen3vl_8b_int8_convrot.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/text_encoders/qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+      "dir": "text_encoders",
+      "filename": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors",
+      "dir": "vae",
+      "filename": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    {
+      "url": "https://huggingface.co/madebyollin/texture-fix-vae-for-qwen-image-2.1/resolve/main/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors",
+      "dir": "vae",
+      "filename": "texture_fix_vae_for_qwen_image_2.1_bf16.safetensors"
+    }
+  ],
+  "nodes": [],
+  "workflows": [
+    {
+      "label": "Image editing workflow",
+      "file": "qwen_image_2.1_edit.json"
+    }
+  ]
+}
