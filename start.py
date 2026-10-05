@@ -1214,6 +1214,12 @@ def _detect_runtime_stack() -> str:
     return 'unknown'
 
 
+def _with_cxx20_std(flags: str) -> str:
+    """Return compiler flags with any -std=... replaced by a leading -std=c++20."""
+    kept = [flag for flag in flags.split() if not flag.startswith('-std=')]
+    return ' '.join(['-std=c++20', *kept])
+
+
 def _run_sageattention_installer(
     comfy_activate: Path,
     action: str = 'auto',
@@ -1230,8 +1236,14 @@ def _run_sageattention_installer(
     installer_env.setdefault('WORK_DIR', str(SAGEATTENTION_WORK_DIR))
     # SageAttention 2.2 defaults to C++17; current Torch headers require C++20.
     # Use the upstream build interface for both host and CUDA compilation.
-    installer_env.setdefault('CXX_APPEND_FLAGS', '-std=c++20')
-    installer_env.setdefault('NVCC_APPEND_FLAGS', '-std=c++20 --threads 8')
+    # bootstrap.sh already exports NVCC_APPEND_FLAGS="--threads 8", so the
+    # standard must be forced into inherited values rather than defaulted.
+    installer_env['CXX_APPEND_FLAGS'] = _with_cxx20_std(
+        installer_env.get('CXX_APPEND_FLAGS', '')
+    )
+    installer_env['NVCC_APPEND_FLAGS'] = _with_cxx20_std(
+        installer_env.get('NVCC_APPEND_FLAGS') or '--threads 8'
+    )
 
     with tempfile.TemporaryDirectory(prefix='arrakis-sage-') as temp_dir:
         installer_path = Path(temp_dir) / 'installer.sh'

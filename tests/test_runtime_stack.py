@@ -51,6 +51,18 @@ class SageAttentionInstallerTests(unittest.TestCase):
         self.assertEqual(build_env['NVCC_APPEND_FLAGS'], '-std=c++20 --threads 8')
 
     @patch('start._run_streaming_command')
+    def test_inherited_nvcc_flags_still_get_cxx20(self, run_command):
+        # bootstrap.sh exports NVCC_APPEND_FLAGS="--threads 8" before start.py runs.
+        run_command.side_effect = [(0, []), (0, ['installed'])]
+        start._run_sageattention_installer(
+            Path('/venv/bin/activate'),
+            env={'NVCC_APPEND_FLAGS': '--threads 8', 'CXX_APPEND_FLAGS': '-std=c++17 -O2'},
+        )
+        build_env = run_command.call_args.kwargs['env']
+        self.assertEqual(build_env['NVCC_APPEND_FLAGS'], '-std=c++20 --threads 8')
+        self.assertEqual(build_env['CXX_APPEND_FLAGS'], '-std=c++20 -O2')
+
+    @patch('start._run_streaming_command')
     def test_download_failure_uses_wget_before_executing_once(self, run_command):
         run_command.side_effect = [(22, ['download failed']), (0, []), (0, ['installed'])]
         result = start._run_sageattention_installer(Path('/venv/bin/activate'))
