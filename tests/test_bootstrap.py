@@ -225,6 +225,15 @@ class BootstrapGitRefTests(unittest.TestCase):
         branch_file.write_text("main\nlocal change\n", encoding="utf-8")
         untracked = destination / "notes.txt"
         untracked.write_text("local notes\n", encoding="utf-8")
+        state_file = destination / "data" / "state.json"
+        state_file.parent.mkdir()
+        state_file.write_text("{}\n", encoding="utf-8")
+        (destination / ".gitignore").write_text("/data/\n", encoding="utf-8")
+        self.git("add", ".gitignore", cwd=destination)
+        self.git(
+            "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet",
+            "-m", "ignore runtime state", cwd=destination,
+        )
 
         result = self.run_bootstrap(
             "update_arrakis_repo "
@@ -240,6 +249,7 @@ class BootstrapGitRefTests(unittest.TestCase):
         self.assertEqual(self.git("branch", "--show-current", cwd=destination), FEATURE_REF)
         self.assertEqual(branch_file.read_text(encoding="utf-8"), "feature\n")
         self.assertFalse(untracked.exists())
+        self.assertEqual(state_file.read_text(encoding="utf-8"), "{}\n")
         self.assertIn(
             "arrakis-bootstrap-autostash-",
             self.git("stash", "list", cwd=destination),

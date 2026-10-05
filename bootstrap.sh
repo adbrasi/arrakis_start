@@ -934,6 +934,7 @@ checkout_has_local_changes() {
     local dest="$1"
     # Runtime state is intentionally stored inside the persistent checkout. It is
     # owned by Arrakis, not by Git, and must never block the next automatic update.
+    # Keep these paths in .gitignore too: stash never touches ignored files.
     [ -z "$(git -C "$dest" status --porcelain --untracked-files=all \
         -- . ':(exclude)data/**' ':(exclude).build-sageattention/**')" ]
 }
@@ -950,8 +951,7 @@ stash_arrakis_local_changes() {
         | head -n 20 | sed 's/^/    /'
 
     if ! git -C "$dest" -c user.name=arrakis-bootstrap -c user.email=arrakis@localhost \
-            stash push --include-untracked -m "$label" \
-            -- . ':(exclude)data/**' ':(exclude).build-sageattention/**' >/dev/null; then
+            stash push --include-untracked -m "$label" >/dev/null; then
         log_error "Não foi possível guardar as alterações locais de $dest no git stash. O checkout local foi preservado."
         return 1
     fi

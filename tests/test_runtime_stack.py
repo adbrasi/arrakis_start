@@ -61,6 +61,9 @@ class SageAttentionInstallerTests(unittest.TestCase):
         build_env = run_command.call_args.kwargs['env']
         self.assertEqual(build_env['NVCC_APPEND_FLAGS'], '-std=c++20 --threads 8')
         self.assertEqual(build_env['CXX_APPEND_FLAGS'], '-std=c++20 -O2')
+        # Installer output must stay out of the Git checkout (its default is $PWD).
+        self.assertTrue(build_env['LOG_DIR'].startswith(build_env['WORK_DIR']))
+        self.assertTrue(build_env['WHEELHOUSE_DIR'].startswith(build_env['WORK_DIR']))
 
     @patch('start._run_streaming_command')
     def test_download_failure_uses_wget_before_executing_once(self, run_command):

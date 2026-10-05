@@ -1234,6 +1234,10 @@ def _run_sageattention_installer(
     last_output: List[str] = []
     installer_env = dict(env) if env is not None else _venv_env()
     installer_env.setdefault('WORK_DIR', str(SAGEATTENTION_WORK_DIR))
+    # The installer defaults these to $PWD, which is this Git checkout; build
+    # logs and wheels left there block the next bootstrap update.
+    installer_env.setdefault('WHEELHOUSE_DIR', str(SAGEATTENTION_WORK_DIR / 'wheelhouse'))
+    installer_env.setdefault('LOG_DIR', str(SAGEATTENTION_WORK_DIR / 'logs'))
     # SageAttention 2.2 defaults to C++17; current Torch headers require C++20.
     # Use the upstream build interface for both host and CUDA compilation.
     # bootstrap.sh already exports NVCC_APPEND_FLAGS="--threads 8", so the
