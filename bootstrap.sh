@@ -938,6 +938,27 @@ checkout_has_local_changes() {
         -- . ':(exclude)data/**' ':(exclude).build-sageattention/**')" ]
 }
 
+# This checkout is a deployment copy: local edits must not block updates, but
+# they must not be lost either. Save them to a labelled stash and continue.
+stash_arrakis_local_changes() {
+    local dest="$1"
+    local label="arrakis-bootstrap-autostash-$(date +%Y%m%d%H%M%S)"
+
+    log_warn "Alterações locais em $dest (serão guardadas no git stash):"
+    git -C "$dest" status --porcelain --untracked-files=all \
+        -- . ':(exclude)data/**' ':(exclude).build-sageattention/**' \
+        | head -n 20 | sed 's/^/    /'
+
+    if ! git -C "$dest" -c user.name=arrakis-bootstrap -c user.email=arrakis@localhost \
+            stash push --include-untracked -m "$label" \
+            -- . ':(exclude)data/**' ':(exclude).build-sageattention/**' >/dev/null; then
+        log_error "Não foi possível guardar as alterações locais de $dest no git stash. O checkout local foi preservado."
+        return 1
+    fi
+    log_warn "Alterações guardadas no stash '$label'. Para recuperar: git -C $dest stash list && git -C $dest stash show -p stash@{0}"
+    return 0
+}
+
 ensure_arrakis_ref_fetchspec() {
     local dest="$1"
     local ref="$2"
@@ -965,9 +986,11 @@ update_arrakis_repo() {
         return 1
     fi
 
+    # Mode-only diffs (chmod on a network volume) are not real local changes.
+    git -C "$dest" config core.fileMode false || true
+
     if ! checkout_has_local_changes "$dest"; then
-        log_error "Atualização bloqueada por alterações locais em $dest. Faça commit, stash ou remova as alterações antes de rodar o bootstrap novamente."
-        return 1
+        stash_arrakis_local_changes "$dest" || return 1
     fi
 
     if ! ensure_arrakis_ref_fetchspec "$dest" "$ref"; then

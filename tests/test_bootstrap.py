@@ -218,33 +218,39 @@ class BootstrapGitRefTests(unittest.TestCase):
             "feature update\n",
         )
 
-    def test_dirty_checkout_fails_without_switching_or_losing_local_data(self):
+    def test_dirty_checkout_is_stashed_and_updated_without_losing_local_data(self):
         destination = self.root / "dirty-main"
         self.clone_shallow_main(destination)
         branch_file = destination / "branch.txt"
         branch_file.write_text("main\nlocal change\n", encoding="utf-8")
+        untracked = destination / "notes.txt"
+        untracked.write_text("local notes\n", encoding="utf-8")
 
         result = self.run_bootstrap(
-            "if update_arrakis_repo "
+            "update_arrakis_repo "
             f"{shlex.quote(str(destination))} "
             f"{shlex.quote(self.remote.as_uri())} "
-            f"{shlex.quote(FEATURE_REF)}; then\n"
-            "  echo 'unexpected update success' >&2\n"
-            "  exit 90\n"
-            "else\n"
-            "  exit $?\n"
-            "fi"
+            f"{shlex.quote(FEATURE_REF)}"
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("alterações locais", result.stdout + result.stderr)
-        self.assertEqual(self.git("branch", "--show-current", cwd=destination), "main")
-        self.assertEqual(branch_file.read_text(encoding="utf-8"), "main\nlocal change\n")
-        self.assertNotEqual(
-            subprocess.run(
-                ["git", "diff", "--quiet"], cwd=destination, check=False
-            ).returncode,
-            0,
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = result.stdout + result.stderr
+        self.assertIn("arrakis-bootstrap-autostash-", output)
+        self.assertIn("branch.txt", output)
+        self.assertEqual(self.git("branch", "--show-current", cwd=destination), FEATURE_REF)
+        self.assertEqual(branch_file.read_text(encoding="utf-8"), "feature\n")
+        self.assertFalse(untracked.exists())
+        self.assertIn(
+            "arrakis-bootstrap-autostash-",
+            self.git("stash", "list", cwd=destination),
+        )
+        self.assertIn(
+            "local change",
+            self.git("stash", "show", "-p", "stash@{0}", cwd=destination),
+        )
+        self.assertEqual(
+            self.git("show", "stash@{0}^3:notes.txt", cwd=destination).strip(),
+            "local notes",
         )
 
     def test_runtime_state_does_not_block_automatic_update(self):
