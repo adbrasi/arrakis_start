@@ -77,6 +77,26 @@ class BootstrapGitRefTests(unittest.TestCase):
         self.git("push", "--quiet", "origin", "main", FEATURE_REF, cwd=self.seed)
         self.git("symbolic-ref", "HEAD", "refs/heads/main", cwd=self.remote)
 
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "requires root to chown")
+    def test_update_works_when_checkout_is_owned_by_another_uid(self):
+        destination = self.root / "foreign-owned"
+        self.clone_shallow_main(destination)
+        for path in [destination, *destination.rglob("*")]:
+            os.lchown(path, 4242, 4242)
+        home = self.root / "home"
+        home.mkdir()
+
+        result = self.run_bootstrap(
+            "trust_workspace_git_repos\n"
+            "update_arrakis_repo "
+            f"{shlex.quote(str(destination))} "
+            f"{shlex.quote(self.remote.as_uri())} main",
+            env={"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("dubious ownership", result.stdout + result.stderr)
+
     def test_default_ref_clones_main(self):
         destination = self.root / "default-main"
         command = "\n".join(

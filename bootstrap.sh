@@ -868,6 +868,25 @@ git_run() {
         timeout "$timeout_s" git "$@"
 }
 
+# Pod volumes (VastAI/RunPod network storage) are often owned by a different UID than
+# the root user running this script, so Git refuses every repo under /workspace with
+# "detected dubious ownership". The pod is single-tenant: trust all repos. Exported
+# through GIT_CONFIG_* (command-line scope, which safe.directory honours) so start.py,
+# custom-node clones and ComfyUI-Manager inherit it, and also persisted globally so a
+# manual `git` in the shell works too.
+trust_workspace_git_repos() {
+    local n="${GIT_CONFIG_COUNT:-0}"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    export "GIT_CONFIG_KEY_$n=safe.directory"
+    export "GIT_CONFIG_VALUE_$n=*"
+    export GIT_CONFIG_COUNT=$((n + 1))
+
+    if command -v git >/dev/null 2>&1 \
+            && ! git config --global --get-all safe.directory 2>/dev/null | grep -Fx -- '*' >/dev/null; then
+        git config --global --add safe.directory '*' 2>/dev/null || true
+    fi
+}
+
 is_safe_arrakis_git_ref() {
     local ref="$1"
 
@@ -1167,6 +1186,7 @@ main() {
     # the presence (or invalidity) of a token.
     GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
     setup_git_credentials
+    trust_workspace_git_repos
 
     # Create directories
     mkdir -p "$COMFY_BASE" "$HF_HOME" "$TMPDIR" "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
